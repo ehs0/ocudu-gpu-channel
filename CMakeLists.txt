@@ -133,4 +133,18 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
   add_executable(test_broker tests/test_broker.cpp)
   target_link_libraries(test_broker PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME broker COMMAND test_broker)
+
+  # The Sionna adapter conversion tests use only the Python standard library;
+  # Sionna RT and pyzmq remain optional live-integration dependencies.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME sionna_rt_adapter
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sionna_rt_adapter.py
+    )
+    add_test(
+      NAME sionna_web_ui
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sionna_web_ui.py
+    )
+  endif()
 endif()

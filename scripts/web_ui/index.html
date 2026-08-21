@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OCUDU Sionna Channel Status</title>
+  <style>
+    :root { color-scheme: dark; --bg:#081019; --panel:#101d29; --line:#26394a; --text:#e9f2f8; --muted:#8ca4b5; --cyan:#42d3ff; --green:#53e58b; --amber:#ffc857; --red:#ff6577; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 30% 0,#102a3a 0,var(--bg) 42%); color:var(--text); font:14px/1.45 ui-sans-serif,system-ui,sans-serif; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:18px 24px; border-bottom:1px solid var(--line); background:#081019cc; position:sticky; top:0; z-index:2; backdrop-filter:blur(12px); }
+    h1 { margin:0; font-size:20px; letter-spacing:.02em; } .sub { color:var(--muted); font-size:12px; }
+    .pills { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .pill { border:1px solid var(--line); border-radius:99px; padding:5px 10px; color:var(--muted); }
+    .pill.ok { color:var(--green); border-color:#276d48; } .pill.bad { color:var(--amber); border-color:#6b5725; } .pill.fail { color:var(--red); border-color:#73313e; }
+    main { padding:20px 24px 40px; max-width:1500px; margin:auto; }
+    .grid { display:grid; grid-template-columns:minmax(430px,1.25fr) minmax(360px,.75fr); gap:16px; }
+    .panel { background:linear-gradient(145deg,#132331e8,#0d1822e8); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 16px 50px #0004; }
+    .panel h2 { font-size:14px; margin:0 0 12px; color:#bed1de; text-transform:uppercase; letter-spacing:.08em; }
+    canvas { display:block; width:100%; height:520px; border-radius:10px; background:#07111a; border:1px solid #213443; }
+    .legend { display:flex; gap:14px; margin-top:10px; color:var(--muted); font-size:12px; }
+    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+    .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
+    .stat { padding:12px; border:1px solid var(--line); border-radius:10px; background:#09141d; }
+    .stat b { display:block; font-size:19px; font-variant-numeric:tabular-nums; } .stat span { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+    th,td { padding:8px 7px; border-bottom:1px solid #20323f; text-align:right; white-space:nowrap; }
+    th:first-child,td:first-child { text-align:left; } th { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    tbody tr:hover { background:#172735; }
+    .scroll { max-height:420px; overflow:auto; }
+    .wide { grid-column:1/-1; }
+    .facts { display:grid; grid-template-columns:minmax(120px,.45fr) 1fr; gap:7px 12px; margin:0 0 18px; }
+    .facts dt { color:var(--muted); } .facts dd { margin:0; overflow-wrap:anywhere; }
+    .delivery { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; margin-bottom:16px; }
+    .delivery strong { display:block; color:var(--green); margin-bottom:4px; } .delivery strong.wait { color:var(--amber); }
+    .tag-ok { color:var(--green); } .tag-wait { color:var(--amber); } .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .foot { color:var(--muted); font-size:12px; margin-top:12px; }
+    .deadline-grid,.edge-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+    .deadline-card,.edge-card { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; min-width:0; }
+    .card-head { display:flex; justify-content:space-between; gap:12px; align-items:baseline; margin-bottom:8px; }
+    .card-head strong { font-size:15px; } .card-head span { color:var(--muted); font-size:11px; }
+    .meter { height:10px; border-radius:99px; overflow:hidden; background:#202e39; margin:9px 0 6px; }
+    .meter > i { display:block; height:100%; background:var(--green); border-radius:inherit; }
+    .meter > i.warn { background:var(--amber); } .meter > i.fail { background:var(--red); }
+    .deadline-numbers { display:flex; justify-content:space-between; gap:10px; color:var(--muted); font-size:12px; }
+    .deadline-numbers b { color:var(--text); }
+    .edge-meta { color:var(--muted); font-size:11px; margin-bottom:8px; overflow-wrap:anywhere; }
+    .tap-plot { width:100%; height:112px; display:block; border:1px solid #20323f; border-radius:8px; background:#07111a; margin-bottom:8px; }
+    .tap-table th,.tap-table td { padding:5px 6px; font-size:11px; }
+    .phase-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+    .empty { text-align:center; color:var(--muted); padding:24px; border:1px dashed var(--line); border-radius:10px; }
+    .runtime-grid { display:grid; grid-template-columns:repeat(2,minmax(280px,1fr)); gap:12px; }
+    .gpu-metrics { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; margin:10px 0; }
+    .gpu-metric { padding:8px; border:1px solid #20323f; border-radius:8px; background:#07111a; }
+    .gpu-metric b { display:block; font-size:16px; } .gpu-metric span { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    .gpu-lines { color:var(--muted); font-size:11px; overflow-wrap:anywhere; }
+    canvas.gpu-history { width:100%; height:360px; margin-top:10px; border-radius:8px; }
+    .gpu-processes { display:grid; grid-template-columns:repeat(2,minmax(260px,1fr)); gap:12px; }
+    .gpu-process { min-width:0; padding:10px; border:1px solid #20323f; border-radius:9px; background:#07111a; }
+    .warmup-banner { margin:10px 0 0; padding:9px 11px; border:1px solid #6b5725; border-radius:8px; color:var(--amber); background:#2b2414; }
+    .warmup-banner.ok { color:var(--green); border-color:#276d48; background:#10251a; }
+    .loop-flow { display:flex; align-items:center; flex-wrap:wrap; gap:6px; margin:10px 0; }
+    .loop-flow span { border:1px solid var(--line); border-radius:99px; padding:4px 8px; background:#07111a; }
+    .loop-flow i { color:var(--cyan); font-style:normal; }
+    @media (max-width:700px) { .runtime-grid,.gpu-processes { grid-template-columns:1fr; } }
+    @media (max-width:950px) { .grid { grid-template-columns:1fr; } canvas { height:420px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>OCUDU · Sionna Channel Status</h1><div class="sub">읽기 전용 관측기 — 이 UI는 제어 포트 5559에 연결하지 않습니다</div></div>
+    <div class="pills"><span id="sionnaPill" class="pill bad">Sionna 대기</span><span id="telemetryPill" class="pill bad">Telemetry 대기</span><span id="controlPill" class="pill bad">Control ACK 대기</span><span id="backendPill" class="pill bad">Backend 대기</span><span id="updatedPill" class="pill">업데이트 없음</span></div>
+  </header>
+  <main>
+    <div class="grid">
+      <section class="panel">
+        <h2>Sionna 환경 · Oblique 3D mobility</h2>
+        <canvas id="scene" width="900" height="560"></canvas>
+        <div class="legend"><span><i class="dot" style="background:var(--cyan)"></i>gNB</span><span><i class="dot" style="background:var(--red)"></i>자동차 UE</span><span><i class="dot" style="background:var(--green)"></i>보행자 UE</span><span><i class="dot" style="background:#ff9f43"></i>UE↔UE crosstalk</span><span><i class="dot" style="background:#343f49"></i>도로</span></div>
+        <div class="foot">Sionna가 실제 계산에 사용하는 건물·지면·도로 footprint와 노드 좌표입니다. Geometry는 UI 상태에만 포함되며 GPU Channel 제어 메시지에는 들어가지 않습니다.</div>
+      </section>
+      <section class="panel">
+        <h2>측정 시간</h2>
+        <div class="stats">
+          <div class="stat"><b id="iteration">—</b><span>Sionna iteration</span></div>
+          <div class="stat"><b id="generation">—</b><span>채널 생성 ms</span></div>
+          <div class="stat"><b id="controlTime">—</b><span>전송 + ACK ms</span></div>
+          <div class="stat"><b id="generateToAck">—</b><span>생성 시작 → ACK ms</span></div>
+          <div class="stat"><b id="totalUpdate">—</b><span>전체 update ms</span></div>
+          <div class="stat"><b id="freq">—</b><span>DL / UL MHz</span></div>
+        </div>
+        <h2>수신·적용 확인</h2>
+        <div class="delivery"><strong id="deliveryTitle" class="wait">업데이트 대기 중</strong><span id="deliveryDetail" class="sub">ACK의 링크별 seqno와 백엔드 텔레메트리를 대조합니다.</span></div>
+        <h2>Sionna 실행 환경</h2>
+        <dl class="facts">
+          <dt>Scene</dt><dd id="envScene">—</dd>
+          <dt>Road</dt><dd id="envRoad">—</dd>
+          <dt>Solver</dt><dd id="envSolver">—</dd>
+          <dt>Propagation</dt><dd id="envPropagation">—</dd>
+          <dt>Sampling / update</dt><dd id="envRates">—</dd>
+          <dt>Antenna</dt><dd id="envAntenna">—</dd>
+          <dt>Nodes</dt><dd id="envNodes">—</dd>
+          <dt>Control target</dt><dd id="envTarget">—</dd>
+        </dl>
+      </section>
+      <section class="panel wide">
+        <h2>통합 GPU 사용량 · Sionna 실행 루프</h2>
+        <article id="combinedGpuCard" class="deadline-card"></article>
+        <div class="delivery" style="margin-top:12px;margin-bottom:0">
+          <strong id="runtimeTitle" class="wait">Sionna runtime 대기 중</strong>
+          <div id="runtimeDetail" class="sub">실행 PID와 현재 계산 단계를 기다리고 있습니다.</div>
+          <div class="loop-flow"><span>Scene 1회 초기화</span><i>→</i><span>채널 재계산</span><i>→</i><span>profile batch 전송 + ACK</span><i>→</i><span>다음 update 대기</span><i>↺</i></div>
+          <div id="runtimeConfig" class="gpu-lines"></div>
+        </div>
+        <div id="gpuMonitorNote" class="foot">SM/MEM 사용률은 nvidia-smi의 약 1초 PID별 표본이며, VRAM은 해당 프로세스가 점유한 메모리입니다.</div>
+      </section>
+      <section class="panel wide">
+        <h2>링크별 채널과 전달 증거</h2>
+        <div class="scroll"><table><thead><tr><th>Link</th><th>Rays</th><th>Taps</th><th>Strongest</th><th>Delay</th><th>ACK seq</th><th>Live seq</th><th>적용</th><th>관측 slot</th></tr></thead><tbody id="channelRows"></tbody></table></div>
+        <div class="foot">Control ACK는 C++ 제어 서버의 배치 수신을, 동일하거나 더 큰 live seqno는 채널 백엔드가 해당 profile을 slot 경계에서 적용했음을 뜻합니다.</div>
+      </section>
+      <section class="panel wide">
+        <h2>수신 노드별 slot deadline 사용량</h2>
+        <div id="deadlineCards" class="deadline-grid"></div>
+        <div class="foot">Deadline은 이번 IQ 블록의 samples ÷ sample rate입니다. 사용 시간은 해당 수신 노드로 들어오는 모든 엣지를 GPU/CPU 채널 백엔드가 한 번에 합성한 <span class="mono">process_superposition</span> wall time이며, 대기·throttle·ZMQ 송신 시간은 포함하지 않습니다. 따라서 같은 수신 노드의 링크들은 하나의 측정값으로 묶입니다.</div>
+      </section>
+      <section class="panel wide">
+        <h2>엣지 링크별 impulse response · tap 상세</h2>
+        <div id="edgeCards" class="edge-grid"></div>
+        <div class="foot">가로축은 tap delay, 세로 stem은 strongest tap 대비 gain입니다. 점 색은 phase를 나타냅니다. 아래 표의 값은 Sionna CIR에서 변환되어 실제 profile_swap에 사용된 tap과 동일합니다.</div>
+      </section>
+    </div>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    const fmt = (v,n=1) => Number.isFinite(Number(v)) ? Number(v).toFixed(n) : '—';
+    const esc = value => String(value??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    let lastStatus = null;
+
+    function setPill(el, ok, text) { el.className = `pill ${ok?'ok':'bad'}`; el.textContent = text; }
+    function linkMap(channels) { return Object.fromEntries((channels||[]).map(c => [c.link_id,c])); }
+    function linkParts(linkId) {
+      const match=String(linkId||'').match(/^([^>]+)>([^:]+):(.+)$/);
+      return match?{source:match[1],destination:match[2],model:match[3]}:{source:'—',destination:'—',model:'—'};
+    }
+    function phaseHue(rad) { const turn=((Number(rad)||0)/(2*Math.PI))%1; return Math.round(((turn+1)%1)*360); }
+
+    function renderDeadlineCards(telemetry) {
+      const byDestination={};
+      for(const [linkId,payload] of Object.entries(telemetry||{})){
+        const timing=payload?.slot_processing||{}, destination=linkParts(linkId).destination;
+        if(!(Number(timing.deadline_us)>0) || destination==='—') continue;
+        const candidate={...timing,slot:payload.slot,backend:payload.backend,destination};
+        if(!byDestination[destination] || Number(candidate.slot)>=Number(byDestination[destination].slot)) byDestination[destination]=candidate;
+      }
+      const cards=Object.values(byDestination).sort((a,b)=>a.destination.localeCompare(b.destination)).map(item=>{
+        const usage=Number(item.usage_percent),bounded=Math.max(0,Math.min(100,usage)),level=usage>100?'fail':usage>80?'warn':'',met=item.deadline_met===true;
+        return `<article class="deadline-card"><div class="card-head"><strong>${esc(item.destination)} RX</strong><span>${esc(String(item.backend||'backend').toUpperCase())} · slot ${esc(item.slot)}</span></div><div><b>${fmt(item.elapsed_us,1)} µs</b> / ${fmt(item.deadline_us,1)} µs <span class="${met?'tag-ok':'tag-wait'}">(${fmt(usage,1)}% · ${met?'충족':'초과'})</span></div><div class="meter"><i class="${level}" style="width:${bounded}%"></i></div><div class="deadline-numbers"><span><b>${Number(item.processed_samples||0).toLocaleString()}</b> samples</span><span><b>${fmt(Number(item.sample_rate_hz||0)/1e6,2)}</b> MS/s</span></div></article>`;
+      }).join('');
+      $('deadlineCards').innerHTML=cards||'<div class="empty">IQ serve 완료 기록 대기 중 — source/sink와 broker 데이터 경로가 흐르면 표시됩니다.</div>';
+    }
+
+    function tapPlot(taps) {
+      if(!Array.isArray(taps)||!taps.length) return '<div class="empty">tap 없음</div>';
+      const num=(value,fallback)=>Number.isFinite(Number(value))?Number(value):fallback;
+      const W=360,H=112,left=30,right=12,top=10,base=84,delays=taps.map(t=>num(t.delay_samples,0)),gains=taps.map(t=>num(t.gain_db,-100)),minDelay=Math.min(...delays),maxDelay=Math.max(...delays),maxGain=Math.max(...gains),minGain=Math.max(Math.min(...gains),maxGain-60);
+      const x=d=>left+(maxDelay===minDelay?(W-left-right)/2:(d-minDelay)/(maxDelay-minDelay)*(W-left-right));
+      const y=g=>top+(maxGain===minGain?0:(maxGain-Math.max(g,minGain))/(maxGain-minGain)*(base-top));
+      const stems=taps.map(t=>{const tx=x(num(t.delay_samples,0)),ty=y(num(t.gain_db,-100)),h=phaseHue(t.phase_rad);return `<line x1="${tx}" y1="${base}" x2="${tx}" y2="${ty}" stroke="hsl(${h} 80% 60%)" stroke-width="2"/><circle cx="${tx}" cy="${ty}" r="4" fill="hsl(${h} 80% 60%)"><title>gain ${fmt(t.gain_db,1)} dB, phase ${fmt(t.phase_deg,1)}°, delay ${fmt(t.delay_samples,3)} samples</title></circle>`}).join('');
+      return `<svg class="tap-plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="tap impulse response"><line x1="${left}" y1="${base}" x2="${W-right}" y2="${base}" stroke="#526573"/><line x1="${left}" y1="${top}" x2="${left}" y2="${base}" stroke="#526573"/>${stems}<text x="${left}" y="104" fill="#8ca4b5" font-size="9">${fmt(minDelay,2)} sa</text><text x="${W-right}" y="104" text-anchor="end" fill="#8ca4b5" font-size="9">${fmt(maxDelay,2)} sa</text><text x="4" y="${top+4}" fill="#8ca4b5" font-size="9">${fmt(maxGain,0)}</text><text x="4" y="${base}" fill="#8ca4b5" font-size="9">${fmt(minGain,0)}</text></svg>`;
+    }
+
+    function renderEdgeCards(channels) {
+      const cards=(channels||[]).map(channel=>{
+        const parts={...linkParts(channel.link_id),source:channel.source||linkParts(channel.link_id).source,destination:channel.destination||linkParts(channel.link_id).destination,model:channel.model||linkParts(channel.link_id).model},taps=channel.taps||[];
+        const tapRows=taps.map(t=>{const hue=phaseHue(t.phase_rad);return `<tr><td>${esc(t.index)}</td><td>${fmt(t.gain_db,2)}</td><td><i class="phase-dot" style="background:hsl(${hue} 80% 60%)"></i>${fmt(t.phase_rad,3)} / ${fmt(t.phase_deg,1)}°</td><td>${fmt(t.delay_samples,3)}</td><td>${fmt(t.delay_ns,2)}</td></tr>`}).join('');
+        return `<article class="edge-card"><div class="card-head"><strong class="mono">${esc(parts.source)} → ${esc(parts.destination)}</strong><span>${esc(channel.direction)} · ${fmt(Number(channel.carrier_frequency_hz)/1e6,1)} MHz</span></div><div class="edge-meta">model ${esc(parts.model)} · ${esc(channel.ray_count)} rays → ${esc(channel.tap_count)} taps · total ${fmt(channel.total_path_power_db,1)} dB</div>${tapPlot(taps)}<div class="scroll"><table class="tap-table"><thead><tr><th>#</th><th>Gain dB</th><th>Phase rad / deg</th><th>Delay sa</th><th>Delay ns</th></tr></thead><tbody>${tapRows||'<tr><td colspan="5">tap 없음</td></tr>'}</tbody></table></div></article>`;
+      }).join('');
+      $('edgeCards').innerHTML=cards||'<div class="empty">Sionna 채널 profile 대기 중</div>';
+    }
+
+    function renderGpuProcess(role, title, usage) {
+      const process=usage?.processes?.[role],running=process?.running===true,resident=process?.gpu_resident===true,pids=(process?.pids||[]).join(', ')||'—';
+      const gpuLines=(process?.gpus||[]).map(gpu=>`GPU ${gpu.gpu_index??'?'} · SM ${fmt(gpu.sm_util_percent,0)}% · MEM ${fmt(gpu.memory_util_percent,0)}% · VRAM ${fmt(gpu.gpu_memory_mib,1)} MiB`).join('<br>');
+      const state=running?(resident?'실행 중 · GPU context 확인':'실행 중 · GPU 표본 대기'):'프로세스 미실행';
+      return `<div class="gpu-process"><div class="card-head"><strong>${esc(title)}</strong><span class="${running?'tag-ok':'tag-wait'}">${state}</span></div><div class="gpu-metrics"><div class="gpu-metric"><b>${fmt(process?.sm_util_percent,0)}%</b><span>현재 SM</span></div><div class="gpu-metric"><b>${fmt(process?.memory_util_percent,0)}%</b><span>현재 MEM</span></div><div class="gpu-metric"><b>${fmt(process?.gpu_memory_mib,1)}</b><span>VRAM MiB</span></div></div><div class="gpu-lines">PID ${esc(pids)}<br>${gpuLines||'GPU별 표본 없음'}</div></div>`;
+    }
+
+    function activeWarmupLinks(telemetry) {
+      return Object.values(telemetry||{}).filter(payload=>Number(payload?.warmup_until_slot)>0&&Number(payload?.slot)<Number(payload?.warmup_until_slot));
+    }
+
+    function drawGpuHistory(usage) {
+      const canvas=$('combinedGpuChart'); if(!canvas)return;
+      const ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1,rect=canvas.getBoundingClientRect(),W=rect.width,H=rect.height;
+      const pixelW=Math.max(1,Math.round(W*dpr)),pixelH=Math.max(1,Math.round(H*dpr));if(canvas.width!==pixelW||canvas.height!==pixelH){canvas.width=pixelW;canvas.height=pixelH}ctx.setTransform(dpr,0,0,dpr,0,0);
+      const left=50,right=10,top=30,bottom=25,gap=12,plotW=W-left-right,now=Date.now(),windowMs=5000,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW;
+      const samples=(usage?.history||[]).filter(item=>Number(item.sampled_unix_ms)>=start&&Number(item.sampled_unix_ms)<=now),events=(usage?.iterations||[]).filter(item=>Number(item.observed_unix_ms)>=start&&Number(item.observed_unix_ms)<=now);
+      const roles=[{id:'sionna',label:'Sionna RT',rgb:'66,211,255'},{id:'gpu_channel',label:'GPU Channel',rgb:'255,159,67'}],stackMax=key=>Math.max(0,...samples.map(item=>roles.reduce((sum,role)=>sum+(Number(item.roles?.[role.id]?.[key])||0),0))),percentScale=key=>Math.max(100,Math.ceil(stackMax(key)/25)*25),vramScale=Math.max(1024,Math.ceil(stackMax('gpu_memory_mib')/1024)*1024);
+      const laneHeight=(H-top-bottom-gap*2)/3,metrics=[{key:'sm_util_percent',label:'SM',unit:'%',max:percentScale('sm_util_percent')},{key:'memory_util_percent',label:'MEM',unit:'%',max:percentScale('memory_util_percent')},{key:'gpu_memory_mib',label:'VRAM',unit:' MiB',max:vramScale}];
+      ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);ctx.font='9px system-ui';
+      metrics.forEach((metric,lane)=>{const y0=top+lane*(laneHeight+gap),base=y0+laneHeight,y=value=>base-Math.max(0,Math.min(metric.max,Number(value)||0))/metric.max*laneHeight;ctx.fillStyle=lane%2?'#091720':'#08131c';ctx.fillRect(left,y0,plotW,laneHeight);for(const ratio of [0,.5,1]){const py=base-ratio*laneHeight;ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(`${Math.round(metric.max*ratio)}${metric.unit}`,left-4,py+3)}ctx.fillStyle='#bed1de';ctx.textAlign='left';ctx.fillText(metric.label,left+4,y0+11);samples.forEach((item,index)=>{const center=x(item.sampled_unix_ms),previous=index?x(samples[index-1].sampled_unix_ms):2*left-center,next=index+1<samples.length?x(samples[index+1].sampled_unix_ms):2*(W-right)-center,x0=Math.max(left,(previous+center)/2),x1=Math.min(W-right,(center+next)/2),cell=Math.max(2,x1-x0-1);let stacked=0;roles.forEach(role=>{const value=item.roles?.[role.id]?.[metric.key];if(!Number.isFinite(Number(value)))return;const nextStack=stacked+Math.max(0,Number(value)),py=y(nextStack),previousY=y(stacked);ctx.fillStyle=`rgba(${role.rgb},.68)`;ctx.fillRect(x0,py,cell,Math.max(0,previousY-py));stacked=nextStack})})});
+      samples.forEach((item,index)=>{if(!(Number(item.warmup_link_count)>0))return;const center=x(item.sampled_unix_ms),previous=index?x(samples[index-1].sampled_unix_ms):center-2,next=index+1<samples.length?x(samples[index+1].sampled_unix_ms):center+2,x0=Math.max(left,(previous+center)/2),x1=Math.min(W-right,(center+next)/2);ctx.fillStyle='rgba(255,101,119,.16)';ctx.fillRect(x0,top,Math.max(2,x1-x0),H-top-bottom);ctx.fillStyle='#ff6577';ctx.textAlign='center';ctx.fillText('W',center,top+10)});
+      const labelEvery=Math.max(1,Math.ceil(events.length/8));events.forEach((event,index)=>{const px=x(event.observed_unix_ms);if(event.warmup_expected){ctx.fillStyle='rgba(255,101,119,.22)';ctx.fillRect(px-2,top,4,H-top-bottom);ctx.fillStyle='#ff6577';ctx.textAlign='center';ctx.fillText('W',px,top+10)}ctx.save();ctx.setLineDash([2,3]);ctx.strokeStyle='rgba(83,229,139,.34)';ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,H-bottom);ctx.stroke();ctx.restore();if(index%labelEvery===0||index===events.length-1){ctx.save();ctx.translate(px+2,top+3);ctx.rotate(Math.PI/2);ctx.fillStyle='#53e58b';ctx.textAlign='left';ctx.font='8px system-ui';ctx.fillText(`i${event.iteration}`,0,0);ctx.restore()}});
+      ctx.textAlign='left';ctx.fillStyle='rgb(66,211,255)';ctx.fillText('■ Sionna RT',left,13);ctx.fillStyle='rgb(255,159,67)';ctx.fillText('■ GPU Channel',left+82,13);ctx.fillStyle='#53e58b';ctx.fillText('│ iteration',left+182,13);ctx.fillStyle='#ff6577';ctx.fillText('■ W warm-up 사용 불가',left+248,13);ctx.fillStyle='#8ca4b5';ctx.fillText('5초 전',left,H-7);ctx.textAlign='right';ctx.fillText('현재 → 새 표본 (기존 표본은 왼쪽으로 이동)',W-right,H-7);
+      if(!samples.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText('GPU usage history 표본 대기 중',left+plotW/2,(top+H-bottom)/2)}
+    }
+
+    function renderRuntime(runtime, usage, telemetry, delivery) {
+      const deliveryWarmup=(delivery?.links||[]).filter(item=>item.warming_up),warming=deliveryWarmup.length?deliveryWarmup:activeWarmupLinks(telemetry),warmupUntil=warming.reduce((value,item)=>Math.max(value,Number(item.warmup_until_slot)||0),0);
+      $('combinedGpuCard').innerHTML=`<div class="gpu-processes">${renderGpuProcess('sionna','Sionna RT',usage)}${renderGpuProcess('gpu_channel','GPU Channel',usage)}</div><div class="warmup-banner ${warming.length?'':'ok'}">${warming.length?`⚠ ${warming.length}개 링크 warm-up 중 · slot ${warmupUntil} 전 출력은 사용 불가`:'현재 warm-up 링크 없음 · 백엔드 출력 사용 가능'}</div><canvas id="combinedGpuChart" class="gpu-history"></canvas>`;
+      drawGpuHistory(usage);
+      const phaseLabels={initializing_scene:'scene/solver 초기화 중',ready:'반복 update 시작 준비',waiting_for_next_update:'다음 update 대기 중',tracing_channels:'Sionna RT 채널 계산 중',sending_control:'profile batch 전송 및 ACK 대기',stopped:'실행 종료',failed:'오류로 종료'};
+      const alive=runtime?.process_alive===true,phase=phaseLabels[runtime?.phase]||runtime?.phase||'runtime 대기 중';
+      $('runtimeTitle').textContent=alive?`단일 Sionna 프로세스 실행 중 · ${phase}`:phase;
+      $('runtimeTitle').className=alive?'':'wait';
+      $('runtimeDetail').textContent=runtime?`PID ${runtime.process_id??'—'} · session ${runtime.session_id??'—'} · iteration ${runtime.iteration??'—'} · phase 관측 ${fmt(runtime.phase_age_seconds,1)}초 전`:'실행 PID와 현재 계산 단계를 기다리고 있습니다.';
+      if(runtime){const duration=Number(runtime.configured_duration_seconds)===0?'SIGINT까지 계속 실행':`${fmt(runtime.configured_duration_seconds,0)}초 후 종료`,limit=Number(runtime.configured_iteration_limit)===0?'iteration 제한 없음':`${runtime.configured_iteration_limit}회 제한`;$('runtimeConfig').textContent=`Scene/solver는 프로세스 시작 시 한 번만 초기화 · 매 iteration ${runtime.link_count??'—'}개 링크 재계산 ${fmt(runtime.target_update_hz,2)} Hz · ${duration} · ${limit}`}
+      else $('runtimeConfig').textContent='—';
+      $('gpuMonitorNote').textContent=usage?.error?`GPU 모니터 경고: ${usage.error}`:'SM/MEM 사용률은 nvidia-smi의 약 1초 PID별 표본이며, VRAM은 해당 프로세스가 점유한 메모리입니다.';
+    }
+
+    function drawScene(sionna) {
+      const canvas=$('scene'), ctx=canvas.getContext('2d'), dpr=window.devicePixelRatio||1;
+      const rect=canvas.getBoundingClientRect(), width=Math.round(rect.width*dpr), height=Math.round(rect.height*dpr);
+      if(canvas.width!==width||canvas.height!==height){canvas.width=width;canvas.height=height}
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      const W=rect.width,H=rect.height,positions=sionna?.positions||{},nodes=Object.entries(positions);
+      const geometry=sionna?.scene_geometry?.objects||[];
+      const worldPoints=[...nodes.map(([,position])=>position),...geometry.flatMap(item=>(item.footprint_xy_m||[]).flatMap(point=>[[point[0],point[1],Number(item.z_min_m)||0],[point[0],point[1],Number(item.z_max_m)||0]]))];
+      ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);
+      if(!worldPoints.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText('Sionna scene 데이터 대기 중',W/2,H/2);return}
+
+      const pad=42,raw=p=>[(Number(p[0])-Number(p[1]))*.866,(Number(p[0])+Number(p[1]))*.32-(Number(p[2])||0)*.9],projected=worldPoints.map(raw),xs=projected.map(p=>p[0]),ys=projected.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),spanX=Math.max(1,maxX-minX),spanY=Math.max(1,maxY-minY),scale=Math.min((W-2*pad)/spanX,(H-2*pad)/spanY),offsetX=(W-spanX*scale)/2,offsetY=(H-spanY*scale)/2;
+      const xyz=p=>{const q=raw(p);return [offsetX+(q[0]-minX)*scale,offsetY+(q[1]-minY)*scale]};
+      const atHeight=(points,z)=>(points||[]).map(point=>[point[0],point[1],z]);
+      const polygon=(points,fill,stroke='#526573')=>{if(!points?.length)return;ctx.beginPath();points.forEach((point,index)=>{const [x,y]=xyz(point);index?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()};
+
+      for(const item of geometry.filter(item=>item.kind==='ground')) polygon(atHeight(item.footprint_xy_m,Number(item.z_max_m)||0),'#17242b','#2b3b44');
+      for(const item of geometry.filter(item=>item.kind==='road')){
+        const z=Number(item.z_max_m)||0;polygon(atHeight(item.footprint_xy_m,z),'#303941','#56616a');
+        if(item.centerline_xy_m){const [start,end]=item.centerline_xy_m.map(point=>xyz([point[0],point[1],z+.02]));ctx.save();ctx.setLineDash([10,8]);ctx.strokeStyle='#d5b957';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(...start);ctx.lineTo(...end);ctx.stroke();ctx.restore()}
+      }
+      const buildings=geometry.filter(item=>item.kind==='building').sort((a,b)=>{const depth=item=>(item.footprint_xy_m||[]).reduce((sum,p)=>sum+p[0]+p[1],0)/Math.max(1,(item.footprint_xy_m||[]).length);return depth(a)-depth(b)});
+      for(const item of buildings){
+        const points=item.footprint_xy_m||[],z0=Number(item.z_min_m)||0,z1=Number(item.z_max_m)||0,height=Math.max(0,z1-z0),shade=Math.min(190,75+height*2),bottom=atHeight(points,z0),topFace=atHeight(points,z1);
+        for(let i=0;i<points.length;i++){const next=(i+1)%points.length,sideShade=Math.max(35,shade-(i%2?38:18));polygon([bottom[i],bottom[next],topFace[next],topFace[i]],`rgb(${sideShade},${Math.round(sideShade*.78)},${Math.round(sideShade*.62)})`,'#8f806f')}
+        polygon(topFace,`rgb(${shade},${Math.round(shade*.82)},${Math.round(shade*.68)})`,'#d9c3a4');
+        const center=points.reduce((sum,p)=>[sum[0]+p[0]/points.length,sum[1]+p[1]/points.length],[0,0]),[x,y]=xyz([center[0],center[1],z1]);ctx.fillStyle='#111a20';ctx.font='600 10px system-ui';ctx.textAlign='center';ctx.fillText(`${item.id} · ${fmt(height,0)}m`,x,y+3);
+      }
+
+      const channels=linkMap(sionna.channels);
+      for(const g of ['gnb0','gnb1']) for(const u of ['ue0','ue1']) if(positions[g]&&positions[u]){
+        const [x1,y1]=xyz(positions[g]),[x2,y2]=xyz(positions[u]),channel=channels[`${g}>${u}:sionna_rt`];
+        const gain=Number(channel?.strongest_tap_gain_db??-100),alpha=Math.max(.08,Math.min(.8,(gain+100)/80));
+        ctx.strokeStyle=`rgba(66,211,255,${alpha})`;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+      }
+      if(positions.ue0&&positions.ue1){
+        const [x1,y1]=xyz(positions.ue0),[x2,y2]=xyz(positions.ue1),cross=channels['ue0>ue1:sionna_rt']||channels['ue1>ue0:sionna_rt'],gain=Number(cross?.strongest_tap_gain_db??-100),alpha=Math.max(.18,Math.min(.9,(gain+100)/80));ctx.save();ctx.setLineDash([7,5]);ctx.strokeStyle=`rgba(255,159,67,${alpha})`;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2,(y1+y2)/2-20,x2,y2);ctx.stroke();ctx.restore();
+      }
+
+      const mobility=sionna?.environment?.nodes||{},velocities=sionna?.velocities_mps||{};
+      for(const [id,position] of nodes){
+        const [x,y]=xyz(position),[gx,gy]=xyz([position[0],position[1],0]),kind=mobility[id]?.mobility||'unknown',velocity=velocities[id]||mobility[id]?.velocity_mps||[0,0,0],speed=Math.hypot(...velocity);ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='#7890a2';ctx.beginPath();ctx.moveTo(gx,gy);ctx.lineTo(x,y);ctx.stroke();ctx.restore();ctx.lineWidth=2;ctx.strokeStyle='#e8fbff';
+        if(id.startsWith('gnb')){ctx.fillStyle='#42d3ff';ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.fill();ctx.stroke()}
+        else if(kind==='car'){ctx.fillStyle='#ff6577';ctx.fillRect(x-11,y-6,22,12);ctx.strokeRect(x-11,y-6,22,12);ctx.fillStyle='#101820';ctx.fillRect(x-7,y-8,5,3);ctx.fillRect(x+3,y-8,5,3)}
+        else{ctx.fillStyle='#53e58b';ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fill();ctx.stroke()}
+        const speedLabel=kind==='car'?`${fmt(speed*3.6,1)} km/h`:`${fmt(speed,2)} m/s`;ctx.fillStyle='#e9f2f8';ctx.font='600 12px system-ui';ctx.textAlign='left';ctx.fillText(`${id} · ${kind} ${speedLabel}  (${fmt(position[0])}, ${fmt(position[1])}, z=${fmt(position[2])}m)`,x+13,y+4);
+      }
+    }
+
+    function render(data) {
+      lastStatus=data; const feeds=data.feeds||{}, s=data.sionna, telemetry=data.telemetry||{}, delivery=data.delivery||{}, timing=s?.timing_ms||{}, env=s?.environment||{}, runtime=data.sionna_runtime, gpuUsage=data.gpu_usage;
+      const sionnaAlive=runtime?.process_alive===true;
+      const expectedLinks=delivery.expected_links||env.link_count||10;
+      setPill($('sionnaPill'),runtime?sionnaAlive:feeds.sionna_connected,runtime?(sionnaAlive?`Sionna PID ${runtime.process_id}`:'Sionna 종료'):(feeds.sionna_connected?`Sionna ${fmt(feeds.sionna_age_seconds)}s`:'Sionna 대기'));
+      setPill($('telemetryPill'),feeds.telemetry_connected,feeds.telemetry_connected?`Telemetry ${feeds.telemetry_link_count}/${expectedLinks}`:'Telemetry 대기');
+      setPill($('controlPill'),delivery.control_received,delivery.control_received?`Control ACK ${delivery.control_received_links}/${delivery.expected_links}`:'Control ACK 대기');
+      const backend=(delivery.backend||'backend').toUpperCase();
+      const backendText=delivery.warmup_links?`${backend} WARM-UP ${delivery.warmup_links}개 · 사용 불가`:delivery.backend_usable?`${backend} 사용 가능 ${delivery.backend_usable_links}/${expectedLinks}`:`${backend} ${delivery.backend_applied_links||0}/${expectedLinks}`;
+      setPill($('backendPill'),delivery.backend_usable,backendText);
+      $('updatedPill').textContent=new Date().toLocaleTimeString(); $('iteration').textContent=s?.iteration??'—';
+      $('generation').textContent=fmt(timing.channel_generation??s?.trace_ms); $('controlTime').textContent=fmt(timing.control_transaction); $('generateToAck').textContent=fmt(timing.generate_to_control_ack); $('totalUpdate').textContent=fmt(timing.total_update);
+      const f=s?.frequencies_hz; $('freq').textContent=f?`${fmt(f.downlink/1e6)} / ${fmt(f.uplink/1e6)}`:'—';
+      const states=Object.fromEntries((delivery.links||[]).map(item=>[item.link_id,item]));
+      const rows=(s?.channels||[]).map(c=>{const state=states[c.link_id]||{},applied=state.applied,warming=state.warming_up,status=warming?`WARM-UP · slot ${state.warmup_until_slot} 전 사용 불가`:applied?'확인 · 사용 가능':'대기';return `<tr><td class="mono">${esc(c.link_id)}</td><td>${esc(c.ray_count)}</td><td>${esc(c.tap_count)}</td><td>${fmt(c.strongest_tap_gain_db)} dB</td><td>${fmt(c.last_delay_samples-c.first_delay_samples,2)} sa</td><td>${esc(state.expected_seqno)}</td><td>${esc(state.observed_seqno)}</td><td class="${applied&&!warming?'tag-ok':'tag-wait'}">${status}</td><td>${esc(state.observed_slot)}</td></tr>`}).join('');
+      $('channelRows').innerHTML=rows||'<tr><td colspan="9" style="text-align:center;color:#8ca4b5">채널 데이터 대기 중</td></tr>';
+      const stateText={backend_applied:'C++ 수신 · 백엔드 적용 · 출력 사용 가능',backend_warmup:'백엔드 적용 완료 · WARM-UP 출력 사용 불가',awaiting_backend_telemetry:'C++ 수신 확인 · 백엔드 적용 대기',partially_applied:'일부 링크 적용 확인',partial_control_ack:'불완전한 Control ACK',accepted_without_seqnos:'ACK 수신 · seqno 없는 구버전 응답',dry_run:'Dry-run · 실제 전송하지 않음',control_rejected:'Control 요청 거부',waiting_for_sionna:'Sionna 업데이트 대기 중'};
+      $('deliveryTitle').textContent=stateText[delivery.state]||delivery.state||'업데이트 대기 중'; $('deliveryTitle').className=delivery.backend_usable?'':'wait';
+      $('deliveryDetail').textContent=`batch ${delivery.batch_id??'—'} · control ${delivery.control_received_links||0}/${delivery.expected_links||0} · ${backend} live ${delivery.backend_applied_links||0}/${delivery.expected_links||0} · 사용 가능 ${delivery.backend_usable_links||0}/${delivery.expected_links||0} · warm-up ${delivery.warmup_links||0}`;
+      $('envScene').textContent=env.scene||'—'; const road=env.simple_road||{}; $('envRoad').textContent=road.enabled?`${fmt(road.width_m,1)} m · ${road.surface_material}`:'비활성 (원본 floor)'; const solver=env.solver||{}; $('envSolver').textContent=solver.name?`${solver.name} · depth ${solver.max_depth} · ${Number(solver.samples_per_source||0).toLocaleString()} samples/source · seed ${solver.seed}`:'—';
+      const propagation=solver.propagation||{}; $('envPropagation').textContent=Object.entries(propagation).filter(([,on])=>on).map(([name])=>name.replaceAll('_',' ')).join(', ')||'—';
+      $('envRates').textContent=env.sample_rate_hz?`${fmt(env.sample_rate_hz/1e6,2)} MS/s · ${fmt(env.update_rate_hz,2)} Hz updates`:'—'; $('envAntenna').textContent=env.antenna?`${env.antenna.tx} / ${env.antenna.rx}`:'—';
+      $('envNodes').textContent=env.nodes?Object.entries(env.nodes).map(([id,node])=>`${id} v=(${node.velocity_mps.map(v=>fmt(v,2)).join(',')}) m/s`).join(' · '):'—'; $('envTarget').textContent=env.dry_run?'dry-run (전송 없음)':`${env.control_endpoint||'—'} · ${backend}`;
+      renderDeadlineCards(telemetry);
+      renderEdgeCards(s?.channels);
+      renderRuntime(runtime,gpuUsage,telemetry,delivery);
+      drawScene(s);
+    }
+    async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);render(await r.json())}catch(e){setPill($('telemetryPill'),false,'UI feed error')}}
+    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);drawGpuHistory(lastStatus?.gpu_usage)}); poll(); setInterval(poll,500);
+  </script>
+</body>
+</html>
