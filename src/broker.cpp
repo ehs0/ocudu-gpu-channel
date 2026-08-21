@@ -1,5 +1,6 @@
 #include "ocudu_gpu_channel/broker.h"
 #include "ocudu_gpu_channel/ring.h"
+#include "ocudu_gpu_channel/runtime_control.h"
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -307,6 +308,12 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
     links[i].key = link_key(link);
   }
 
+  // Stable pointers into the processor's preallocated per-link state. The
+  // server thread for a destination uses these after each completed channel
+  // call to attach an exact IQ-window deadline and wall-time measurement to
+  // the existing per-link telemetry snapshot.
+  const auto control_links = collect_control_links();
+
   // Live per-worker diagnostics, one entry per device for each thread role.
   // Sized once up front and never resized, so the worker threads and the
   // heartbeat can reference stable elements without synchronisation.
@@ -573,6 +580,25 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         const auto t_throttle_start = std::chrono::steady_clock::now();
         const double process_us =
             std::chrono::duration<double, std::micro>(t_throttle_start - t_process_start).count();
+
+        // One process_superposition call shapes and sums every incoming edge
+        // for this destination. Publish that receiver-scoped timing on each
+        // constituent edge; the UI deduplicates it by destination instead of
+        // pretending the shared execution time is a per-edge measurement.
+        const double slot_deadline_us =
+            static_cast<double>(serve) * 1'000'000.0 / static_cast<double>(rate);
+        for (const std::size_t link_index : incoming) {
+          const auto ctl_it = control_links.find(links[link_index].key);
+          if (ctl_it == control_links.end() || ctl_it->second == nullptr) {
+            continue;
+          }
+          TelemetrySnapshot ts = read_telemetry_snapshot(*ctl_it->second);
+          ts.processed_samples  = serve;
+          ts.sample_rate_hz     = rate;
+          ts.slot_deadline_us   = slot_deadline_us;
+          ts.channel_process_us = process_us;
+          publish_telemetry_snapshot(*ctl_it->second, ts);
+        }
 
         // Throttle: cap the serve cadence at the device sample rate so the
         // lock-step radio runs at real time, not faster.

@@ -1,6 +1,7 @@
 #include "ocudu_gpu_channel/control_server.h"
 
 #include <zmq.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cmath>
@@ -451,6 +452,8 @@ struct HandlerContext {
   std::unordered_map<std::string, ControlServer::StagedBatch>* open_batches;
   // v2.2 follow-on: warmup-cap-slots (0 = disabled).
   int warmup_cap_slots = 0;
+  // Data-plane implementation selected by the broker (cuda/cpu/unknown).
+  const std::string& backend_name;
 };
 
 std::string emit_rejection(HandlerContext& ctx, const std::string& reason)
@@ -830,6 +833,8 @@ std::string handle_batch_commit(
   // seqno bumped. The plan's "same per-link slot index" guarantee falls
   // out of every link's ctl.take_effect_at_slot getting `apply_at` here.
   std::size_t applied_count = 0;
+  std::unordered_map<std::string, std::uint32_t> committed_seqnos;
+  std::unordered_map<std::string, std::uint64_t> committed_warmup_until_slots;
   for (auto& op : it_batch->second.ops) {
     auto it_ctl = ctx.link_map.find(op.link_id);
     if (it_ctl == ctx.link_map.end() || it_ctl->second == nullptr) {
@@ -850,7 +855,16 @@ std::string handle_batch_commit(
       ctl.shadow_profile = op.profile;
       ctl.profile_pending = true;
       ctl.seqno.fetch_add(1, std::memory_order_release);
+      const std::uint64_t current_slot =
+          ctl.current_slot.load(std::memory_order_relaxed);
+      const std::uint64_t effective_slot =
+          apply_at > current_slot ? apply_at : current_slot + 1;
+      // Same conservative one-slot hint as the single profile_swap REP.
+      // Runtime telemetry remains authoritative if a topology needs a
+      // longer delay-line fill.
+      committed_warmup_until_slots[op.link_id] = effective_slot + 1;
     }
+    committed_seqnos[op.link_id] = ctl.seqno.load(std::memory_order_acquire);
     ++applied_count;
   }
 
@@ -865,8 +879,24 @@ std::string handle_batch_commit(
 
   ctx.open_batches->erase(it_batch);
   std::ostringstream rep;
-  rep << "{\"ok\":true,\"link_count\":" << applied_count
-      << ",\"apply_at_slot\":" << apply_at << "}";
+  rep << "{\"ok\":true,\"batch_id\":\"" << json_escape(bid)
+      << "\",\"backend\":\""
+      << json_escape(ctx.backend_name.empty() ? "unknown" : ctx.backend_name)
+      << "\",\"link_count\":" << applied_count
+      << ",\"apply_at_slot\":" << apply_at << ",\"links\":[";
+  bool first = true;
+  for (const auto& [link_id, seqno] : committed_seqnos) {
+    if (!first) rep << ',';
+    first = false;
+    rep << "{\"link_id\":\"" << json_escape(link_id)
+        << "\",\"seqno\":" << seqno;
+    const auto warmup = committed_warmup_until_slots.find(link_id);
+    if (warmup != committed_warmup_until_slots.end()) {
+      rep << ",\"warmup_until_slot\":" << warmup->second;
+    }
+    rep << '}';
+  }
+  rep << "]}";
   return rep.str();
 }
 
@@ -906,7 +936,7 @@ std::string ControlServer::handle_message(const std::string& request_body)
   HandlerContext ctx{link_map_, updates_applied_, updates_rejected_,
                      batches_committed_, batches_aborted_,
                      config_.logger, &open_batches_,
-                     config_.warmup_cap_slots};
+                     config_.warmup_cap_slots, config_.backend_name};
 
   std::unordered_map<std::string, JsonValue> fields;
   try {
@@ -1003,6 +1033,9 @@ void ControlServer::run_telemetry_loop()
     for (const auto& [link_id, ctl_ptr] : link_map_) {
       if (ctl_ptr == nullptr) continue;
       const TelemetrySnapshot ts = read_telemetry_snapshot(*ctl_ptr);
+      const double deadline_usage_percent = ts.slot_deadline_us > 0.0
+          ? (ts.channel_process_us / ts.slot_deadline_us) * 100.0
+          : 0.0;
 
       // Build the JSON frame. link_id as topic prefix → subscribers
       // filter via setsockopt(ZMQ_SUBSCRIBE, "ue0-gnb0", …). Frame
@@ -1011,6 +1044,10 @@ void ControlServer::run_telemetry_loop()
       f << link_id << " "
         << "{\"event\":\"telemetry\","
         << "\"link_id\":\"" << link_id << "\","
+        << "\"backend\":\""
+        << json_escape(config_.backend_name.empty() ? "unknown" : config_.backend_name)
+        << "\","
+        << "\"process_id\":" << static_cast<long long>(::getpid()) << ","
         << "\"slot\":" << ts.slot << ","
         << "\"seqno\":" << ts.live_seqno << ","
         << "\"live\":{"
@@ -1023,7 +1060,18 @@ void ControlServer::run_telemetry_loop()
         <<   "\"los_k_db\":"            << ts.live.los_k_db
         << "},"
         << "\"profile_active\":"   << (ts.profile_active ? "true" : "false") << ","
-        << "\"warmup_until_slot\":" << ts.warmup_until_slot
+        << "\"warmup_until_slot\":" << ts.warmup_until_slot << ","
+        << "\"slot_processing\":{"
+        <<   "\"scope\":\"destination_superposition\","
+        <<   "\"processed_samples\":" << ts.processed_samples << ","
+        <<   "\"sample_rate_hz\":" << ts.sample_rate_hz << ","
+        <<   "\"deadline_us\":" << ts.slot_deadline_us << ","
+        <<   "\"elapsed_us\":" << ts.channel_process_us << ","
+        <<   "\"usage_percent\":" << deadline_usage_percent << ","
+        <<   "\"deadline_met\":"
+        <<     ((ts.slot_deadline_us > 0.0 && ts.channel_process_us <= ts.slot_deadline_us)
+                  ? "true" : "false")
+        << "}"
         << "}";
       const std::string frame = f.str();
 

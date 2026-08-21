@@ -363,8 +363,14 @@ int main()
     auto r4 = server.handle_message(
         R"({"type":"batch_commit","id":"exp-26","take_effect_at_slot":777})");
     require(contains(r4, "\"ok\":true"), "batch_commit should succeed");
+    require(contains(r4, "\"batch_id\":\"exp-26\""),
+            "batch_commit REP echoes batch id");
     require(contains(r4, "\"link_count\":2"), "REP reports 2 links applied");
     require(contains(r4, "\"apply_at_slot\":777"), "REP carries the commit slot");
+    require(contains(r4, "\"link_id\":\"ue0-gnb0\""),
+            "REP identifies first committed link");
+    require(contains(r4, "\"seqno\":" + std::to_string(a_seqno_before + 1)),
+            "REP exposes committed seqno for UI correlation");
 
     // Post-commit assertions
     require(nearly(ctl_a->shadow.path_loss_db, -1.5F),
@@ -481,6 +487,30 @@ int main()
   }
 
   // ── v2.2 follow-on: --control-warmup-cap-slots rejects overlong swaps ──
+  // Batch profile ACKs expose the same per-link warm-up hint as a direct
+  // profile_swap so read-only observers can distinguish applied from usable.
+  {
+    auto ctl = std::make_unique<ocg::BrokerLinkControl>();
+    ctl->current_slot.store(41);
+    ocg::ControlServer::LinkMap m = {{"batch-warmup", ctl.get()}};
+    ocg::ControlServerConfig c;
+    c.endpoint = "inproc://test-batch-warmup-hint";
+    ocg::ControlServer s(std::move(c), std::move(m));
+    require(contains(s.handle_message(
+                         R"({"type":"batch_begin","id":"warmup-batch"})"),
+                     "\"ok\":true"),
+            "warmup batch should begin");
+    require(contains(s.handle_message(R"({
+      "type":"profile_swap","link_id":"batch-warmup","batch_id":"warmup-batch",
+      "taps":[{"delay_samples":0,"gain_db":0}]
+    })"), "\"staged\":true"),
+            "profile should stage inside warmup batch");
+    const std::string r = s.handle_message(
+        R"({"type":"batch_commit","id":"warmup-batch"})");
+    require(contains(r, "\"warmup_until_slot\":43"),
+            "batch profile ACK reports its per-link warmup end slot");
+  }
+
   {
     auto ctl = std::make_unique<ocg::BrokerLinkControl>();
     // Mimic what the backend writes at prepare(): a link whose
@@ -555,6 +585,10 @@ int main()
       s.live.path_loss_db = 5.0F;
       s.live.awgn_snr_db  = 12.5F;
       s.profile_active    = true;
+      s.processed_samples  = 23040;
+      s.sample_rate_hz     = 23040000;
+      s.slot_deadline_us   = 1000.0;
+      s.channel_process_us = 125.0;
       ocg::publish_telemetry_snapshot(*t_b, s);
     }
 
@@ -567,6 +601,7 @@ int main()
     tcfg.telemetry_endpoint = "tcp://127.0.0.1:5572";
     tcfg.telemetry_rate_hz  = 50.0;           // 20 ms tick — plenty of frames in the window
     tcfg.recv_timeout_ms    = 50;
+    tcfg.backend_name       = "cuda";
     ocg::ControlServer tserver(std::move(tcfg), std::move(tlink));
     tserver.start();
 
@@ -606,6 +641,16 @@ int main()
                 "v3.0: telemetry frame names link-B");
         require(frame.find("\"profile_active\":true") != std::string::npos,
                 "v3.0: telemetry frame reports profile_active=true for link-B");
+        require(frame.find("\"backend\":\"cuda\"") != std::string::npos,
+                "v3.0: telemetry frame identifies the data-plane backend");
+        require(frame.find("\"process_id\":") != std::string::npos,
+                "telemetry identifies the GPU Channel process for GPU monitoring");
+        require(frame.find("\"scope\":\"destination_superposition\"") != std::string::npos,
+                "slot timing identifies receiver-superposition scope");
+        require(frame.find("\"usage_percent\":12.5") != std::string::npos,
+                "slot timing reports deadline utilization");
+        require(frame.find("\"deadline_met\":true") != std::string::npos,
+                "slot timing reports deadline verdict");
       } else if (frame.rfind("link-A ", 0) == 0) {
         got_a = true;
       }

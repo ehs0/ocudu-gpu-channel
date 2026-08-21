@@ -46,6 +46,19 @@ struct TelemetrySnapshot {
   MutableParams live;
   bool          profile_active    = false;
   std::uint64_t warmup_until_slot = 0;
+
+  // Broker-observed timing for the most recent destination superposition
+  // containing this edge. Every edge feeding the same destination receives
+  // the same values: the backend shapes and sums those edges in one call, so
+  // there is no truthful per-edge execution time. `slot_deadline_us` is the
+  // wall-clock duration represented by `processed_samples` at
+  // `sample_rate_hz`; `channel_process_us` is the wall time spent inside
+  // ChannelProcessor::process_superposition(). Zero means that no IQ serve
+  // has completed yet.
+  std::uint64_t processed_samples  = 0;
+  std::uint64_t sample_rate_hz     = 0;
+  double        slot_deadline_us   = 0.0;
+  double        channel_process_us = 0.0;
 };
 
 // v2 ProfileShadow — the multi-tap payload a `profile_swap` REQ writes.
@@ -192,7 +205,8 @@ inline bool snap_profile_from_shadow(ProfileShadow& live_profile,
 }
 
 // v3.0 TM1: publish a telemetry snapshot into ctl.telemetry using the
-// seqlock pattern. Single-writer (the per-link backend snap thread);
+// seqlock pattern. Single-writer (the per-link backend snap path and the
+// immediately enclosing broker server thread are the same thread);
 // no locking. Readers call read_telemetry_snapshot() which retries on
 // observed concurrent write.
 inline void publish_telemetry_snapshot(BrokerLinkControl& ctl,

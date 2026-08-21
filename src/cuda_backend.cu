@@ -780,7 +780,10 @@ public:
       // v3.0 TM1: publish per-link telemetry snapshot for the optional
       // telemetry-publisher thread.
       {
-        TelemetrySnapshot ts;
+        // Preserve the broker's most recently completed slot timing while
+        // this slot is in flight. The broker refreshes those fields as soon
+        // as process_superposition() returns.
+        TelemetrySnapshot ts = read_telemetry_snapshot(lms_for_snap.ctl);
         ts.slot              = snap_idx;
         ts.live_seqno        = lms_for_snap.live_seqno;
         ts.live              = lms_for_snap.live;

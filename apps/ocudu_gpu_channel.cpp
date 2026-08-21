@@ -68,7 +68,8 @@ int main(int argc, char** argv)
 
   try {
     auto config = ocg::load_config_file(config_path);
-    std::cout << "event=start backend=" << ocg::to_string(config.runtime.backend)
+    const std::string backend_name = ocg::to_string(config.runtime.backend);
+    std::cout << "event=start backend=" << backend_name
               << " cuda_status=" << ocg::backend_status() << "\n";
 
     // v3.2: hardware probe + footprint check. Skipped for CPU backend
@@ -134,6 +135,7 @@ int main(int argc, char** argv)
       ccfg.telemetry_endpoint = telemetry_endpoint;   // v3.0; empty = disabled
       ccfg.telemetry_rate_hz  = telemetry_rate_hz;
       ccfg.warmup_cap_slots   = warmup_cap_slots;     // v2.2 follow-on
+      ccfg.backend_name       = backend_name;
       control_server = std::make_unique<ocg::ControlServer>(
           std::move(ccfg), broker.collect_control_links());
       control_server->start();

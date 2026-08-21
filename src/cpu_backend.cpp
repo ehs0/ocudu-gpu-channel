@@ -233,7 +233,10 @@ void CpuChannelProcessor::apply_chain_to_link(const std::string& link_key_value,
   // its own cadence and tolerates a torn-read retry if it lands mid-
   // write.
   {
-    TelemetrySnapshot ts;
+    // Preserve the broker's most recently completed slot timing while this
+    // slot is being processed. The broker refreshes those fields immediately
+    // after process_superposition() returns.
+    TelemetrySnapshot ts = read_telemetry_snapshot(state.ctl);
     ts.slot              = snap_idx;
     ts.live_seqno        = state.live_seqno;
     ts.live              = state.live;

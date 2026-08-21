@@ -61,6 +61,12 @@ struct ControlServerConfig {
   // receives everything.
   std::string telemetry_endpoint;
   double      telemetry_rate_hz = 20.0;
+
+  // Human-readable data-plane backend selected by the owning broker
+  // ("cuda" or "cpu"). Returned in commit acknowledgements and telemetry
+  // so observers can distinguish control acceptance from CUDA application.
+  // Empty preserves the standalone/test-server "unknown" state.
+  std::string backend_name;
 };
 
 class ControlServer {

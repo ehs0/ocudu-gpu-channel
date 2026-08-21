@@ -16,8 +16,10 @@
 #include "ocudu_gpu_channel/broker.h"
 #include "ocudu_gpu_channel/config.h"
 #include "ocudu_gpu_channel/iq.h"
+#include "ocudu_gpu_channel/runtime_control.h"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -146,6 +148,7 @@ void scenario_loopback()
 
   ocg::Broker broker(config);
   const auto stats = broker.run(std::chrono::milliseconds(800));
+  const auto control_links = broker.collect_control_links();
 
   stop.store(true);
   for (auto& peer : peers) {
@@ -167,6 +170,20 @@ void scenario_loopback()
   require(stats.rx_requests > 0, "broker served no RX requests");
   require(gnb_received.load() > 0, "gnb0 sink received no samples");
   require(ue_received.load() > 0, "ue0 sink received no samples");
+  require(control_links.size() == 2, "broker did not expose both link telemetry controls");
+  for (const auto& [link_id, ctl] : control_links) {
+    const auto telemetry = ocg::read_telemetry_snapshot(*ctl);
+    require(telemetry.processed_samples > 0, "slot timing reports no processed samples");
+    require(telemetry.sample_rate_hz == 23040000, "slot timing reports the wrong sample rate");
+    require(telemetry.slot_deadline_us > 0.0, "slot timing reports no deadline");
+    require(telemetry.channel_process_us > 0.0, "slot timing reports no channel process time");
+    const double expected_deadline =
+        static_cast<double>(telemetry.processed_samples) * 1'000'000.0 /
+        static_cast<double>(telemetry.sample_rate_hz);
+    require(std::abs(telemetry.slot_deadline_us - expected_deadline) < 1.0e-6,
+            "slot deadline is not derived from the actual IQ window");
+    (void)link_id;
+  }
   // rx_starvations is a soft real-time signal: it depends on host scheduling,
   // so it is reported here but asserted only by the strict-realtime smoke run
   // on a quiet machine, not by this loopback unit test.
