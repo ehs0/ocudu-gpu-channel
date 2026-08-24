@@ -29,6 +29,19 @@ Reproducible workflows that run on the RTX workstation. Every script sources
 | `ocudu-multi-gnb-smoke.sh` | C | 2 gNBs + 2 UEs, inter-cell interference |
 | `ocudu-interop-smoke.sh` | — | Broader OCUDU interop sanity |
 
+The Milestone C script also runs directly on a GPU host without SSH or
+`.config`. The local launcher enables the Sionna RT channel by default:
+
+```bash
+./scripts/local/ocudu-gnb-ue-sionna-smoke.sh
+```
+
+It starts Open5GS, two OCUDU gNBs, two srsUEs, the CUDA broker, Sionna RT, and
+the telemetry subscriber. Success requires both cells to activate and both UEs
+to complete RRC attach, PDU-session setup, and ping. Results are written under
+`results/reports/ocudu-multi-gnb/<timestamp>/` and logs under
+`results/logs/ocudu-multi-gnb/<timestamp>/`.
+
 ## Perf sweeps
 
 Three sweep scripts with overlapping but distinct scopes:

@@ -24,6 +24,13 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
+std::uint64_t wall_clock_unix_ns()
+{
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count());
+}
+
 // One GPU-executable channel step. Field meaning depends on `type`:
 //   Scale:    a = amplitude factor.
 //   Rotate:   a = start phase (rad), b = per-sample phase increment (rad).
@@ -682,6 +689,8 @@ public:
       // active. The downstream refresh below picks the all-taps refresh
       // when active and the tap-0-only refresh otherwise.
       bool profile_just_activated = false;
+      std::uint64_t warmup_begin_unix_ns = 0;
+      std::uint64_t warmup_end_unix_ns = 0;
       if (live_changed && lms_for_snap.ctl.profile_pending) {
         if (lms_for_snap.chain_has_leading_tdl ||
             lms_for_snap.ctl.shadow_profile.force) {
@@ -754,6 +763,7 @@ public:
                   ? 1
                   : ((dl_size_samples + count_samples - 1) / count_samples);
               lms_for_snap.warmup_until_slot = snap_idx + warmup_slots;
+              warmup_begin_unix_ns = wall_clock_unix_ns();
               std::cout << "event=control_warmup_begin slot=" << snap_idx
                         << " link_id=" << edge.link_key
                         << " dl_samples=" << dl_size_samples
@@ -772,6 +782,7 @@ public:
       // v2.2 W2: emit end-event when this slot closes the warmup window.
       if (lms_for_snap.warmup_until_slot != 0 &&
           snap_idx >= lms_for_snap.warmup_until_slot) {
+        warmup_end_unix_ns = wall_clock_unix_ns();
         std::cout << "event=control_warmup_end slot=" << snap_idx
                   << " link_id=" << edge.link_key << '\n';
         lms_for_snap.warmup_until_slot = 0;
@@ -789,6 +800,18 @@ public:
         ts.live              = lms_for_snap.live;
         ts.profile_active    = lms_for_snap.live_profile_active;
         ts.warmup_until_slot = lms_for_snap.warmup_until_slot;
+        if (warmup_begin_unix_ns != 0) {
+          ++ts.warmup_event_seq;
+          ts.warmup_profile_seqno = lms_for_snap.live_seqno;
+          ts.warmup_begin_slot = snap_idx;
+          ts.warmup_end_slot = 0;
+          ts.warmup_begin_unix_ns = warmup_begin_unix_ns;
+          ts.warmup_end_unix_ns = 0;
+        }
+        if (warmup_end_unix_ns != 0) {
+          ts.warmup_end_slot = snap_idx;
+          ts.warmup_end_unix_ns = warmup_end_unix_ns;
+        }
         publish_telemetry_snapshot(lms_for_snap.ctl, ts);
       }
       if (sp.use_device_channel) {

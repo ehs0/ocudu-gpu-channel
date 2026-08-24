@@ -104,6 +104,30 @@ Pass criteria:
 
 If srsUE build/runtime fails before attach while the broker path is otherwise intact, record the result as a UE-stack blocker, not as a CUDA broker failure.
 
+## Local 2-gNB / 2-UE Sionna Test
+
+On a GPU host containing sibling `ocudu`, `ocudu-gpu-channel`, and
+`venvs/sionna` directories, run the complete two-cell test without configuring
+an SSH validation mirror:
+
+```bash
+cd /home/ubuntu/OCUDU/ocudu-gpu-channel
+./scripts/local/ocudu-gnb-ue-sionna-smoke.sh
+```
+
+The launcher uses the Sionna-driven 10-edge topology and verifies both gNB
+cells, both UE RRC connections, both PDU sessions, both data-plane pings, live
+Sionna profile updates, and the broker telemetry feed. Override detected paths
+when needed with `OCUDU_MGNB_OCUDU_ROOT`, `OCUDU_MGNB_SIONNA_PYTHON`, or
+`OCUDU_MGNB_CUDA_COMPILER`.
+
+The host must allow Docker to create bridge-network namespaces. Recent `runc`
+security fixes can expose an LXC/LXD AppArmor incompatibility that fails with
+`open sysctl net.ipv4.ip_unprivileged_port_start ... permission denied`. This
+must be fixed in the outer LXC/LXD host profile and followed by a guest restart;
+weakening or downgrading `runc` inside the guest is not part of this test. See
+the upstream [`runc` analysis](https://github.com/opencontainers/runc/issues/4968).
+
 ## Failure Gates
 
 Treat any of these as a failed real-time interop run:

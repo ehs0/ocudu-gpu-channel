@@ -47,6 +47,19 @@ struct TelemetrySnapshot {
   bool          profile_active    = false;
   std::uint64_t warmup_until_slot = 0;
 
+  // Latched boundaries for the most recent profile warmup cycle. Unlike
+  // warmup_until_slot (which returns to zero as soon as warmup completes),
+  // these remain in the snapshot until the next profile activation. This
+  // lets a slower telemetry publisher report a short warmup that began and
+  // ended entirely between two PUB ticks without stretching it to the
+  // subscriber's observation interval.
+  std::uint64_t warmup_event_seq      = 0;
+  std::uint32_t warmup_profile_seqno  = 0;
+  std::uint64_t warmup_begin_slot     = 0;
+  std::uint64_t warmup_end_slot       = 0;
+  std::uint64_t warmup_begin_unix_ns  = 0;
+  std::uint64_t warmup_end_unix_ns    = 0;
+
   // Broker-observed timing for the most recent destination superposition
   // containing this edge. Every edge feeding the same destination receives
   // the same values: the backend shapes and sums those edges in one call, so

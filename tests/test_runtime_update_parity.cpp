@@ -487,9 +487,31 @@ int main()
 
     // First slot post-swap: snap fires, warmup begin emitted.
     (void)run_slot(warm_cpu, warm_model, unit);
+    const auto begin_snapshot =
+        ocg::read_telemetry_snapshot(*lookup_ctl(warm_cpu, warm_model));
+    require(begin_snapshot.warmup_event_seq == 1,
+            "warmup begin should advance the latched event sequence");
+    require(begin_snapshot.warmup_profile_seqno == begin_snapshot.live_seqno,
+            "warmup boundary should identify the activating profile seqno");
+    require(begin_snapshot.warmup_begin_slot == 1,
+            "warmup boundary should retain the exact begin slot");
+    require(begin_snapshot.warmup_begin_unix_ns > 0,
+            "warmup boundary should retain the exact begin timestamp");
+    require(begin_snapshot.warmup_end_unix_ns == 0,
+            "warmup end should remain unset while the backend is warming");
     // Second slot: warmup_until_slot was snap_idx+1, so this slot
     // crosses the threshold and emits the end event.
     (void)run_slot(warm_cpu, warm_model, unit);
+    const auto end_snapshot =
+        ocg::read_telemetry_snapshot(*lookup_ctl(warm_cpu, warm_model));
+    require(end_snapshot.warmup_event_seq == begin_snapshot.warmup_event_seq,
+            "warmup end should complete the same latched event cycle");
+    require(end_snapshot.warmup_begin_unix_ns == begin_snapshot.warmup_begin_unix_ns,
+            "warmup end should preserve the begin timestamp");
+    require(end_snapshot.warmup_end_slot == 2,
+            "warmup boundary should retain the exact end slot");
+    require(end_snapshot.warmup_end_unix_ns >= end_snapshot.warmup_begin_unix_ns,
+            "warmup end timestamp should not precede its begin timestamp");
 
     std::cout.rdbuf(old_buf);
 

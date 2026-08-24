@@ -1,6 +1,7 @@
 #include "ocudu_gpu_channel/cpu_backend.h"
 #include "ocudu_gpu_channel/delay.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -26,6 +27,13 @@ double estimate_average_power(std::span<const IqSample> input)
     sum += power(sample);
   }
   return sum / static_cast<double>(input.size());
+}
+
+std::uint64_t wall_clock_unix_ns()
+{
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::system_clock::now().time_since_epoch()).count());
 }
 
 } // namespace
@@ -191,6 +199,8 @@ void CpuChannelProcessor::apply_chain_to_link(const std::string& link_key_value,
   // as warmup artefacts. ceil(dl_size / count) slots; typically 1 in
   // production (count=23040 >> dl_size=~128). Find the leading tdl
   // step's StepState (its delay_line is the link's cross-slot ring).
+  std::uint64_t warmup_begin_unix_ns = 0;
+  std::uint64_t warmup_end_unix_ns = 0;
   if (profile_just_activated) {
     StepState* leading_tdl_state = nullptr;
     for (std::size_t i = 0; i < model.chain.size(); ++i) {
@@ -213,6 +223,7 @@ void CpuChannelProcessor::apply_chain_to_link(const std::string& link_key_value,
     // new profile (snap_idx == state.next_slot - 1). Warmup ends when
     // the link finishes `warmup_slots` slots, so end-slot = snap_idx + warmup_slots.
     state.warmup_until_slot = snap_idx + warmup_slots;
+    warmup_begin_unix_ns = wall_clock_unix_ns();
     std::cout << "event=control_warmup_begin slot=" << snap_idx
               << " link_id=" << link_key_value
               << " dl_samples=" << dl_size_samples
@@ -223,6 +234,7 @@ void CpuChannelProcessor::apply_chain_to_link(const std::string& link_key_value,
   // warmup window. `warmup_until_slot - 1` is the last warmup slot (so
   // snap_idx == warmup_until_slot means "first post-warmup slot").
   if (state.warmup_until_slot != 0 && snap_idx >= state.warmup_until_slot) {
+    warmup_end_unix_ns = wall_clock_unix_ns();
     std::cout << "event=control_warmup_end slot=" << snap_idx
               << " link_id=" << link_key_value << '\n';
     state.warmup_until_slot = 0;
@@ -242,6 +254,18 @@ void CpuChannelProcessor::apply_chain_to_link(const std::string& link_key_value,
     ts.live              = state.live;
     ts.profile_active    = state.live_profile_active;
     ts.warmup_until_slot = state.warmup_until_slot;
+    if (warmup_begin_unix_ns != 0) {
+      ++ts.warmup_event_seq;
+      ts.warmup_profile_seqno = state.live_seqno;
+      ts.warmup_begin_slot = snap_idx;
+      ts.warmup_end_slot = 0;
+      ts.warmup_begin_unix_ns = warmup_begin_unix_ns;
+      ts.warmup_end_unix_ns = 0;
+    }
+    if (warmup_end_unix_ns != 0) {
+      ts.warmup_end_slot = snap_idx;
+      ts.warmup_end_unix_ns = warmup_end_unix_ns;
+    }
     publish_telemetry_snapshot(state.ctl, ts);
   }
 

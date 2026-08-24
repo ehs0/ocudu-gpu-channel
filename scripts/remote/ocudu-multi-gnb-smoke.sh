@@ -15,8 +15,25 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "${script_dir}/common.sh"
+execution_mode="${OCUDU_MGNB_EXECUTION:-remote}"
+if [[ "${execution_mode}" == "local" ]]; then
+  repo_root="$(cd "${script_dir}/../.." && pwd)"
+  local_workspace="$(cd "${repo_root}/.." && pwd)"
+  REMOTE_WORKSPACE="${OCUDU_MGNB_WORKSPACE:-${local_workspace}}"
+  REMOTE_PROJECT_ROOT="${OCUDU_MGNB_PROJECT_ROOT:-${repo_root}}"
+  REMOTE_BUILDS_ROOT="${OCUDU_MGNB_BUILDS_ROOT:-${local_workspace}/builds}"
+  REMOTE_RESULTS_ROOT="${OCUDU_MGNB_RESULTS_ROOT:-${repo_root}/results}"
+  REMOTE_OCUDU_ROOT="${OCUDU_MGNB_OCUDU_ROOT:-${local_workspace}/ocudu}"
+  remote_sh() {
+    "$@"
+  }
+elif [[ "${execution_mode}" == "remote" ]]; then
+  # shellcheck source=common.sh
+  source "${script_dir}/common.sh"
+else
+  echo "OCUDU_MGNB_EXECUTION must be local or remote" >&2
+  exit 2
+fi
 
 duration_seconds="${OCUDU_MGNB_DURATION_SECONDS:-60}"
 build_docker="${OCUDU_MGNB_BUILD_DOCKER:-1}"
@@ -30,6 +47,7 @@ channel_mode="${OCUDU_MGNB_CHANNEL_MODE:-static}"
 sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
 sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-2}"
 sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
+cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: the two UEs camp on different cells so they do not
 # collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
 # any startup race. 0 disables it.
@@ -42,16 +60,21 @@ if [[ "${channel_mode}" != "static" && "${channel_mode}" != "sionna" ]]; then
 fi
 broker_image_arg="${broker_image:-__native__}"
 sionna_python_arg="${sionna_python:-__default__}"
+cuda_compiler_arg="${cuda_compiler:-__default__}"
 
-case "${REMOTE_PROJECT_ROOT}" in
-  "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
-  *) remote_dest="${REMOTE_PROJECT_ROOT}" ;;
-esac
-echo "syncing working tree to ${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}"
-rsync -az --delete \
-  --exclude '.git' --exclude 'build*' --exclude '.config' \
-  -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
-  "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
+if [[ "${execution_mode}" == "remote" ]]; then
+  case "${REMOTE_PROJECT_ROOT}" in
+    "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
+    *) remote_dest="${REMOTE_PROJECT_ROOT}" ;;
+  esac
+  echo "syncing working tree to ${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}"
+  rsync -az --delete \
+    --exclude '.git' --exclude 'build*' --exclude '.config' \
+    -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
+    "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
+else
+  echo "running local 2-gNB/2-UE smoke from ${REMOTE_PROJECT_ROOT}"
+fi
 
 remote_sh bash -s -- \
   "${REMOTE_WORKSPACE}" \
@@ -67,7 +90,9 @@ remote_sh bash -s -- \
   "${channel_mode}" \
   "${sionna_python_arg}" \
   "${sionna_update_hz}" \
-  "${sionna_ready_seconds}" <<'REMOTE'
+  "${sionna_ready_seconds}" \
+  "${cuda_compiler_arg}" \
+  "${execution_mode}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -84,6 +109,8 @@ channel_mode="${11}"
 sionna_python="${12}"
 sionna_update_hz="${13}"
 sionna_ready_seconds="${14}"
+cuda_compiler="${15}"
+execution_mode="${16}"
 [[ "${broker_image}" == "__native__" ]] && broker_image=""
 
 expand_remote_path() {
@@ -110,17 +137,64 @@ if [[ "${sionna_python}" == "__default__" ]]; then
 else
   sionna_python="$(expand_remote_path "${sionna_python}")"
 fi
+if [[ "${cuda_compiler}" == "__default__" ]]; then
+  if [[ "${execution_mode}" == "local" && -x /opt/conda/envs/torch/bin/nvcc ]]; then
+    cuda_compiler=/opt/conda/envs/torch/bin/nvcc
+  else
+    cuda_compiler="${workspace}/tools/cuda-12.8.1/bin/nvcc"
+  fi
+else
+  cuda_compiler="$(expand_remote_path "${cuda_compiler}")"
+fi
 
-if [[ ! -f "${workspace}/tools/env.sh" ]]; then
+if [[ -f "${workspace}/tools/env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${workspace}/tools/env.sh"
+elif [[ "${execution_mode}" == "remote" ]]; then
   echo "missing ${workspace}/tools/env.sh; run scripts/remote/bootstrap-user-tools.sh first" >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "${workspace}/tools/env.sh"
+command -v cmake >/dev/null 2>&1 || { echo "cmake not found" >&2; exit 1; }
+if [[ ! -x "${cuda_compiler}" ]]; then
+  echo "CUDA compiler not found or not executable: ${cuda_compiler}" >&2
+  echo "set OCUDU_MGNB_CUDA_COMPILER to the nvcc path" >&2
+  exit 1
+fi
 
 if [[ ! -d "${ocudu_root}/docker" ]]; then
   echo "missing OCUDU checkout with docker directory: ${ocudu_root}" >&2
   exit 1
+fi
+if [[ "${execution_mode}" == "local" ]]; then
+  command -v docker >/dev/null 2>&1 || { echo "docker not found" >&2; exit 1; }
+  if ! docker info >/dev/null 2>&1; then
+    if sudo -n docker info >/dev/null 2>&1; then
+      docker_bin="$(command -v docker)"
+      docker() {
+        sudo -n env \
+          GNB_CONFIG_PATH="${GNB_CONFIG_PATH:-}" \
+          GNB1_CONFIG_PATH="${GNB1_CONFIG_PATH:-}" \
+          OCUDU_ZMQ_DOCKERFILE="${OCUDU_ZMQ_DOCKERFILE:-}" \
+          OS="${OS:-}" OS_VERSION="${OS_VERSION:-}" \
+          "${docker_bin}" "$@"
+      }
+      echo "Docker socket requires sudo; using passwordless sudo for this run"
+    else
+      echo "cannot access the Docker daemon; grant this user Docker socket access" >&2
+      exit 1
+    fi
+  fi
+  if ! nvidia-smi -L >/dev/null 2>&1; then
+    echo "NVIDIA GPU/driver is not accessible; the CUDA and Sionna test cannot run" >&2
+    exit 1
+  fi
+  if [[ "$(systemd-detect-virt 2>/dev/null || true)" == "lxc" ]] && \
+     docker image inspect hello-world:latest >/dev/null 2>&1 && \
+     ! docker run --rm hello-world:latest >/dev/null 2>&1; then
+    echo "nested Docker cannot create a network namespace in this LXC/LXD guest" >&2
+    echo "fix the host LXC/LXD AppArmor profile, restart the guest, then rerun" >&2
+    exit 1
+  fi
 fi
 
 if [[ "${channel_mode}" == "sionna" ]]; then
@@ -129,8 +203,16 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     echo "create ${workspace}/venvs/sionna and install scripts/sionna_rt/requirements.txt" >&2
     exit 2
   fi
+  if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
+    optix_file="$(find "${workspace}/local" -type f -name 'libnvoptix.so*' -print -quit 2>/dev/null || true)"
+    if [[ -n "${optix_file}" ]]; then
+      export DRJIT_LIBOPTIX_PATH="${optix_file}"
+      export LD_LIBRARY_PATH="$(dirname "${optix_file}"):${LD_LIBRARY_PATH:-}"
+    fi
+  fi
   if ! "${sionna_python}" -c 'import sionna.rt, zmq' >/dev/null 2>&1; then
     echo "${sionna_python} cannot import sionna.rt and zmq" >&2
+    "${sionna_python}" -c 'import sionna.rt, zmq' 2>&1 | tail -n 12 >&2 || true
     exit 2
   fi
 fi
@@ -180,7 +262,7 @@ JSON
 # --- build ---------------------------------------------------------------------
 cmake -S "${project_root}" -B "${cuda_build}" \
   -DCMAKE_BUILD_TYPE=Release -DOCUDU_GPU_CHANNEL_ENABLE_CUDA=ON \
-  -DCMAKE_CUDA_COMPILER="${workspace}/tools/cuda-12.8.1/bin/nvcc" \
+  -DCMAKE_CUDA_COMPILER="${cuda_compiler}" \
   -DOCUDU_GPU_CHANNEL_CUDA_ARCHITECTURES=120 >"${log_dir}/cmake-configure.log" 2>&1
 cmake --build "${cuda_build}" -j"$(nproc)" >"${log_dir}/cmake-build.log" 2>&1
 

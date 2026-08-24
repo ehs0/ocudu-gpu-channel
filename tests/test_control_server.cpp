@@ -585,6 +585,12 @@ int main()
       s.live.path_loss_db = 5.0F;
       s.live.awgn_snr_db  = 12.5F;
       s.profile_active    = true;
+      s.warmup_event_seq = 3;
+      s.warmup_profile_seqno = 11;
+      s.warmup_begin_slot = 198;
+      s.warmup_end_slot = 199;
+      s.warmup_begin_unix_ns = 1700000000000000000ULL;
+      s.warmup_end_unix_ns = 1700000000001000000ULL;
       s.processed_samples  = 23040;
       s.sample_rate_hz     = 23040000;
       s.slot_deadline_us   = 1000.0;
@@ -641,6 +647,18 @@ int main()
                 "v3.0: telemetry frame names link-B");
         require(frame.find("\"profile_active\":true") != std::string::npos,
                 "v3.0: telemetry frame reports profile_active=true for link-B");
+        require(frame.find("\"warmup_event_seq\":3") != std::string::npos,
+                "telemetry retains the latest warmup cycle sequence");
+        require(frame.find("\"warmup_profile_seqno\":11") != std::string::npos,
+                "telemetry correlates warmup with the applied profile");
+        require(frame.find("\"warmup_begin_slot\":198") != std::string::npos,
+                "telemetry reports the backend warmup begin slot");
+        require(frame.find("\"warmup_end_slot\":199") != std::string::npos,
+                "telemetry reports the backend warmup end slot");
+        require(frame.find("\"warmup_begin_unix_ns\":1700000000000000000") != std::string::npos,
+                "telemetry reports the backend warmup begin timestamp");
+        require(frame.find("\"warmup_end_unix_ns\":1700000000001000000") != std::string::npos,
+                "telemetry reports the backend warmup end timestamp");
         require(frame.find("\"backend\":\"cuda\"") != std::string::npos,
                 "v3.0: telemetry frame identifies the data-plane backend");
         require(frame.find("\"process_id\":") != std::string::npos,
