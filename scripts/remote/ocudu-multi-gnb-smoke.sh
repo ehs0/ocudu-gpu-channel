@@ -45,6 +45,10 @@ broker_image="${OCUDU_MGNB_BROKER_IMAGE:-}"
 # untouched.
 channel_mode="${OCUDU_MGNB_CHANNEL_MODE:-static}"
 sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
+# Extra arguments appended to run_bridge.py, e.g. to move a node or change
+# the field-to-IQ calibration:
+#   OCUDU_MGNB_SIONNA_EXTRA_ARGS="--ue0-start -20,0,1.5 --gain-offset-db 75"
+sionna_extra_args="${OCUDU_MGNB_SIONNA_EXTRA_ARGS:-}"
 sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-2}"
 sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
@@ -92,7 +96,8 @@ remote_sh bash -s -- \
   "${sionna_update_hz}" \
   "${sionna_ready_seconds}" \
   "${cuda_compiler_arg}" \
-  "${execution_mode}" <<'REMOTE'
+  "${execution_mode}" \
+  "${sionna_extra_args}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -111,6 +116,7 @@ sionna_update_hz="${13}"
 sionna_ready_seconds="${14}"
 cuda_compiler="${15}"
 execution_mode="${16}"
+sionna_extra_args="${17:-}"
 [[ "${broker_image}" == "__native__" ]] && broker_image=""
 
 expand_remote_path() {
@@ -603,6 +609,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --duration 0 \
     --update-hz "${sionna_update_hz}" \
     --status-jsonl "${log_dir}/sionna-status.jsonl" \
+    ${sionna_extra_args} \
     >"${log_dir}/sionna-bridge.log" 2>&1 &
   sionna_pid="$!"
 
