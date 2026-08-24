@@ -4,11 +4,11 @@
 
 ## Repository State
 
-- Branch: `sionna-rt-integration` at `8eb9e3b`, tracking `origin/sionna-rt-integration`.
+- Branch: `rootless-native-1x1`, based on local integration commit `bec0466`.
 - Initial repository contents before setup: `.git` only.
-- Working tree is dirty: the local 2-gNB/2-UE launcher work changes `scripts/remote/ocudu-multi-gnb-smoke.sh`, `scripts/remote/README.md`, `docs/ocudu-interop.md`, and adds `scripts/local/`; separate pre-existing Web UI/runtime-control changes remain untouched in the other modified files.
+- Working tree is clean after committing the requested rootless native 1×1 gNB–UE harness port and documentation.
 - Current ignored local artifacts: `.config`, `build*/`, `.claude/`, `.playwright-mcp/`, `references/`, `writing/`.
-- Remote: `origin` points to `https://github.com/zhouyou-gu/ocudu-gpu-channel.git`, with setup pushed to `origin/main`.
+- Remotes: `origin` points to `https://github.com/ehs0/ocudu-gpu-channel.git`; `upstream` points to `https://github.com/zhouyou-gu/ocudu-gpu-channel.git`.
 - Current ignored local config: `.config` contains the GPU workstation connection settings.
 - Local environment note: the requested `agent-files` skill was installed under `/Users/charles_gu/.codex/skills/agent-files`.
 - Remote workspace: `/home/zhouyou/ocudu-gpu-channel-workspace` exists on `zhouyou@10.34.23.184`.
@@ -275,6 +275,11 @@ Progress entry template
 - [Local 2-gNB/2-UE docs] Documented the one-command Sionna test, result/log locations, path overrides, pass criteria, and the nested-LXC Docker prerequisite in `scripts/remote/README.md` and `docs/ocudu-interop.md`.
 - [Local 2-gNB/2-UE validation] `bash -n` and `git diff --check` pass for the launcher changes; the GPU-enabled build completed with CUDA 12.9 for SM 12.0; `ctest` on the newly built `/home/ubuntu/OCUDU/builds/ocudu-gpu-channel/cuda-release` tree passed 10/10; Python Sionna adapter/Web UI tests passed 30/30; Sionna RT imported as `cuda_ad_mono_polarized` against the extracted OptiX library on the RTX 5090 host.
 - [Local 2-gNB/2-UE runtime attempt] Built the `ocudu/gnb`, Open5GS, and `ocudu-gpu-channel/srsue-zmq:release_23_11` images successfully. Actual container start is blocked before radio launch because the outer LXD AppArmor profile rejects bridge-network namespace creation in current `runc` with `open sysctl net.ipv4.ip_unprivileged_port_start ... permission denied`; the local launcher now detects this condition before an expensive build. No test containers or compose networks remain.
+- [Git] Committed the accumulated Sionna live-demo integration as `bec0466` and created `rootless-native-1x1` from that exact commit. Push is pending GitHub authentication in this environment.
+- [Rootless 1×1] Ported only the Docker-free native gNB–broker–srsUE attach harness from `MinwooEun/rank1-miso-simo`; the MIMO broker/coordinator and two-port scripts were deliberately excluded.
+- [Rootless 1×1] Adapted readiness and artifact checks to the current broker's `event=socket_ready device=gnb0/ue0` interface, and made the live run consume the exact broker binary freshly built from the current checkout.
+- [Rootless 1×1] Added locked native-workspace validation, loopback config rendering, isolated user/network/mount namespace orchestration, Open5GS subscriber verification, RRC/PDU/ping acceptance checks, evidence hashing, and an ordinary-user runbook under `scripts/native/README.md`.
+- [Rootless 1×1 validation] Shell syntax, Python compilation, renderer self-test, subscriber verifier self-test, artifact verifier self-test, and `git diff --check` pass. Full live attach cannot run in the current command sandbox because `/dev/net/tun`, unprivileged `unshare`, the pinned native workspace, and direct NVIDIA access are unavailable here.
 
 ## Blockers and Risks
 

@@ -1,5 +1,10 @@
 # OCUDU Runtime Interop
 
+For the Docker-free, ordinary-user 1×1 gNB–UE attach path, see
+[`scripts/native/README.md`](../scripts/native/README.md). It uses an isolated
+user/network/mount namespace and the current checkout's freshly built broker;
+it does not include or require the multi-antenna engine.
+
 This runbook validates `ocudu-gpu-channel` against OCUDU Split 8 ZMQ endpoints on the RTX workstation. The target path is:
 
 ```text
