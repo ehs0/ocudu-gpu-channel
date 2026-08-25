@@ -1163,6 +1163,7 @@ class StatusStore:
         self._sionna_session_id: Any = None
         self._gpu_usage: dict[str, Any] | None = None
         self._gpu_history: list[dict[str, Any]] = []
+        self._telemetry_history: list[dict[str, Any]] = []
         self._iteration_history: list[dict[str, Any]] = []
         self._warmup_targets: dict[tuple[Any, Any], dict[str, int]] = {}
         self._bad_telemetry_frames = 0
@@ -1245,9 +1246,30 @@ class StatusStore:
 
     def update_telemetry(self, link_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
+            observed_unix_ms = time.time_ns() // 1_000_000
             self._telemetry[link_id] = payload
             self._telemetry_seen[link_id] = time.monotonic()
-            self._close_completed_warmups(time.time_ns() // 1_000_000)
+            slot_processing = payload.get("slot_processing")
+            live = payload.get("live")
+            self._telemetry_history.append(
+                {
+                    "observed_unix_ms": observed_unix_ms,
+                    "link_id": link_id,
+                    "slot": payload.get("slot"),
+                    "backend": payload.get("backend"),
+                    "slot_processing": (
+                        dict(slot_processing)
+                        if isinstance(slot_processing, dict)
+                        else {}
+                    ),
+                    "live": dict(live) if isinstance(live, dict) else {},
+                }
+            )
+            # The UI plots a five-second window. At 20 Hz and two live links,
+            # 256 frames retain a little over six seconds without making each
+            # /api/status response carry an unbounded telemetry log.
+            del self._telemetry_history[:-256]
+            self._close_completed_warmups(observed_unix_ms)
 
     def note_bad_telemetry(self) -> None:
         with self._lock:
@@ -1262,6 +1284,7 @@ class StatusStore:
             ):
                 if self._sionna_session_id is not None:
                     self._iteration_history.clear()
+                    self._telemetry_history.clear()
                     self._warmup_targets.clear()
                     self._sionna = None
                     self._sionna_seen = None
@@ -1319,6 +1342,25 @@ class StatusStore:
                             else ended_unix_ms if warmup_targets else None
                         ),
                         "warmup_ended_unix_ms": None if warmup_targets else None,
+                        "timing_ms": (
+                            dict(timing) if isinstance(timing, dict) else {}
+                        ),
+                        "channels": [
+                            {
+                                key: channel.get(key)
+                                for key in (
+                                    "link_id",
+                                    "direction",
+                                    "total_path_power_db",
+                                    "strongest_tap_gain_db",
+                                    "ray_count",
+                                    "tap_count",
+                                )
+                            }
+                            for channel in payload.get("channels", [])
+                            if isinstance(channel, dict)
+                            and isinstance(channel.get("link_id"), str)
+                        ],
                     }
                 )
                 key = (session_id, iteration)
@@ -1437,6 +1479,7 @@ class StatusStore:
             )
             gpu_usage = dict(self._gpu_usage) if self._gpu_usage else None
             gpu_history = list(self._gpu_history)
+            telemetry_history = list(self._telemetry_history)
             iteration_history = list(self._iteration_history)
             bad_frames = self._bad_telemetry_frames
         if sionna_runtime is not None:
@@ -1465,6 +1508,10 @@ class StatusStore:
             "sionna": sionna,
             "sionna_runtime": sionna_runtime,
             "gpu_usage": gpu_usage,
+            "history": {
+                "telemetry": telemetry_history,
+                "iterations": iteration_history[-32:],
+            },
             "delivery": delivery_status(sionna, telemetry),
         }
 

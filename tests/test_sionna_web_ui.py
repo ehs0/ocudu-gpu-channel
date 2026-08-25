@@ -62,6 +62,11 @@ class WebUiTests(unittest.TestCase):
                 "event": "telemetry",
                 "link_id": "ue0>gnb0:sionna_rt",
                 "slot": 3,
+                "slot_processing": {
+                    "deadline_us": 1000.0,
+                    "elapsed_us": 750.0,
+                    "deadline_met": True,
+                },
             },
         )
         store.update_sionna(
@@ -69,6 +74,22 @@ class WebUiTests(unittest.TestCase):
                 "event": "sionna_rt_update",
                 "iteration": 2,
                 "positions": {},
+                "timing_ms": {
+                    "channel_generation": 120.0,
+                    "control_transaction": 0.7,
+                    "total_update": 121.0,
+                },
+                "channels": [
+                    {
+                        "link_id": "ue0>gnb0:sionna_rt",
+                        "direction": "uplink",
+                        "total_path_power_db": -72.0,
+                        "strongest_tap_gain_db": -72.5,
+                        "ray_count": 2,
+                        "tap_count": 2,
+                        "taps": [{"gain_db": -72.5}],
+                    }
+                ],
                 "scene_geometry": {
                     "objects": [{"id": "road", "kind": "road"}]
                 },
@@ -83,6 +104,16 @@ class WebUiTests(unittest.TestCase):
             snapshot["sionna"]["scene_geometry"]["objects"][0]["kind"],
             "road",
         )
+        self.assertEqual(
+            snapshot["history"]["telemetry"][-1]["slot_processing"][
+                "elapsed_us"
+            ],
+            750.0,
+        )
+        iteration = snapshot["history"]["iterations"][-1]
+        self.assertEqual(iteration["timing_ms"]["total_update"], 121.0)
+        self.assertEqual(iteration["channels"][0]["total_path_power_db"], -72.0)
+        self.assertNotIn("taps", iteration["channels"][0])
 
     def test_store_exposes_runtime_phase_and_process_targets(self) -> None:
         store = StatusStore()
@@ -223,24 +254,35 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(cpu_info["physical_cores"], 2)
         self.assertEqual(cpu_info["logical_threads"], 3)
 
-    def test_web_ui_uses_resource_graphs_without_mem_utilization_card(self) -> None:
+    def test_web_ui_uses_measured_latency_and_channel_graphs(self) -> None:
         index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("현재 MEM", index)
-        self.assertIn('id="gpuComputeChart"', index)
+        self.assertNotIn('id="gpuComputeChart"', index)
+        self.assertIn('id="slotLatencyChart"', index)
+        self.assertIn('id="sionnaLatencyChart"', index)
+        self.assertIn('id="channelPowerChart"', index)
         self.assertIn('id="applicationCpuChart"', index)
         self.assertIn('id="memoryChart"', index)
         self.assertIn('id="pcieChart"', index)
         self.assertNotIn('id="computeChart"', index)
-        self.assertIn("GPU Compute (%)", index)
+        self.assertNotIn("GPU Compute (%)", index)
+        self.assertIn("IQ slot 처리시간 (µs) · 1 ms 기준", index)
+        self.assertIn("Sionna update latency (ms)", index)
+        self.assertIn("링크별 total path power (dB)", index)
+        self.assertIn("NVML sampled utilization", index)
+        self.assertIn("1 ms deadline", index)
+        self.assertIn("update budget", index)
+        self.assertIn("slot_processing?.elapsed_us", index)
+        self.assertIn("total_path_power_db", index)
         self.assertIn("Application CPU (논리 코어)", index)
-        self.assertIn("label:'전체 GPU'", index)
-        self.assertIn("label:'기타 GPU'", index)
+        self.assertNotIn("label:'전체 GPU'", index)
+        self.assertNotIn("label:'기타 GPU'", index)
         self.assertIn("label:'Web UI'", index)
         self.assertIn("label:'기타/OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
-        self.assertIn("windowMs=5000", index)
+        self.assertIn("windowMs=config.windowMs||5000", index)
         self.assertIn("secondTicks=[5,4,3,2,1,0]", index)
         self.assertIn("`${secondsAgo}초 전`", index)
         self.assertIn("hardware-card.active", index)

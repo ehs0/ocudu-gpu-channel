@@ -79,7 +79,7 @@
 </head>
 <body>
   <header>
-    <div><h1>OCUDU · Sionna Channel Status</h1><div class="sub">읽기 전용 관측기 — 이 UI는 제어 포트 5559에 연결하지 않습니다</div></div>
+    <div><h1>OCUDU · Sionna Channel Status</h1><div class="sub">읽기 전용 관측기 — 이 UI는 Broker 제어 endpoint에 연결하지 않습니다</div></div>
     <div class="pills"><span id="sionnaPill" class="pill bad">Sionna 대기</span><span id="telemetryPill" class="pill bad">Telemetry 대기</span><span id="controlPill" class="pill bad">Control ACK 대기</span><span id="backendPill" class="pill bad">Backend 대기</span><span id="updatedPill" class="pill">업데이트 없음</span></div>
   </header>
   <main>
@@ -134,6 +134,11 @@
         <h2>수신 노드별 slot deadline 사용량</h2>
         <div id="deadlineCards" class="deadline-grid"></div>
         <div class="foot">Deadline은 이번 IQ 블록의 samples ÷ sample rate입니다. 사용 시간은 해당 수신 노드로 들어오는 모든 엣지를 GPU/CPU 채널 백엔드가 한 번에 합성한 <span class="mono">process_superposition</span> wall time이며, 대기·throttle·ZMQ 송신 시간은 포함하지 않습니다. 따라서 같은 수신 노드의 링크들은 하나의 측정값으로 묶입니다.</div>
+      </section>
+      <section class="panel wide">
+        <h2>Sionna 채널 전력 추이</h2>
+        <div class="resource-chart-card"><strong>링크별 total path power (dB)</strong><canvas id="channelPowerChart" class="resource-history"></canvas></div>
+        <div class="foot">Sionna CIR의 모든 ray coefficient 전력을 합산한 원시 채널 gain입니다. Emulator 보정용 gain offset과 송신 전력을 제외하므로 절대 수신전력(dBm)은 아니며, 값이 더 작아질수록 path loss가 커졌음을 뜻합니다.</div>
       </section>
       <section class="panel wide">
         <h2>엣지 링크별 impulse response · tap 상세</h2>
@@ -195,9 +200,9 @@
 
     function renderGpuProcess(role, title, usage) {
       const process=usage?.processes?.[role],running=process?.running===true,resident=process?.gpu_resident===true,pids=(process?.pids||[]).join(', ')||'—';
-      const gpuLines=(process?.gpus||[]).map(gpu=>`GPU ${gpu.gpu_index??'?'} · SM ${fmt(gpu.sm_util_percent,0)}% · VRAM ${fmtMib(gpu.gpu_memory_mib)}`).join('<br>');
+      const gpuLines=(process?.gpus||[]).map(gpu=>`GPU ${gpu.gpu_index??'?'} · NVML SM 표본 ${fmt(gpu.sm_util_percent,0)}% · VRAM ${fmtMib(gpu.gpu_memory_mib)}`).join('<br>');
       const state=running?(resident?'실행 중 · GPU context 확인':'실행 중 · GPU 표본 대기'):'프로세스 미실행';
-      return `<div class="gpu-process"><div class="card-head"><strong>${esc(title)}</strong><span class="${running?'tag-ok':'tag-wait'}">${state}</span></div><div class="gpu-metrics"><div class="gpu-metric"><b>${fmt(process?.sm_util_percent,0)}%</b><span>GPU SM</span></div><div class="gpu-metric"><b>${fmtMib(process?.gpu_memory_mib)}</b><span>VRAM</span></div><div class="gpu-metric"><b>${fmt(process?.cpu_util_percent,0)}%</b><span>CPU</span></div><div class="gpu-metric"><b>${fmtMib(process?.ram_rss_mib)}</b><span>RAM RSS</span></div></div><div class="gpu-lines">PID ${esc(pids)}<br>${gpuLines||'GPU별 표본 없음'}</div></div>`;
+      return `<div class="gpu-process"><div class="card-head"><strong>${esc(title)}</strong><span class="${running?'tag-ok':'tag-wait'}">${state}</span></div><div class="gpu-metrics"><div class="gpu-metric"><b>${fmt(process?.sm_util_percent,0)}%</b><span>NVML sampled utilization</span></div><div class="gpu-metric"><b>${fmtMib(process?.gpu_memory_mib)}</b><span>VRAM</span></div><div class="gpu-metric"><b>${fmt(process?.cpu_util_percent,0)}%</b><span>CPU</span></div><div class="gpu-metric"><b>${fmtMib(process?.ram_rss_mib)}</b><span>RAM RSS</span></div></div><div class="gpu-lines">PID ${esc(pids)}<br>${gpuLines||'GPU별 표본 없음'}</div></div>`;
     }
 
     function renderHardware(usage) {
@@ -211,36 +216,42 @@
       return Object.values(telemetry||{}).filter(payload=>Number(payload?.warmup_until_slot)>0&&Number(payload?.slot)<Number(payload?.warmup_until_slot));
     }
 
-    function drawResourceChart(canvasId, usage, config) {
+    function drawResourceChart(canvasId, source, config) {
       const canvas=$(canvasId); if(!canvas)return;
       const ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1,rect=canvas.getBoundingClientRect(),W=rect.width,H=rect.height;
       const pixelW=Math.max(1,Math.round(W*dpr)),pixelH=Math.max(1,Math.round(H*dpr));if(canvas.width!==pixelW||canvas.height!==pixelH){canvas.width=pixelW;canvas.height=pixelH}ctx.setTransform(dpr,0,0,dpr,0,0);
-      const left=48,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=5000,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(now,Number(time)));
-      const samples=(usage?.history||[]).filter(item=>Number(item.sampled_unix_ms)>=start&&Number(item.sampled_unix_ms)<=now),events=(usage?.iterations||[]).filter(item=>{const eventStart=Number(item.started_unix_ms??item.observed_unix_ms),eventEnd=Number(item.ended_unix_ms??now);return eventStart<=now&&eventEnd>=start});
-      const numeric=value=>value===null||value===undefined||!Number.isFinite(Number(value))?null:Number(value),values=samples.flatMap(item=>config.series.map(series=>numeric(series.value(item))).filter(value=>value!==null)),rawMax=Math.max(0,...values),max=config.fixedMax||Math.max(config.minMax||1,Math.ceil(rawMax/(config.step||1))*(config.step||1)),y=value=>top+plotH-Math.max(0,Math.min(max,Number(value)||0))/max*plotH,maxGapMs=Math.max(600,Number(usage?.sampling?.target_interval_ms||500)*3);
+      const left=52,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=config.windowMs||5000,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(now,Number(time))),timeKey=config.timeKey||'sampled_unix_ms';
+      const timeOf=item=>Number(item?.[timeKey]),samples=(source?.history||[]).filter(item=>timeOf(item)>=start&&timeOf(item)<=now),events=(config.showEvents===false?[]:(config.events||source?.iterations||[])).filter(item=>{const eventStart=Number(item.started_unix_ms??item.observed_unix_ms),eventEnd=Number(item.ended_unix_ms??now);return eventStart<=now&&eventEnd>=start});
+      const numeric=value=>value===null||value===undefined||!Number.isFinite(Number(value))?null:Number(value),references=config.references||[],values=[...samples.flatMap(item=>config.series.map(series=>numeric(series.value(item))).filter(value=>value!==null)),...references.map(item=>numeric(item.value)).filter(value=>value!==null)],step=config.step||1,rawMin=values.length?Math.min(...values):0,rawMax=values.length?Math.max(...values):0,min=finite(config.fixedMin)?Number(config.fixedMin):(config.allowNegative?Math.floor(rawMin/step)*step:0),initialMax=finite(config.fixedMax)?Number(config.fixedMax):(config.allowNegative?(values.length?Math.ceil(rawMax/step)*step:step):Math.max(config.minMax||1,Math.ceil(rawMax/step)*step)),max=initialMax<=min?min+step:initialMax;
+      const y=value=>top+plotH-(Math.max(min,Math.min(max,Number(value)||0))-min)/(max-min)*plotH,maxGapMs=config.maxGapMs||Math.max(600,Number(source?.sampling?.target_interval_ms||500)*3);
       ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);ctx.font='9px system-ui';
-      ctx.fillStyle='#091720';ctx.fillRect(left,top,plotW,plotH);for(const ratio of [0,.5,1]){const py=top+plotH-ratio*plotH;ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(config.axis(max*ratio),left-4,py+3)}
+      ctx.fillStyle='#091720';ctx.fillRect(left,top,plotW,plotH);for(const ratio of [0,.5,1]){const py=top+plotH-ratio*plotH,value=min+(max-min)*ratio;ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(config.axis(value),left-4,py+3)}
       const secondTicks=[5,4,3,2,1,0];secondTicks.forEach(secondsAgo=>{const px=x(now-secondsAgo*1000);ctx.strokeStyle='rgba(38,57,71,.72)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,top+plotH);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.font='8px system-ui';ctx.textAlign=secondsAgo===5?'left':secondsAgo===0?'right':'center';ctx.fillText(secondsAgo===0?'현재':`${secondsAgo}초 전`,px,H-7)});
       events.forEach((event,index)=>{const started=Number(event.started_unix_ms??event.observed_unix_ms),ended=Number(event.ended_unix_ms??now),x0=x(clipTime(started)),x1=x(clipTime(ended));ctx.strokeStyle='rgba(233,242,248,.82)';ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x0,top);ctx.lineTo(x0,top+plotH);ctx.stroke();ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(66,211,255,.88)';ctx.beginPath();ctx.moveTo(x1,top);ctx.lineTo(x1,top+plotH);ctx.stroke();ctx.restore();if(x1-x0>12){ctx.fillStyle='#c7eefa';ctx.textAlign='center';ctx.font='8px system-ui';ctx.fillText(`i${event.iteration}`,x0+(x1-x0)/2,top+10+(index%2)*10)}});
       const warmupMarkerWidth=6;events.forEach(event=>{if(!event.warmup_expected)return;const warmStart=Number(event.warmup_started_unix_ms),warmEnd=Number(event.warmup_ended_unix_ms??now);if(!Number.isFinite(warmStart)||warmStart>now||warmEnd<start)return;const x0=x(clipTime(warmStart)),x1=x(clipTime(warmEnd)),actualWidth=Math.max(0,x1-x0),visibleWidth=Math.max(warmupMarkerWidth,actualWidth),visibleX=Math.max(left,Math.min(W-right-visibleWidth,(x0+x1-visibleWidth)/2));ctx.fillStyle='rgba(255,101,119,.28)';ctx.fillRect(visibleX,top,visibleWidth,plotH);ctx.strokeStyle='rgba(255,101,119,.95)';ctx.strokeRect(visibleX+.5,top+.5,Math.max(1,visibleWidth-1),plotH-1);ctx.fillStyle='#ff9aaa';ctx.textAlign='center';ctx.font='bold 8px system-ui';ctx.fillText('W',visibleX+visibleWidth/2,top+plotH-4)});
-      config.series.forEach(series=>{ctx.strokeStyle=series.color;ctx.lineWidth=1.8;ctx.beginPath();let drawing=false,lastTime=null,lastY=null;samples.forEach(item=>{const value=numeric(series.value(item));if(value===null)return;const sampleTime=Number(item.sampled_unix_ms),px=x(sampleTime),py=y(value);if(drawing&&sampleTime-lastTime<=maxGapMs)ctx.lineTo(px,py);else{ctx.moveTo(sampleTime-start<=maxGapMs?left:px,py);if(px>left&&sampleTime-start<=maxGapMs)ctx.lineTo(px,py);drawing=true}lastTime=sampleTime;lastY=py});if(drawing&&now-lastTime<=maxGapMs)ctx.lineTo(x(now),lastY);ctx.stroke()});
-      let legendX=left;config.series.forEach(series=>{ctx.fillStyle=series.color;ctx.textAlign='left';ctx.font='9px system-ui';ctx.fillText(`■ ${series.label}`,legendX,12);legendX+=ctx.measureText(`■ ${series.label}`).width+10});ctx.fillStyle='#e9f2f8';ctx.fillText('│ 시작',left,27);ctx.fillStyle='#42d3ff';ctx.fillText('┆ 끝',left+42,27);ctx.fillStyle='#ff6577';ctx.fillText('■ W warm-up 강조',left+80,27);
-      if(!samples.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText('리소스 표본 대기 중',left+plotW/2,top+plotH/2)}
+      references.forEach(reference=>{const value=numeric(reference.value);if(value===null||value<min||value>max)return;const py=y(value);ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle=reference.color||'#ff6577';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.restore()});
+      config.series.forEach(series=>{ctx.strokeStyle=series.color;ctx.lineWidth=1.8;ctx.beginPath();let drawing=false,lastTime=null,lastY=null;samples.forEach(item=>{const value=numeric(series.value(item));if(value===null)return;const sampleTime=timeOf(item),px=x(sampleTime),py=y(value);if(drawing&&sampleTime-lastTime<=maxGapMs)ctx.lineTo(px,py);else{ctx.moveTo(sampleTime-start<=maxGapMs?left:px,py);if(px>left&&sampleTime-start<=maxGapMs)ctx.lineTo(px,py);drawing=true}lastTime=sampleTime;lastY=py});if(drawing&&now-lastTime<=maxGapMs)ctx.lineTo(x(now),lastY);ctx.stroke()});
+      let legendX=left;config.series.forEach(series=>{ctx.fillStyle=series.color;ctx.textAlign='left';ctx.font='9px system-ui';ctx.fillText(`■ ${series.label}`,legendX,12);legendX+=ctx.measureText(`■ ${series.label}`).width+10});if(config.showEvents!==false){ctx.fillStyle='#e9f2f8';ctx.fillText('│ 시작',left,27);ctx.fillStyle='#42d3ff';ctx.fillText('┆ 끝',left+42,27);ctx.fillStyle='#ff6577';ctx.fillText('■ W warm-up 강조',left+80,27)}
+      references.forEach(reference=>{ctx.fillStyle=reference.color||'#ff6577';ctx.fillText(`┄ ${reference.label}`,legendX,12);legendX+=ctx.measureText(`┄ ${reference.label}`).width+10});
+      if(!samples.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText(config.emptyText||'표본 대기 중',left+plotW/2,top+plotH/2)}
     }
 
-    function drawResourceHistory(usage) {
+    function drawResourceHistory(usage, history, runtime, sionna) {
       const cpuCores=value=>finite(value)?Number(value)/100:null;
-      drawResourceChart('gpuComputeChart',usage,{minMax:100,step:25,axis:value=>`${Math.round(value)}%`,series:[{label:'Sionna SM',color:'#42d3ff',value:item=>item.roles?.sionna?.sm_util_percent},{label:'Channel SM',color:'#ff9f43',value:item=>item.roles?.gpu_channel?.sm_util_percent},{label:'전체 GPU',color:'#b7a0ff',value:item=>item.gpu_compute?.total_sm_util_percent},{label:'기타 GPU',color:'#f4d35e',value:item=>item.gpu_compute?.other_sm_util_percent}]});
+      const iterations=history?.iterations||[],telemetryHistory=history?.telemetry||[],eventSource={history:iterations,iterations},slotSource={history:telemetryHistory,iterations},palette=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e'],destinations=[...new Set(telemetryHistory.map(item=>linkParts(item.link_id).destination).filter(id=>id!=='—'))].sort(),linkIds=[...new Set(iterations.flatMap(item=>(item.channels||[]).map(channel=>channel.link_id)).filter(Boolean))].sort(),updateHz=Number(runtime?.target_update_hz||sionna?.environment?.update_rate_hz||2),updateBudgetMs=updateHz>0?1000/updateHz:500;
+      drawResourceChart('slotLatencyChart',slotSource,{timeKey:'observed_unix_ms',minMax:1000,step:500,axis:value=>`${Math.round(value)}µs`,maxGapMs:500,references:[{value:1000,label:'1 ms deadline',color:'#ff6577'}],series:destinations.map((destination,index)=>({label:`${destination} RX`,color:palette[index%palette.length],value:item=>linkParts(item.link_id).destination===destination?item.slot_processing?.elapsed_us:null})),emptyText:'IQ slot 처리 표본 대기 중'});
+      drawResourceChart('sionnaLatencyChart',eventSource,{timeKey:'observed_unix_ms',minMax:updateBudgetMs,step:100,axis:value=>`${Math.round(value)}ms`,showEvents:false,maxGapMs:1200,references:[{value:updateBudgetMs,label:`${fmt(updateBudgetMs,0)} ms update budget`,color:'#ff6577'}],series:[{label:'채널 생성',color:'#42d3ff',value:item=>item.timing_ms?.channel_generation},{label:'Control ACK',color:'#53e58b',value:item=>item.timing_ms?.control_transaction},{label:'전체 update',color:'#ff9f43',value:item=>item.timing_ms?.total_update}],emptyText:'Sionna iteration 측정 대기 중'});
       drawResourceChart('applicationCpuChart',usage,{minMax:1,step:1,axis:value=>`${fmt(value,1)}c`,series:[{label:'Sionna RT',color:'#42d3ff',value:item=>cpuCores(item.roles?.sionna?.cpu_util_percent)},{label:'GPU Channel',color:'#ff9f43',value:item=>cpuCores(item.roles?.gpu_channel?.cpu_util_percent)},{label:'Web UI',color:'#53e58b',value:item=>cpuCores(item.roles?.web_ui?.cpu_util_percent)},{label:'기타/OS',color:'#b7a0ff',value:item=>item.system?.other_os_cpu_cores}]});
       drawResourceChart('memoryChart',usage,{minMax:1024,step:1024,axis:value=>value>=1024?`${fmt(value/1024,1)}G`:`${Math.round(value)}M`,series:[{label:'Sionna VRAM',color:'#42d3ff',value:item=>item.roles?.sionna?.gpu_memory_mib},{label:'Channel VRAM',color:'#ff9f43',value:item=>item.roles?.gpu_channel?.gpu_memory_mib},{label:'Sionna RSS',color:'#53e58b',value:item=>item.roles?.sionna?.ram_rss_mib},{label:'Channel RSS',color:'#ff6577',value:item=>item.roles?.gpu_channel?.ram_rss_mib},{label:'Web UI RSS',color:'#b7a0ff',value:item=>item.roles?.web_ui?.ram_rss_mib}]});
       drawResourceChart('pcieChart',usage,{minMax:250,step:250,axis:value=>value>=1000?`${fmt(value/1000,1)}G`:`${Math.round(value)}M`,series:[{label:'H2D',color:'#42d3ff',value:item=>item.pcie?.h2d_mb_s},{label:'D2H',color:'#ff9f43',value:item=>item.pcie?.d2h_mb_s}]});
+      drawResourceChart('channelPowerChart',eventSource,{timeKey:'observed_unix_ms',allowNegative:true,step:5,axis:value=>`${fmt(value,0)}dB`,showEvents:false,maxGapMs:1200,series:linkIds.map((linkId,index)=>({label:linkId.replace(':sionna_rt',''),color:palette[index%palette.length],value:item=>(item.channels||[]).find(channel=>channel.link_id===linkId)?.total_path_power_db})),emptyText:'Sionna channel power 대기 중'});
     }
 
-    function renderRuntime(runtime, usage, telemetry, delivery) {
+    function renderRuntime(runtime, usage, telemetry, delivery, history, sionna) {
       const deliveryWarmup=(delivery?.links||[]).filter(item=>item.warming_up),warming=deliveryWarmup.length?deliveryWarmup:activeWarmupLinks(telemetry),warmupUntil=warming.reduce((value,item)=>Math.max(value,Number(item.warmup_until_slot)||0),0);
       const system=usage?.system||{},gpus=usage?.hardware?.gpus||[],gpuUsed=gpus.length?gpus.reduce((sum,gpu)=>sum+(Number(gpu.memory_used_mib)||0),0):null,gpuTotal=gpus.length?gpus.reduce((sum,gpu)=>sum+(Number(gpu.memory_total_mib)||0),0):null,pcie=usage?.pcie||{};
-      $('combinedGpuCard').innerHTML=`${renderHardware(usage)}<div class="system-metrics"><div class="gpu-metric"><b>${fmt(system.cpu_util_percent,0)}%</b><span>Host CPU</span></div><div class="gpu-metric"><b>${fmtMib(system.used_mib)} / ${fmtMib(system.total_mib)}</b><span>Host RAM</span></div><div class="gpu-metric"><b>${fmtMib(gpuUsed)} / ${fmtMib(gpuTotal)}</b><span>GPU VRAM</span></div><div class="gpu-metric"><b>${fmtRate(pcie.h2d_mb_s)}</b><span>PCIe H2D</span></div><div class="gpu-metric"><b>${fmtRate(pcie.d2h_mb_s)}</b><span>PCIe D2H</span></div></div><div class="gpu-processes">${renderGpuProcess('sionna','Sionna RT',usage)}${renderGpuProcess('gpu_channel','GPU Channel',usage)}</div><div class="warmup-banner ${warming.length?'':'ok'}">${warming.length?`⚠ ${warming.length}개 링크 warm-up 중 · slot ${warmupUntil} 전 출력은 사용 불가`:'현재 warm-up 링크 없음 · 백엔드 출력 사용 가능'}</div><div class="resource-charts"><div class="resource-chart-card"><strong>GPU Compute (%)</strong><canvas id="gpuComputeChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>Application CPU (논리 코어)</strong><canvas id="applicationCpuChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>프로세스 메모리 (MiB)</strong><canvas id="memoryChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>PCIe 전송량 (MB/s)</strong><canvas id="pcieChart" class="resource-history"></canvas></div></div>`;
-      drawResourceHistory(usage);
+      $('combinedGpuCard').innerHTML=`${renderHardware(usage)}<div class="system-metrics"><div class="gpu-metric"><b>${fmt(system.cpu_util_percent,0)}%</b><span>Host CPU</span></div><div class="gpu-metric"><b>${fmtMib(system.used_mib)} / ${fmtMib(system.total_mib)}</b><span>Host RAM</span></div><div class="gpu-metric"><b>${fmtMib(gpuUsed)} / ${fmtMib(gpuTotal)}</b><span>GPU VRAM</span></div><div class="gpu-metric"><b>${fmtRate(pcie.h2d_mb_s)}</b><span>PCIe H2D</span></div><div class="gpu-metric"><b>${fmtRate(pcie.d2h_mb_s)}</b><span>PCIe D2H</span></div></div><div class="gpu-processes">${renderGpuProcess('sionna','Sionna RT',usage)}${renderGpuProcess('gpu_channel','GPU Channel',usage)}</div><div class="warmup-banner ${warming.length?'':'ok'}">${warming.length?`⚠ ${warming.length}개 링크 warm-up 중 · slot ${warmupUntil} 전 출력은 사용 불가`:'현재 warm-up 링크 없음 · 백엔드 출력 사용 가능'}</div><div class="resource-charts"><div class="resource-chart-card"><strong>IQ slot 처리시간 (µs) · 1 ms 기준</strong><canvas id="slotLatencyChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>Sionna update latency (ms)</strong><canvas id="sionnaLatencyChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>Application CPU (논리 코어)</strong><canvas id="applicationCpuChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>프로세스 메모리 (MiB)</strong><canvas id="memoryChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>PCIe 전송량 (MB/s)</strong><canvas id="pcieChart" class="resource-history"></canvas></div></div>`;
+      drawResourceHistory(usage,history,runtime,sionna);
       const phaseLabels={initializing_scene:'scene/solver 초기화 중',ready:'반복 update 시작 준비',waiting_for_next_update:'다음 update 대기 중',tracing_channels:'Sionna RT 채널 계산 중',sending_control:'profile batch 전송 및 ACK 대기',stopped:'실행 종료',failed:'오류로 종료'};
       const alive=runtime?.process_alive===true,phase=phaseLabels[runtime?.phase]||runtime?.phase||'runtime 대기 중';
       $('runtimeTitle').textContent=alive?`단일 Sionna 프로세스 실행 중 · ${phase}`:phase;
@@ -249,7 +260,7 @@
       if(runtime){const duration=Number(runtime.configured_duration_seconds)===0?'SIGINT까지 계속 실행':`${fmt(runtime.configured_duration_seconds,0)}초 후 종료`,limit=Number(runtime.configured_iteration_limit)===0?'iteration 제한 없음':`${runtime.configured_iteration_limit}회 제한`;$('runtimeConfig').textContent=`Scene/solver는 프로세스 시작 시 한 번만 초기화 · 매 iteration ${runtime.link_count??'—'}개 링크 재계산 ${fmt(runtime.target_update_hz,2)} Hz · ${duration} · ${limit}`}
       else $('runtimeConfig').textContent='—';
       const sampling=usage?.sampling,samplingText=sampling?`${sampling.backend} · ${sampling.target_interval_ms}ms 표본 · 하드웨어 ${sampling.hardware_interval_ms}ms 갱신`:'표본 주기 확인 대기';
-      $('gpuMonitorNote').textContent=usage?.error?`리소스 모니터 오류: ${usage.error}`:usage?.warning?`일부 하드웨어 지표 경고: ${usage.warning} · ${samplingText}`:`${samplingText} · GPU는 프로세스별 SM과 사용 장치 전체값, CPU는 애플리케이션별 논리 코어 수입니다. 기타 GPU와 기타/OS는 전체값에서 추적 항목을 제외한 근사값입니다.`;
+      $('gpuMonitorNote').textContent=usage?.error?`리소스 모니터 오류: ${usage.error}`:usage?.warning?`일부 하드웨어 지표 경고: ${usage.warning} · ${samplingText}`:`${samplingText} · SM은 NVML 샘플링 구간 평균이므로 상태 카드에만 표시합니다. IQ slot과 Sionna latency 그래프는 각 처리 호출과 iteration의 실측 wall time입니다.`;
     }
 
     function drawScene(sionna) {
@@ -302,7 +313,7 @@
     }
 
     function render(data) {
-      lastStatus=data; const feeds=data.feeds||{}, s=data.sionna, telemetry=data.telemetry||{}, delivery=data.delivery||{}, timing=s?.timing_ms||{}, env=s?.environment||{}, runtime=data.sionna_runtime, gpuUsage=data.gpu_usage;
+      lastStatus=data; const feeds=data.feeds||{}, s=data.sionna, telemetry=data.telemetry||{}, delivery=data.delivery||{}, timing=s?.timing_ms||{}, env=s?.environment||{}, runtime=data.sionna_runtime, gpuUsage=data.gpu_usage, history=data.history||{};
       const sionnaAlive=runtime?.process_alive===true;
       const expectedLinks=delivery.expected_links||env.link_count||10;
       setPill($('sionnaPill'),runtime?sionnaAlive:feeds.sionna_connected,runtime?(sionnaAlive?`Sionna PID ${runtime.process_id}`:'Sionna 종료'):(feeds.sionna_connected?`Sionna ${fmt(feeds.sionna_age_seconds)}s`:'Sionna 대기'));
@@ -326,11 +337,11 @@
       $('envNodes').textContent=env.nodes?Object.entries(env.nodes).map(([id,node])=>`${id} v=(${node.velocity_mps.map(v=>fmt(v,2)).join(',')}) m/s`).join(' · '):'—'; $('envTarget').textContent=env.dry_run?'dry-run (전송 없음)':`${env.control_endpoint||'—'} · ${backend}`;
       renderDeadlineCards(telemetry);
       renderEdgeCards(s?.channels);
-      renderRuntime(runtime,gpuUsage,telemetry,delivery);
+      renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
       drawScene(s);
     }
     async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);render(await r.json())}catch(e){setPill($('telemetryPill'),false,'UI feed error')}}
-    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);drawResourceHistory(lastStatus?.gpu_usage)}); poll(); setInterval(poll,500);
+    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);drawResourceHistory(lastStatus?.gpu_usage,lastStatus?.history,lastStatus?.sionna_runtime,lastStatus?.sionna)}); poll(); setInterval(poll,500);
   </script>
 </body>
 </html>
