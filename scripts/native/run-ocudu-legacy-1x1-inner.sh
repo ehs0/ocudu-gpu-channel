@@ -17,6 +17,16 @@ config_dir=""
 log_dir=""
 report_dir=""
 timestamp=""
+channel_mode="legacy"
+run_duration_seconds="15"
+control_endpoint=""
+telemetry_endpoint=""
+sionna_python=""
+sionna_bridge=""
+sionna_status_jsonl=""
+sionna_update_hz="2"
+sionna_ready_seconds="120"
+live_ready_path=""
 
 usage_error()
 {
@@ -42,11 +52,24 @@ while [[ "$#" -gt 0 ]]; do
     --log-dir) log_dir="${2:-}"; shift 2 ;;
     --report-dir) report_dir="${2:-}"; shift 2 ;;
     --timestamp) timestamp="${2:-}"; shift 2 ;;
+    --channel-mode) channel_mode="${2:-}"; shift 2 ;;
+    --run-duration-seconds) run_duration_seconds="${2:-}"; shift 2 ;;
+    --control-endpoint) control_endpoint="${2:-}"; shift 2 ;;
+    --telemetry-endpoint) telemetry_endpoint="${2:-}"; shift 2 ;;
+    --sionna-python) sionna_python="${2:-}"; shift 2 ;;
+    --sionna-bridge) sionna_bridge="${2:-}"; shift 2 ;;
+    --sionna-status-jsonl) sionna_status_jsonl="${2:-}"; shift 2 ;;
+    --sionna-update-hz) sionna_update_hz="${2:-}"; shift 2 ;;
+    --sionna-ready-seconds) sionna_ready_seconds="${2:-}"; shift 2 ;;
+    --live-ready-path) live_ready_path="${2:-}"; shift 2 ;;
     *) usage_error "unknown argument: $1" ;;
   esac
 done
 
 [[ "${mode}" == "probe" || "${mode}" == "run" ]] || usage_error "--mode must be probe or run"
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
+  usage_error "--channel-mode must be legacy or sionna"
+[[ "${run_duration_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid run duration"
 [[ "${outer_uid}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid --outer-uid"
 [[ "${physical_gpu}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid --physical-gpu"
 [[ "${netns_dir}" == /* && -d "${netns_dir}" && ! -L "${netns_dir}" ]] || usage_error "invalid --netns-dir"
@@ -63,6 +86,16 @@ for command_name in ip mount umount nsenter timeout; do
   command -v "${command_name}" >/dev/null 2>&1 || usage_error "missing command: ${command_name}"
 done
 [[ -x /usr/bin/python3 ]] || usage_error "missing /usr/bin/python3"
+if [[ "${mode}" == "run" && "${channel_mode}" == "sionna" ]]; then
+  [[ -x "${sionna_python}" ]] || usage_error "Sionna Python is missing"
+  [[ -f "${sionna_bridge}" && ! -L "${sionna_bridge}" ]] || usage_error "Sionna bridge is missing"
+  [[ "${sionna_status_jsonl}" == /* && "${live_ready_path}" == /* ]] || \
+    usage_error "Sionna artifact paths must be absolute"
+  [[ "${control_endpoint}" == ipc://* && "${telemetry_endpoint}" == ipc://* ]] || \
+    usage_error "rootless Sionna control and telemetry must use ipc:// endpoints"
+  [[ "${sionna_update_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || usage_error "invalid Sionna update rate"
+  [[ "${sionna_ready_seconds}" =~ ^[1-9][0-9]*$ ]] || usage_error "invalid Sionna ready timeout"
+fi
 
 mount_active=0
 root_tun=""
@@ -113,7 +146,7 @@ cleanup()
   local index wanted cleanup_failed=0
   # Stop Broker admission first while both radio requesters are still alive.
   # Then stop the radio peers and finally their core/database dependencies.
-  for wanted in broker srsue gnb open5gs mongod; do
+  for wanted in sionna broker srsue gnb open5gs mongod; do
     for ((index=0; index<${#process_pids[@]}; index++)); do
       if [[ "${process_names[index]}" == "${wanted}" ]]; then
         if stop_group "${index}"; then
@@ -240,21 +273,28 @@ write_summary()
   local gnb_alive="${10}"
   local fivegc_alive="${11}"
   local srsue_alive="${12}"
+  local sionna_updates="${13:-0}"
+  local telemetry_frames="${14:-0}"
+  local control_batches_committed="${15:-0}"
   /usr/bin/python3 - "${report_dir}/attach-summary.json" "${timestamp}" "${status}" \
     "${broker_status}" "${rrc}" "${pdu}" "${ping_ok}" "${rx_starvations}" \
     "${tx_queue_overflows}" "${tx_sequence_gaps}" "${zmq_errors}" \
     "${gnb_alive}" "${fivegc_alive}" "${srsue_alive}" \
+    "${channel_mode}" "${run_duration_seconds}" "${sionna_updates}" \
+    "${telemetry_frames}" "${control_batches_committed}" \
     "${log_dir}" "${report_dir}" <<'PY'
 import json
 import sys
 
 (path, timestamp, status, broker_status, rrc, pdu, ping_ok, rx_starvations,
  tx_queue_overflows, tx_sequence_gaps, zmq_errors, gnb_alive, fivegc_alive,
- srsue_alive, log_dir, report_dir) = sys.argv[1:]
+ srsue_alive, channel_mode, duration_seconds, sionna_updates,
+ telemetry_frames, control_batches_committed, log_dir, report_dir) = sys.argv[1:]
 data = {
     "timestamp": timestamp,
     "status": status,
-    "duration_seconds": 15,
+    "duration_seconds": int(duration_seconds),
+    "channel_mode": channel_mode,
     "srsran_ref": "release_23_11",
     "runtime_mode": "rootless_user_net_mount_namespace",
     "docker_used": False,
@@ -270,6 +310,9 @@ data = {
     "tx_queue_overflows": int(tx_queue_overflows),
     "tx_sequence_gaps": int(tx_sequence_gaps),
     "zmq_errors": int(zmq_errors),
+    "sionna_updates": int(sionna_updates),
+    "telemetry_frames": int(telemetry_frames),
+    "control_batches_committed": int(control_batches_committed),
     "log_dir": log_dir,
     "report_dir": report_dir,
 }
@@ -286,6 +329,40 @@ extract_counter()
   local value
   value="$(sed -n "s/.*${key}=\([0-9][0-9]*\).*/\1/p" <<<"${line}")"
   printf '%s\n' "${value:-0}"
+}
+
+write_live_ready()
+{
+  local rrc="$1"
+  local pdu="$2"
+  local ping_ok="$3"
+  [[ "${channel_mode}" == "sionna" ]] || return 0
+  /usr/bin/python3 - "${live_ready_path}" "${timestamp}" "${rrc}" "${pdu}" \
+    "${ping_ok}" "${sionna_status_jsonl}" "${control_endpoint}" \
+    "${telemetry_endpoint}" <<'PY'
+import json
+import sys
+
+(path, timestamp, rrc, pdu, ping_ok, status_jsonl, control_endpoint,
+ telemetry_endpoint) = sys.argv[1:]
+with open(path, "x", encoding="utf-8") as output:
+    json.dump(
+        {
+            "event": "native_sionna_1x1_live_ready",
+            "timestamp": timestamp,
+            "rrc_connected": int(rrc),
+            "pdu_session_established": int(pdu),
+            "ping_ok": int(ping_ok),
+            "sionna_status_jsonl": status_jsonl,
+            "control_endpoint": control_endpoint,
+            "telemetry_endpoint": telemetry_endpoint,
+        },
+        output,
+        indent=2,
+        sort_keys=True,
+    )
+    output.write("\n")
+PY
 }
 
 run_stack()
@@ -316,8 +393,11 @@ run_stack()
   ip netns add "${nested_name}"
   nsenter --net="/run/netns/${nested_name}" -- ip link set lo up
 
-  local data_dir="${native_root}/data/ocudu-legacy-1x1-native/${timestamp}"
-  local mongod_pid fivegc_pid broker_pid gnb_pid srsue_pid broker_index broker_exit_deadline
+  local run_family="ocudu-legacy-1x1-native"
+  [[ "${channel_mode}" == "sionna" ]] && run_family="ocudu-sionna-1x1-native"
+  local data_dir="${native_root}/data/${run_family}/${timestamp}"
+  local mongod_pid fivegc_pid broker_pid gnb_pid srsue_pid sionna_pid=""
+  local broker_index broker_exit_deadline sionna_index=-1 sionna_failed=0
   start_group mongod "${log_dir}/mongod-console.log" "${mongod}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --port 27017 --logpath "${log_dir}/mongod.log"
   mongod_pid="${started_pid}"
   /usr/bin/python3 - "${mongod_pid}" <<'PY'
@@ -360,14 +440,41 @@ while time.monotonic() < deadline:
         time.sleep(.25)
 raise SystemExit(2)
 PY
-  start_group broker "${log_dir}/broker.log" env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${broker}" --config "${config_dir}/topology.yaml" --duration 15s
+  local broker_args=(
+    "${broker}" --config "${config_dir}/topology.yaml"
+    --duration "${run_duration_seconds}s"
+  )
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    broker_args+=(
+      --control-endpoint "${control_endpoint}"
+      --telemetry-endpoint "${telemetry_endpoint}"
+      --telemetry-rate-hz 20
+    )
+  fi
+  start_group broker "${log_dir}/broker.log" env CUDA_VISIBLE_DEVICES="${physical_gpu}" \
+    "${broker_args[@]}"
   broker_pid="${started_pid}"
   broker_index=$((${#process_pids[@]} - 1))
-  # Absolute bound: the fixed 15-second run plus ten seconds for grouped
-  # drain and orderly worker shutdown, independent of how quickly UE attach
-  # and ping complete.
-  broker_exit_deadline=$((SECONDS + 25))
+  # Bound a finite run while allowing duration=0 to remain live until SIGINT.
+  if [[ "${run_duration_seconds}" -gt 0 ]]; then
+    broker_exit_deadline=$((SECONDS + run_duration_seconds + 10))
+  else
+    broker_exit_deadline=0
+  fi
   wait_log "${log_dir}/broker.log" 'event=socket_ready device=ue0 ' "${broker_pid}" 15 || usage_error "broker did not become ready"
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    wait_log "${log_dir}/broker.log" 'event=control_start ' "${broker_pid}" 15 || \
+      usage_error "broker control server did not become ready"
+    start_group sionna "${log_dir}/sionna-bridge.log" \
+      env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${sionna_python}" "${sionna_bridge}" \
+      --layout 1x1 --control-endpoint "${control_endpoint}" --duration 0 \
+      --update-hz "${sionna_update_hz}" --status-jsonl "${sionna_status_jsonl}"
+    sionna_pid="${started_pid}"
+    sionna_index=$((${#process_pids[@]} - 1))
+    wait_log "${log_dir}/sionna-bridge.log" '"event":"sionna_rt_update"' \
+      "${sionna_pid}" "${sionna_ready_seconds}" || \
+      usage_error "Sionna RT did not publish its first 1x1 profile update"
+  fi
   start_group gnb "${log_dir}/gnb-console.log" "${gnb}" -c "${config_dir}/gnb.yaml"
   gnb_pid="${started_pid}"
   wait_log "${log_dir}/gnb-console.log" '==== gNB started ===' "${gnb_pid}" 15 || usage_error "gNB did not start"
@@ -375,7 +482,9 @@ PY
   start_group srsue "${log_dir}/srsue.log" "${srsue}" "${config_dir}/srsue.conf"
   srsue_pid="${started_pid}"
 
-  local deadline=$((SECONDS + 20))
+  local attach_wait_seconds=20
+  [[ "${channel_mode}" == "sionna" ]] && attach_wait_seconds=40
+  local deadline=$((SECONDS + attach_wait_seconds))
   local rrc=0 pdu=0 ping_ok=0
   while [[ "${SECONDS}" -lt "${deadline}" ]] && process_running "${srsue_pid}"; do
     grep -q 'RRC Connected' "${log_dir}/srsue.log" 2>/dev/null && rrc=1
@@ -388,11 +497,26 @@ PY
       ping_ok=1
     fi
   fi
+  if [[ "${rrc}" -eq 1 && "${pdu}" -eq 1 && "${ping_ok}" -eq 1 ]]; then
+    write_live_ready "${rrc}" "${pdu}" "${ping_ok}"
+  elif [[ "${run_duration_seconds}" -eq 0 ]] && process_running "${broker_pid}"; then
+    # An unbounded live demo must still return a useful failure if attach did
+    # not complete; otherwise the outer launcher would wait forever.
+    stop_group "${broker_index}" || true
+  fi
 
-  while process_running "${broker_pid}" && [[ "${SECONDS}" -lt "${broker_exit_deadline}" ]]; do
+  while process_running "${broker_pid}" && \
+        { [[ "${broker_exit_deadline}" -eq 0 ]] || [[ "${SECONDS}" -lt "${broker_exit_deadline}" ]]; }; do
+    if [[ "${channel_mode}" == "sionna" ]] && ! process_running "${sionna_pid}"; then
+      sionna_failed=1
+      break
+    fi
     sleep 0.1
   done
   local broker_status
+  if [[ "${sionna_failed}" -ne 0 ]] && process_running "${broker_pid}"; then
+    stop_group "${broker_index}" || true
+  fi
   if process_running "${broker_pid}"; then
     printf 'error: broker exceeded its bounded natural-exit window\n' >&2
     stop_group "${broker_index}" || true
@@ -404,16 +528,27 @@ PY
     set -e
   fi
   process_pids[broker_index]="0"
+  if [[ "${sionna_index}" -ge 0 ]]; then
+    stop_group "${sionna_index}" || true
+    process_pids[sionna_index]="0"
+  fi
   local gnb_alive=0 fivegc_alive=0 srsue_alive=0
   process_running "${gnb_pid}" && gnb_alive=1
   process_running "${fivegc_pid}" && fivegc_alive=1
   process_running "${srsue_pid}" && srsue_alive=1
   local stop_line rx_starvations tx_queue_overflows tx_sequence_gaps zmq_errors status
+  local sionna_updates=0 telemetry_frames=0 control_batches_committed=0
   stop_line="$(grep '^event=stop ' "${log_dir}/broker.log" | tail -n 1 || true)"
   rx_starvations="$(extract_counter rx_starvations "${stop_line}")"
   tx_queue_overflows="$(extract_counter tx_queue_overflows "${stop_line}")"
   tx_sequence_gaps="$(extract_counter tx_sequence_gaps "${stop_line}")"
   zmq_errors="$(extract_counter zmq_errors "${stop_line}")"
+  telemetry_frames="$(extract_counter telemetry_frames "${stop_line}")"
+  control_batches_committed="$(extract_counter control_batches_committed "${stop_line}")"
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || \
+      sionna_updates=0
+  fi
   status="passed"
   if [[ "${broker_status}" -ne 0 || "${tx_queue_overflows}" -ne 0 || "${tx_sequence_gaps}" -ne 0 || "${zmq_errors}" -ne 0 ]]; then
     status="broker_failed"
@@ -423,10 +558,15 @@ PY
     status="ue_stack_blocker_no_attach"
   elif [[ "${ping_ok}" -ne 1 ]]; then
     status="ue_stack_blocker_ping_failed"
+  elif [[ "${channel_mode}" == "sionna" && \
+          ( "${sionna_failed}" -ne 0 || "${sionna_updates}" -lt 1 || \
+            "${telemetry_frames}" -lt 1 || "${control_batches_committed}" -lt 1 ) ]]; then
+    status="sionna_observability_failed"
   fi
   write_summary "${status}" "${broker_status}" "${rrc}" "${pdu}" "${ping_ok}" \
     "${rx_starvations}" "${tx_queue_overflows}" "${tx_sequence_gaps}" "${zmq_errors}" \
-    "${gnb_alive}" "${fivegc_alive}" "${srsue_alive}"
+    "${gnb_alive}" "${fivegc_alive}" "${srsue_alive}" \
+    "${sionna_updates}" "${telemetry_frames}" "${control_batches_committed}"
   [[ "${status}" == "passed" ]]
 }
 

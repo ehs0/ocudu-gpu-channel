@@ -113,6 +113,61 @@ The report includes the exact source manifest, binary/configuration SHA-256
 hashes, Broker counters, and attach summary. Any process or namespace created
 by the gate is terminated on normal exit, failure, or Ctrl-C.
 
+## Run gNB–UE with Sionna RT and the Web UI
+
+The Sionna path uses the same Docker-free 1×1 gNB–UE stack. It adds a
+low-rate Sionna RT controller and the read-only Web UI; it does not enable a
+multi-antenna topology. Only one terminal is required:
+
+```bash
+export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+export CUDACXX=/opt/conda/envs/torch/bin/nvcc
+export OCUDU_NATIVE_GPU_DEVICE=0
+
+./scripts/native/run-ocudu-sionna-1x1.sh
+```
+
+The launcher discovers the locally installed OptiX library and uses
+`../venvs/sionna/bin/python` by default. Override the Python executable with
+`OCUDU_NATIVE_SIONNA_PYTHON` when needed. It prints the Web UI URL after the
+HTTP server starts and prints `event=native_sionna_1x1_live_ready` only after
+all of these conditions hold:
+
+1. The OCUDU gNB and srsUE establish RRC and a PDU session.
+2. The UE namespace successfully pings `10.45.1.1` through `tun_srsue`.
+3. Sionna RT atomically updates both directed 1×1 channel profiles.
+4. The Web UI receives both the Sionna JSONL feed and Broker telemetry.
+
+Open <http://127.0.0.1:8080> while the command is running. The default live
+run continues until Ctrl-C. For an automatically terminating evidence run,
+set a duration in seconds before starting it:
+
+```bash
+export OCUDU_NATIVE_SIONNA_DURATION_SECONDS=150
+./scripts/native/run-ocudu-sionna-1x1.sh
+```
+
+Optional settings are `OCUDU_NATIVE_WEB_PORT` (default `8080`),
+`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `2`), and
+`OCUDU_NATIVE_SIONNA_READY_SECONDS` (default `120`). The Web server is
+restricted to loopback. A remote browser can use SSH port forwarding:
+
+```bash
+ssh -L 8080:127.0.0.1:8080 ubuntu@GPU_HOST
+```
+
+Sionna mode stores logs and reports separately from the legacy gate:
+
+```text
+$OCUDU_NATIVE_ROOT/results/logs/ocudu-sionna-1x1/<UTC timestamp>/
+$OCUDU_NATIVE_ROOT/results/reports/ocudu-sionna-1x1/<UTC timestamp>/
+```
+
+The runtime uses Unix-domain ZeroMQ endpoints under the native workspace for
+Sionna control and Web UI telemetry. They cross the disposable mount/network
+namespace through the shared filesystem without exposing a host TCP control
+port or requiring host networking privileges.
+
 ## Common blockers
 
 - `unshare: ... Operation not permitted`: the containing host, VM, LXC, or

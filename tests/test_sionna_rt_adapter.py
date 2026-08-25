@@ -33,8 +33,15 @@ from run_bridge import (  # noqa: E402
     LINKS,
     MODEL_ID,
     Motion,
+    ONE_GNB_ONE_UE_CROSSTALK_LINKS,
+    ONE_GNB_ONE_UE_DOWNLINK_LINKS,
+    ONE_GNB_ONE_UE_LINKS,
+    ONE_GNB_ONE_UE_NODE_IDS,
+    ONE_GNB_ONE_UE_UPLINK_LINKS,
     PEDESTRIAN_SPEED_MPS,
     UPLINK_LINKS,
+    configured_motion,
+    link_layout,
     parse_args,
     prepare_scene_with_simple_road,
     scenario_environment,
@@ -82,6 +89,28 @@ class AdapterTests(unittest.TestCase):
             Motion((1.0, 2.0, 3.0), (0.5, 0.0, 0.0)).position_at(4.0),
             (3.0, 2.0, 3.0),
         )
+
+    def test_one_gnb_one_ue_layout_has_only_bidirectional_serving_links(self) -> None:
+        args = parse_args(["--layout", "1x1"])
+        self.assertEqual(
+            link_layout(args.layout),
+            (
+                ONE_GNB_ONE_UE_NODE_IDS,
+                ONE_GNB_ONE_UE_DOWNLINK_LINKS,
+                ONE_GNB_ONE_UE_UPLINK_LINKS,
+                ONE_GNB_ONE_UE_CROSSTALK_LINKS,
+                ONE_GNB_ONE_UE_LINKS,
+            ),
+        )
+        self.assertEqual(set(configured_motion(args)), {"gnb0", "ue0"})
+        environment = scenario_environment(args)
+        self.assertEqual(environment["layout"], "1x1")
+        self.assertEqual(environment["link_count"], 2)
+        self.assertEqual(
+            environment["link_groups"],
+            {"downlink": 1, "uplink": 1, "ue_crosstalk": 0},
+        )
+        self.assertEqual(set(environment["nodes"]), {"gnb0", "ue0"})
 
     def test_car_and_pedestrian_defaults_follow_bounded_road_routes(self) -> None:
         args = parse_args([])

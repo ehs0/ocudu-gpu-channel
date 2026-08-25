@@ -63,6 +63,13 @@ UPLINK_LINKS = tuple(
 )
 CROSSTALK_LINKS = (("ue0", "ue1"), ("ue1", "ue0"))
 LINKS = DOWNLINK_LINKS + UPLINK_LINKS + CROSSTALK_LINKS
+ONE_GNB_ONE_UE_NODE_IDS = ("gnb0", "ue0")
+ONE_GNB_ONE_UE_DOWNLINK_LINKS = (("gnb0", "ue0"),)
+ONE_GNB_ONE_UE_UPLINK_LINKS = (("ue0", "gnb0"),)
+ONE_GNB_ONE_UE_CROSSTALK_LINKS: tuple[tuple[str, str], ...] = ()
+ONE_GNB_ONE_UE_LINKS = (
+    ONE_GNB_ONE_UE_DOWNLINK_LINKS + ONE_GNB_ONE_UE_UPLINK_LINKS
+)
 
 # The tracked OCUDU example uses NR band 3 with DL NR-ARFCN 368500. Its
 # downlink center is 1842.5 MHz and the paired uplink is 95 MHz lower. Keep
@@ -136,8 +143,30 @@ DEFAULT_MOTION = {
 }
 
 
+def link_layout(
+    layout: str,
+) -> tuple[
+    tuple[str, ...],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+    tuple[tuple[str, str], ...],
+]:
+    if layout == "1x1":
+        return (
+            ONE_GNB_ONE_UE_NODE_IDS,
+            ONE_GNB_ONE_UE_DOWNLINK_LINKS,
+            ONE_GNB_ONE_UE_UPLINK_LINKS,
+            ONE_GNB_ONE_UE_CROSSTALK_LINKS,
+            ONE_GNB_ONE_UE_LINKS,
+        )
+    if layout == "2x2":
+        return NODE_IDS, DOWNLINK_LINKS, UPLINK_LINKS, CROSSTALK_LINKS, LINKS
+    raise ValueError(f"unsupported link layout: {layout}")
+
+
 def configured_motion(args: argparse.Namespace) -> dict[str, Motion]:
-    return {
+    motion = {
         "gnb0": Motion(
             (
                 DEFAULT_MOTION["gnb0"].start[0],
@@ -163,13 +192,19 @@ def configured_motion(args: argparse.Namespace) -> dict[str, Motion]:
             args.ue1_start, args.ue1_velocity, args.ue1_route_x, "pedestrian"
         ),
     }
+    node_ids, *_ = link_layout(args.layout)
+    return {node_id: motion[node_id] for node_id in node_ids}
 
 
 def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
     """Describe the effective Sionna setup in a UI-friendly stable schema."""
 
     motion = configured_motion(args)
+    _, downlink_links, uplink_links, crosstalk_links, links = link_layout(
+        args.layout
+    )
     return {
+        "layout": args.layout,
         "scene": args.scene,
         "simple_road": {
             "enabled": args.simple_road,
@@ -211,11 +246,11 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
             }
             for node_id, item in motion.items()
         },
-        "link_count": len(LINKS),
+        "link_count": len(links),
         "link_groups": {
-            "downlink": len(DOWNLINK_LINKS),
-            "uplink": len(UPLINK_LINKS),
-            "ue_crosstalk": len(CROSSTALK_LINKS),
+            "downlink": len(downlink_links),
+            "uplink": len(uplink_links),
+            "ue_crosstalk": len(crosstalk_links),
         },
         "control_endpoint": None if args.dry_run else args.control_endpoint,
         "dry_run": args.dry_run,
@@ -249,6 +284,12 @@ def parse_range(text: str) -> tuple[float, float]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-endpoint", default="tcp://127.0.0.1:5559")
+    parser.add_argument(
+        "--layout",
+        choices=("2x2", "1x1"),
+        default="2x2",
+        help="emulator graph driven by Sionna RT (default: 2x2)",
+    )
     parser.add_argument("--scene", default="simple_street_canyon")
     parser.add_argument("--duration", type=float, default=30.0,
                         help="wall-clock seconds; 0 runs until interrupted")
@@ -644,6 +685,13 @@ class SionnaScenario:
         )
 
         self.motion = configured_motion(args)
+        (
+            self.node_ids,
+            self.downlink_links,
+            self.uplink_links,
+            self.crosstalk_links,
+            self.links,
+        ) = link_layout(args.layout)
         self.current_velocities = {
             node_id: motion.velocity_at(0.0)
             for node_id, motion in self.motion.items()
@@ -652,7 +700,7 @@ class SionnaScenario:
         # Each emulator node appears once as a Sionna transmitter and once as
         # a receiver. FDD runs one solve per direction so frequency-dependent
         # materials and path coefficients match the configured UL/DL carrier.
-        for node_id in NODE_IDS:
+        for node_id in self.node_ids:
             position = self.motion[node_id].start
             tx = self.rt.Transmitter(name=f"{node_id}_tx", position=position)
             rx = self.rt.Receiver(name=f"{node_id}_rx", position=position)
@@ -770,7 +818,7 @@ class SionnaScenario:
             paths = self.trace(self.args.downlink_frequency_hz)
             one_profiles, one_statuses = self.profiles(
                 paths,
-                LINKS,
+                self.links,
                 direction="bidirectional",
                 carrier_frequency_hz=self.args.downlink_frequency_hz,
             )
@@ -778,10 +826,12 @@ class SionnaScenario:
             return one_profiles, one_statuses, timings_ms
 
         for direction, frequency_hz, links in (
-            ("downlink", self.args.downlink_frequency_hz, DOWNLINK_LINKS),
-            ("uplink", self.args.uplink_frequency_hz, UPLINK_LINKS),
-            ("crosstalk", self.args.uplink_frequency_hz, CROSSTALK_LINKS),
+            ("downlink", self.args.downlink_frequency_hz, self.downlink_links),
+            ("uplink", self.args.uplink_frequency_hz, self.uplink_links),
+            ("crosstalk", self.args.uplink_frequency_hz, self.crosstalk_links),
         ):
+            if not links:
+                continue
             started = time.monotonic()
             paths = self.trace(frequency_hz)
             direction_profiles, direction_statuses = self.profiles(
@@ -806,6 +856,7 @@ def append_status(path: pathlib.Path | None, record: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
+    *_, configured_links = link_layout(args.layout)
     process_id = os.getpid()
     session_id = f"sionna-rt-{process_id}-{time.time_ns()}"
     process_started_unix_ms = time.time_ns() // 1_000_000
@@ -835,7 +886,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "scenario_initialized_once": True,
                 "channel_trace_per_iteration": True,
                 "control_send_per_iteration": not args.dry_run,
-                "link_count": len(LINKS),
+                "link_count": len(configured_links),
                 "target_update_hz": args.update_hz,
                 "configured_duration_seconds": args.duration,
                 "configured_iteration_limit": args.iterations,
@@ -903,7 +954,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 publish_runtime(
                     "sending_control",
                     iteration=iteration,
-                    detail=f"sending the {len(LINKS)}-link profile batch and waiting for ACK",
+                    detail=f"sending the {len(configured_links)}-link profile batch and waiting for ACK",
                 )
                 control_started = time.monotonic()
                 reply = client.send_profiles(profiles, batch_id=batch_id)

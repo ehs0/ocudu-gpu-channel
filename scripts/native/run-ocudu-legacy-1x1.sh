@@ -7,12 +7,26 @@ repo_root="$(cd "${script_dir}/../.." && pwd)"
 source "${script_dir}/env.sh"
 
 native_root="${OCUDU_NATIVE_ROOT}"
-duration_seconds="${OCUDU_NATIVE_LEGACY_DURATION_SECONDS:-15}"
+channel_mode="${OCUDU_NATIVE_CHANNEL_MODE:-legacy}"
+if [[ "${channel_mode}" == "sionna" ]]; then
+  duration_seconds="${OCUDU_NATIVE_SIONNA_DURATION_SECONDS:-0}"
+else
+  duration_seconds="${OCUDU_NATIVE_LEGACY_DURATION_SECONDS:-15}"
+fi
 physical_gpu="${OCUDU_NATIVE_GPU_DEVICE:-0}"
 cuda_compiler="${CUDACXX:-/opt/conda/envs/cuda128/bin/nvcc}"
 inner="${script_dir}/run-ocudu-legacy-1x1-inner.sh"
 renderer="${script_dir}/render-legacy-1x1-configs.py"
 verifier="${script_dir}/verify-legacy-1x1-artifacts.py"
+sionna_python="${OCUDU_NATIVE_SIONNA_PYTHON:-${repo_root}/../venvs/sionna/bin/python}"
+sionna_bridge="${repo_root}/scripts/sionna_rt/run_bridge.py"
+sionna_topology="${repo_root}/examples/topology.sionna-1gnb-1ue.cuda.yaml"
+web_server="${repo_root}/scripts/web_ui/server.py"
+web_index="${repo_root}/scripts/web_ui/index.html"
+sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-2}"
+sionna_ready_seconds="${OCUDU_NATIVE_SIONNA_READY_SECONDS:-120}"
+web_bind="${OCUDU_NATIVE_WEB_BIND:-127.0.0.1}"
+web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
 audited_ocudu="a1916edcdbcd70ba6e0af47ee87be061dad5a4e4"
 audited_srsran="eea87b1d893ae58e0b08bc381730c502024ae71f"
 audited_open5gs="d9d3abdd480be96fac3bc8a997e83446648763ca"
@@ -52,7 +66,18 @@ PY
 }
 
 [[ "$#" -eq 0 ]] || usage_error "usage: $0"
-[[ "${duration_seconds}" == "15" ]] || usage_error "duration is fixed to 15 seconds"
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
+  usage_error "OCUDU_NATIVE_CHANNEL_MODE must be legacy or sionna"
+if [[ "${channel_mode}" == "legacy" ]]; then
+  [[ "${duration_seconds}" == "15" ]] || usage_error "legacy duration is fixed to 15 seconds"
+else
+  [[ "${duration_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid Sionna duration"
+  [[ "${sionna_update_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || usage_error "invalid Sionna update rate"
+  [[ "${sionna_ready_seconds}" =~ ^[1-9][0-9]*$ ]] || usage_error "invalid Sionna ready timeout"
+  [[ "${web_port}" =~ ^[1-9][0-9]*$ && "${web_port}" -le 65535 ]] || usage_error "invalid Web UI port"
+  [[ "${web_bind}" == "127.0.0.1" || "${web_bind}" == "localhost" ]] || \
+    usage_error "rootless native Web UI bind is restricted to loopback"
+fi
 [[ "${physical_gpu}" =~ ^(0|[1-9][0-9]*)$ && "${physical_gpu}" -le 255 ]] || usage_error "invalid GPU device"
 [[ "${native_root}" == /* && "${native_root}" != "/" && "${native_root}" != "/home/ubuntu" ]] || usage_error "invalid native root"
 [[ -x "${cuda_compiler}" ]] || usage_error "missing CUDA compiler: ${cuda_compiler}"
@@ -68,6 +93,23 @@ for path in "${inner}" "${renderer}" "${verifier}" \
   "${repo_root}/examples/topology.ocudu-docker.cuda.yaml"; do
   [[ -e "${path}" ]] || usage_error "missing required path: ${path}"
 done
+if [[ "${channel_mode}" == "sionna" ]]; then
+  for path in "${sionna_python}" "${sionna_bridge}" "${sionna_topology}" \
+    "${web_server}" "${web_index}"; do
+    [[ -e "${path}" ]] || usage_error "missing Sionna/Web UI path: ${path}"
+  done
+  [[ -x "${sionna_python}" ]] || usage_error "Sionna Python is not executable: ${sionna_python}"
+  if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
+    optix_library="$(find "${repo_root}/../local" -type f -name 'libnvoptix.so*' -print -quit 2>/dev/null || true)"
+    [[ -n "${optix_library}" ]] || usage_error "libnvoptix was not found under ${repo_root}/../local"
+    export DRJIT_LIBOPTIX_PATH="${optix_library}"
+  fi
+  optix_dir="$(dirname "${DRJIT_LIBOPTIX_PATH}")"
+  export LD_LIBRARY_PATH="${optix_dir}:${LD_LIBRARY_PATH:-}"
+  CUDA_VISIBLE_DEVICES="${physical_gpu}" "${sionna_python}" -c \
+    'import sionna, zmq; from sionna import rt' >/dev/null 2>&1 || \
+    usage_error "Sionna RT/pyzmq import failed in ${sionna_python}"
+fi
 [[ -c /dev/net/tun ]] || usage_error "/dev/net/tun is absent"
 [[ "$(git -C "${native_root}/src/ocudu" rev-parse HEAD)" == "${audited_ocudu}" ]] || usage_error "OCUDU revision mismatch"
 [[ "$(git -C "${native_root}/src/srsRAN_4G" rev-parse HEAD)" == "${audited_srsran}" ]] || usage_error "srsRAN revision mismatch"
@@ -95,21 +137,34 @@ for binary in \
   rm -f "${ldd_report}"
 done
 exec {lock_fd}<"${BASH_SOURCE[0]}"
-flock -n "${lock_fd}" || usage_error "another native legacy gate is running"
+flock -n "${lock_fd}" || usage_error "another native 1x1 run is active"
 parent_netns="$(readlink /proc/self/ns/net)"
 parent_mntns="$(readlink /proc/self/ns/mnt)"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 results_root="${native_root}/results"
-log_dir="${results_root}/logs/ocudu-interop/${timestamp}"
-report_dir="${results_root}/reports/ocudu-interop/${timestamp}"
-config_dir="${native_root}/configs/ocudu-legacy-1x1-native/${timestamp}"
-data_dir="${native_root}/data/ocudu-legacy-1x1-native/${timestamp}"
-netns_dir="${native_root}/run/ocudu-legacy-1x1-native/${timestamp}/netns"
-for path in "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}"; do
+if [[ "${channel_mode}" == "sionna" ]]; then
+  result_family="ocudu-sionna-1x1"
+  run_family="ocudu-sionna-1x1-native"
+else
+  result_family="ocudu-interop"
+  run_family="ocudu-legacy-1x1-native"
+fi
+log_dir="${results_root}/logs/${result_family}/${timestamp}"
+report_dir="${results_root}/reports/${result_family}/${timestamp}"
+config_dir="${native_root}/configs/${run_family}/${timestamp}"
+data_dir="${native_root}/data/${run_family}/${timestamp}"
+netns_dir="${native_root}/run/${run_family}/${timestamp}/netns"
+ipc_dir="${native_root}/run/s1-${timestamp}"
+for path in "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}" "${ipc_dir}"; do
   [[ ! -e "${path}" && ! -L "${path}" ]] || usage_error "run path already exists: ${path}"
 done
-mkdir -p "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}"
+mkdir -p "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}" "${ipc_dir}"
+control_endpoint="ipc://${ipc_dir}/control.sock"
+telemetry_endpoint="ipc://${ipc_dir}/telemetry.sock"
+sionna_status_jsonl="${log_dir}/sionna-status.jsonl"
+live_ready_path="${report_dir}/live-ready.json"
+web_status_path="${report_dir}/web-ui-status.json"
 
 source_manifest="${report_dir}/channel-source-manifest.tsv"
 source_manifest_after="${report_dir}/channel-source-manifest.after-build.tsv"
@@ -121,6 +176,10 @@ channel_diff_sha256="$(git -C "${repo_root}" diff --binary -- . | sha256sum | aw
 
 "/usr/bin/python3" "${renderer}" --repo-root "${repo_root}" --native-root "${native_root}" \
   --output-dir "${config_dir}" --log-dir "${log_dir}" >"${log_dir}/render.log" 2>&1
+if [[ "${channel_mode}" == "sionna" ]]; then
+  cp "${sionna_topology}" "${config_dir}/topology.yaml.sionna"
+  mv "${config_dir}/topology.yaml.sionna" "${config_dir}/topology.yaml"
+fi
 "${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb" -c "${config_dir}/gnb.yaml" --dryrun \
   >"${log_dir}/gnb-dryrun.log" 2>&1
 
@@ -146,7 +205,7 @@ grep -Eq 'OCUDU 5G gNB version .*\(a1916ed\)' "${report_dir}/gnb-version.txt" ||
 "/usr/bin/python3" - "${source_evidence}" "${native_root}" "${channel_build}" \
   "${source_manifest}" "${preserved_configs}" "${channel_head}" \
   "${channel_diff_sha256}" "${audited_ocudu}" "${audited_srsran}" \
-  "${audited_open5gs}" <<'PY'
+  "${audited_open5gs}" "${channel_mode}" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -154,7 +213,7 @@ import sys
 
 (output_path, native_root, channel_build, manifest_path, config_root,
  channel_head, channel_diff_sha256, ocudu_commit, srsran_commit,
- open5gs_commit) = sys.argv[1:]
+ open5gs_commit, channel_mode) = sys.argv[1:]
 
 def digest(path):
     value = hashlib.sha256()
@@ -178,7 +237,7 @@ config_paths = {
     for name in ("gnb.yaml", "topology.yaml", "open5gs.yaml", "srsue.conf", "subscriber.csv")
 }
 data = {
-    "schema": "ocudu-native-legacy-1x1-source-evidence/v1",
+    "schema": f"ocudu-native-{channel_mode}-1x1-source-evidence/v1",
     "docker_used": False,
     "channel_head": channel_head,
     "channel_tracked_diff_sha256": channel_diff_sha256,
@@ -198,6 +257,8 @@ data = {
         "strict_realtime": False,
     },
 }
+if channel_mode == "sionna":
+    data["claim_boundary"]["sionna_rt"] = True
 with open(output_path, "x", encoding="utf-8") as output:
     json.dump(data, output, indent=2, sort_keys=True)
     output.write("\n")
@@ -219,23 +280,196 @@ if ! unshare --user --map-root-user --net --mount --fork --kill-child --propagat
 fi
 rmdir "${postbuild_probe}/run-netns" "${postbuild_probe}"
 
-set +e
-unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
-  "${inner}" --mode run --parent-netns "${parent_netns}" --parent-mntns "${parent_mntns}" \
-  --outer-uid "$(id -u)" --netns-dir "${netns_dir}" --physical-gpu "${physical_gpu}" \
-  --hardware-probe "${channel_build}/test_hardware_probe" \
-  --probe-broker "${channel_build}/ocudu-gpu-channel" \
-  --broker "${channel_build}/ocudu-gpu-channel" \
-  --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml" --native-root "${native_root}" \
-  --repo-root "${repo_root}" --config-dir "${config_dir}" --log-dir "${log_dir}" \
+summary_path="${report_dir}/attach-summary.json"
+common_inner_args=(
+  "${inner}" --mode run --parent-netns "${parent_netns}" --parent-mntns "${parent_mntns}"
+  --outer-uid "$(id -u)" --netns-dir "${netns_dir}" --physical-gpu "${physical_gpu}"
+  --hardware-probe "${channel_build}/test_hardware_probe"
+  --probe-broker "${channel_build}/ocudu-gpu-channel"
+  --broker "${channel_build}/ocudu-gpu-channel"
+  --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml"
+  --native-root "${native_root}" --repo-root "${repo_root}"
+  --config-dir "${config_dir}" --log-dir "${log_dir}"
   --report-dir "${report_dir}" --timestamp "${timestamp}"
+  --channel-mode "${channel_mode}" --run-duration-seconds "${duration_seconds}"
+)
+
+if [[ "${channel_mode}" == "legacy" ]]; then
+  set +e
+  unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
+    "${common_inner_args[@]}"
+  run_status="$?"
+  set -e
+  if [[ "${run_status}" -ne 0 ]]; then
+    printf 'event=native_legacy_1x1_attach_gate result=fail child_status=%s summary="%s"\n' \
+      "${run_status}" "${summary_path}" >&2
+    exit "${run_status}"
+  fi
+  "/usr/bin/python3" "${verifier}" --results-root "${results_root}" --summary "${summary_path}"
+  printf 'summary=%s\n' "${summary_path}"
+  exit 0
+fi
+
+runtime_pid=""
+web_pid=""
+process_running()
+{
+  local pid="$1"
+  local state
+  state="$(ps -o stat= -p "${pid}" 2>/dev/null | awk '{print $1}')"
+  [[ -n "${state}" && "${state:0:1}" != "Z" ]]
+}
+
+stop_pid()
+{
+  local pid="$1"
+  local signal deadline
+  [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || return 0
+  process_running "${pid}" || return 0
+  for signal in TERM KILL; do
+    kill -s "${signal}" "${pid}" >/dev/null 2>&1 || true
+    deadline=$((SECONDS + 5))
+    while process_running "${pid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+      sleep 0.1
+    done
+    process_running "${pid}" || break
+  done
+  wait "${pid}" >/dev/null 2>&1 || true
+}
+
+cleanup_live_run()
+{
+  local original_status="$?"
+  set +e
+  trap - EXIT INT TERM HUP
+  stop_pid "${web_pid}"
+  stop_pid "${runtime_pid}"
+  exit "${original_status}"
+}
+trap cleanup_live_run EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
+  "${common_inner_args[@]}" \
+  --control-endpoint "${control_endpoint}" --telemetry-endpoint "${telemetry_endpoint}" \
+  --sionna-python "${sionna_python}" --sionna-bridge "${sionna_bridge}" \
+  --sionna-status-jsonl "${sionna_status_jsonl}" --sionna-update-hz "${sionna_update_hz}" \
+  --sionna-ready-seconds "${sionna_ready_seconds}" --live-ready-path "${live_ready_path}" \
+  >"${log_dir}/native-runtime-console.log" 2>&1 &
+runtime_pid="$!"
+
+"${sionna_python}" "${web_server}" --bind "${web_bind}" --port "${web_port}" \
+  --telemetry-endpoint "${telemetry_endpoint}" --status-jsonl "${sionna_status_jsonl}" \
+  --index "${web_index}" >"${log_dir}/web-ui.log" 2>&1 &
+web_pid="$!"
+web_url="http://${web_bind}:${web_port}"
+
+health_deadline=$((SECONDS + 20))
+while [[ "${SECONDS}" -lt "${health_deadline}" ]]; do
+  if ! process_running "${web_pid}"; then
+    usage_error "Web UI exited; see ${log_dir}/web-ui.log"
+  fi
+  if /usr/bin/python3 - "${web_url}/healthz" <<'PY' >/dev/null 2>&1
+import sys
+import urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    raise SystemExit(0 if response.status == 200 else 1)
+PY
+  then
+    break
+  fi
+  sleep 0.25
+done
+[[ "${SECONDS}" -lt "${health_deadline}" ]] || usage_error "Web UI health check timed out"
+printf 'event=native_sionna_1x1_start web_ui="%s" runtime_pid=%s web_pid=%s\n' \
+  "${web_url}" "${runtime_pid}" "${web_pid}"
+
+ready_deadline=$((SECONDS + sionna_ready_seconds + 60))
+feeds_ready=0
+while [[ "${SECONDS}" -lt "${ready_deadline}" ]]; do
+  if ! process_running "${runtime_pid}"; then
+    break
+  fi
+  if [[ -f "${live_ready_path}" ]] && \
+    /usr/bin/python3 - "${web_url}/api/status" "${web_status_path}" <<'PY' >/dev/null 2>&1
+import json
+import pathlib
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
+    data = json.load(response)
+feeds = data.get("feeds", {})
+if not (feeds.get("telemetry_connected") and feeds.get("sionna_connected")):
+    raise SystemExit(1)
+path = pathlib.Path(sys.argv[2])
+with path.open("x", encoding="utf-8") as output:
+    json.dump(data, output, indent=2, sort_keys=True)
+    output.write("\n")
+PY
+  then
+    feeds_ready=1
+    break
+  fi
+  sleep 0.25
+done
+if [[ "${feeds_ready}" -ne 1 ]]; then
+  printf 'error: live attach/Sionna/Web UI readiness failed; logs=%s\n' "${log_dir}" >&2
+  exit 1
+fi
+printf 'event=native_sionna_1x1_live_ready web_ui="%s" marker="%s"\n' \
+  "${web_url}" "${live_ready_path}"
+printf 'Web UI: %s\n' "${web_url}"
+if [[ "${duration_seconds}" -eq 0 ]]; then
+  printf 'The live demo keeps running until Ctrl-C.\n'
+fi
+
+set +e
+wait "${runtime_pid}"
 run_status="$?"
 set -e
-summary_path="${report_dir}/attach-summary.json"
+runtime_pid=""
+stop_pid "${web_pid}"
+web_pid=""
 if [[ "${run_status}" -ne 0 ]]; then
-  printf 'event=native_legacy_1x1_attach_gate result=fail child_status=%s summary="%s"\n' \
+  printf 'event=native_sionna_1x1_attach_gate result=fail child_status=%s summary="%s"\n' \
     "${run_status}" "${summary_path}" >&2
   exit "${run_status}"
 fi
-"/usr/bin/python3" "${verifier}" --results-root "${results_root}" --summary "${summary_path}"
+
+"/usr/bin/python3" - "${summary_path}" "${live_ready_path}" "${web_status_path}" <<'PY'
+import json
+import pathlib
+import sys
+
+summary_path, live_path, web_path = map(pathlib.Path, sys.argv[1:])
+with summary_path.open(encoding="utf-8") as source:
+    summary = json.load(source)
+with live_path.open(encoding="utf-8") as source:
+    live = json.load(source)
+with web_path.open(encoding="utf-8") as source:
+    web = json.load(source)
+required = {
+    "status": "passed",
+    "channel_mode": "sionna",
+    "docker_used": False,
+    "rrc_connected": 1,
+    "pdu_session_established": 1,
+    "ping_ok": 1,
+}
+for key, expected in required.items():
+    if summary.get(key) != expected:
+        raise SystemExit(f"invalid Sionna summary {key}: {summary.get(key)!r}")
+for key in ("sionna_updates", "telemetry_frames", "control_batches_committed"):
+    if not isinstance(summary.get(key), int) or summary[key] < 1:
+        raise SystemExit(f"missing Sionna evidence counter: {key}")
+if live.get("event") != "native_sionna_1x1_live_ready":
+    raise SystemExit("live readiness marker is invalid")
+feeds = web.get("feeds", {})
+if not (feeds.get("telemetry_connected") and feeds.get("sionna_connected")):
+    raise SystemExit("Web UI did not receive both live feeds")
+print("event=native_sionna_1x1_attach_gate result=pass")
+PY
 printf 'summary=%s\n' "${summary_path}"
