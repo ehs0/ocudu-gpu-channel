@@ -64,6 +64,21 @@ check_binary gnb "${OCUDU_NATIVE_ROOT}/builds/ocudu-zmq-release/apps/gnb/gnb"
 check_binary srsue "${OCUDU_NATIVE_ROOT}/builds/srsran4g-zmq-release/srsue/src/srsue"
 check_binary open5gs5gc "${OCUDU_NATIVE_ROOT}/builds/open5gs-v2.7.6/tests/app/5gc"
 check_binary mongod "${OCUDU_NATIVE_ROOT}/install/mongodb-6.0.29/bin/mongod"
+for nf in nrf scp upf smf amf ausf udm pcf nssf bsf udr; do
+  check_binary "open5gs_${nf}" \
+    "${OCUDU_NATIVE_ROOT}/builds/open5gs-v2.7.6/src/${nf}/open5gs-${nf}d"
+done
+open5gs_extension_root="${OCUDU_NATIVE_ROOT}/builds/open5gs-v2.7.6/subprojects/freeDiameter/extensions"
+for extension in \
+  dbg_msg_dumps.fdx dict_rfc5777.fdx dict_mip6i.fdx dict_nasreq.fdx \
+  dict_nas_mipv6.fdx dict_dcca.fdx dict_dcca_3gpp/dict_dcca_3gpp.fdx; do
+  [[ -f "${open5gs_extension_root}/${extension}" && \
+     ! -L "${open5gs_extension_root}/${extension}" ]] || {
+    echo "missing Open5GS freeDiameter module: ${open5gs_extension_root}/${extension}" >&2
+    exit 1
+  }
+done
+echo "open5gs_freeDiameter_modules=ok"
 
 "${OCUDU_NATIVE_ROOT}/builds/ocudu-zmq-release/apps/gnb/gnb" --version
 "${OCUDU_NATIVE_ROOT}/builds/srsran4g-zmq-release/srsue/src/srsue" --version

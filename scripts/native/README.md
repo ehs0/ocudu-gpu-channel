@@ -35,13 +35,23 @@ test -c /dev/net/tun
 
 ## Required native workspace
 
-Set `OCUDU_NATIVE_ROOT` to a pre-provisioned workspace containing the pinned
-OCUDU gNB, srsUE, Open5GS, MongoDB, and user-space runtime libraries described
-by `native-workspace.lock.json`. The default is
+Set `OCUDU_NATIVE_ROOT` to the dedicated workspace containing the pinned OCUDU
+gNB, srsUE, Open5GS, MongoDB, and user-space runtime libraries described by
+`native-workspace.lock.json`. The default is
 `/home/ubuntu/ocudu-native-workspace`.
 
-The committed bootstrap command is currently verification-only; it does not
-download or build a missing workspace:
+Provision it without sudo or Docker from the repository root:
+
+```bash
+export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+./scripts/native/bootstrap-workspace.sh \
+  --root "$OCUDU_NATIVE_ROOT" --jobs "$(nproc)"
+```
+
+The bootstrap downloads hash-locked inputs, extracts the user-space dependency
+overlay, checks out the exact audited revisions, and builds every binary and
+Open5GS module used by the live gate. To validate an existing workspace without
+downloading or rebuilding it:
 
 ```bash
 export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
@@ -67,7 +77,8 @@ From the repository root:
 
 ```bash
 export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
-export CUDACXX=/opt/conda/envs/cuda128/bin/nvcc
+# This host's installed CUDA compiler. Override it if CUDA is elsewhere.
+export CUDACXX=/opt/conda/envs/torch/bin/nvcc
 export OCUDU_NATIVE_GPU_DEVICE=0
 
 ./scripts/native/run-ocudu-legacy-1x1.sh

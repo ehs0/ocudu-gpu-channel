@@ -141,7 +141,7 @@ cp "${config_dir}/gnb.yaml" "${config_dir}/topology.yaml" \
   "${config_dir}/subscriber.csv" "${preserved_configs}/"
 "${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb" --version \
   >"${report_dir}/gnb-version.txt" 2>&1
-grep -Eq 'OCUDU 5G gNB version .*\(a1916edcd\)' "${report_dir}/gnb-version.txt" || \
+grep -Eq 'OCUDU 5G gNB version .*\(a1916ed\)' "${report_dir}/gnb-version.txt" || \
   usage_error "native gNB binary does not identify the audited revision"
 "/usr/bin/python3" - "${source_evidence}" "${native_root}" "${channel_build}" \
   "${source_manifest}" "${preserved_configs}" "${channel_head}" \
