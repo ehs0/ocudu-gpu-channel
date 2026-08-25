@@ -595,6 +595,11 @@ int main()
       s.sample_rate_hz     = 23040000;
       s.slot_deadline_us   = 1000.0;
       s.channel_process_us = 125.0;
+      s.slot_process_count = 1000;
+      s.slot_deadline_miss_count = 2;
+      s.slot_process_max_us = 1450.0;
+      s.slot_process_p95_us = 180.0;
+      s.slot_process_p99_us = 240.0;
       ocg::publish_telemetry_snapshot(*t_b, s);
     }
 
@@ -669,6 +674,18 @@ int main()
                 "slot timing reports deadline utilization");
         require(frame.find("\"deadline_met\":true") != std::string::npos,
                 "slot timing reports deadline verdict");
+        require(frame.find("\"processed_slots\":1000") != std::string::npos,
+                "slot timing reports cumulative processed slots");
+        require(frame.find("\"deadline_misses\":2") != std::string::npos,
+                "slot timing reports cumulative deadline misses");
+        require(frame.find("\"deadline_miss_percent\":0.2") != std::string::npos,
+                "slot timing reports cumulative deadline miss rate");
+        require(frame.find("\"max_elapsed_us\":1450") != std::string::npos,
+                "slot timing reports cumulative maximum");
+        require(frame.find("\"p95_elapsed_us\":180") != std::string::npos,
+                "slot timing reports cumulative p95");
+        require(frame.find("\"p99_elapsed_us\":240") != std::string::npos,
+                "slot timing reports cumulative p99");
       } else if (frame.rfind("link-A ", 0) == 0) {
         got_a = true;
       }

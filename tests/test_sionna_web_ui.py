@@ -66,6 +66,14 @@ class WebUiTests(unittest.TestCase):
                     "deadline_us": 1000.0,
                     "elapsed_us": 750.0,
                     "deadline_met": True,
+                    "cumulative": {
+                        "processed_slots": 1234,
+                        "deadline_misses": 3,
+                        "deadline_miss_percent": 0.243,
+                        "max_elapsed_us": 1400.0,
+                        "p95_elapsed_us": 800.0,
+                        "p99_elapsed_us": 950.0,
+                    },
                 },
             },
         )
@@ -78,6 +86,7 @@ class WebUiTests(unittest.TestCase):
                     "channel_generation": 120.0,
                     "control_transaction": 0.7,
                     "total_update": 121.0,
+                    "directions": {"downlink": 58.0, "uplink": 61.0},
                 },
                 "channels": [
                     {
@@ -109,6 +118,12 @@ class WebUiTests(unittest.TestCase):
                 "elapsed_us"
             ],
             750.0,
+        )
+        self.assertEqual(
+            snapshot["history"]["telemetry"][-1]["slot_processing"][
+                "cumulative"
+            ]["processed_slots"],
+            1234,
         )
         iteration = snapshot["history"]["iterations"][-1]
         self.assertEqual(iteration["timing_ms"]["total_update"], 121.0)
@@ -258,39 +273,79 @@ class WebUiTests(unittest.TestCase):
         index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
             encoding="utf-8"
         )
-        self.assertNotIn("현재 MEM", index)
+        self.assertNotIn("Current MEM", index)
         self.assertNotIn('id="gpuComputeChart"', index)
         self.assertIn('id="slotLatencyChart"', index)
-        self.assertIn('id="sionnaLatencyChart"', index)
+        self.assertIn('id="sionnaIterationChart"', index)
         self.assertIn('id="channelPowerChart"', index)
         self.assertIn('id="applicationCpuChart"', index)
-        self.assertIn('id="memoryChart"', index)
+        self.assertNotIn('id="memoryChart"', index)
         self.assertIn('id="pcieChart"', index)
         self.assertNotIn('id="computeChart"', index)
         self.assertNotIn("GPU Compute (%)", index)
-        self.assertIn("IQ slot 처리시간 (µs) · 1 ms 기준", index)
-        self.assertIn("Sionna update latency (ms)", index)
-        self.assertIn("링크별 total path power (dB)", index)
+        self.assertIn("IQ slot processing time (µs) · 1 ms reference", index)
+        self.assertIn("Sionna iteration time (ms) · stacked by stage", index)
+        self.assertIn("Total path power by link (dB)", index)
         self.assertIn("NVML sampled utilization", index)
         self.assertIn("1 ms deadline", index)
         self.assertIn("update budget", index)
         self.assertIn("slot_processing?.elapsed_us", index)
+        self.assertIn("cumulative.deadline_misses", index)
+        self.assertIn("Cumulative p95", index)
+        self.assertIn("DL ray trace", index)
+        self.assertIn("Broker control ACK", index)
+        self.assertIn("Array.from({length:8}", index)
+        self.assertNotIn("phaseHue(t.phase_rad)", index)
         self.assertIn("total_path_power_db", index)
-        self.assertIn("Application CPU (논리 코어)", index)
-        self.assertNotIn("label:'전체 GPU'", index)
-        self.assertNotIn("label:'기타 GPU'", index)
+        self.assertIn("Application CPU (logical cores)", index)
+        self.assertIn("Real-time memory by process", index)
+        self.assertIn("Sionna RT / Bridge", index)
+        self.assertIn("GPU Channel", index)
+        self.assertIn("Web UI", index)
+        self.assertIn('style="text-align:right">VRAM', index)
+        self.assertIn('style="text-align:right">RSS', index)
+        self.assertIn("Resident Set Size", index)
+        self.assertIn("renderMemorySummary(usage)", index)
+        self.assertIn('id="nodeCards"', index)
+        self.assertIn("function renderNodeCards(sionna)", index)
+        self.assertIn("Position", index)
+        self.assertIn("Antenna", index)
+        self.assertIn("antenna.tx===antenna.rx", index)
+        self.assertIn("ctx.fillText(`${id} · ${kind}`", index)
+        self.assertNotIn('id="envAntenna"', index)
+        self.assertNotIn('id="envNodes"', index)
+        self.assertNotIn("const speedLabel=", index)
+        self.assertNotIn("memory-breakdown", index)
+        self.assertIn("minDelay=Math.max(0,Math.min(...delays))", index)
+        self.assertIn("tapSpan=maxDelay-minDelay", index)
+        self.assertIn("axisPadding=Math.max(.125,tapSpan*.12)", index)
+        self.assertIn("plotMinDelay=Math.max(0,Math.floor", index)
+        self.assertIn("niceStepFraction=", index)
+        self.assertIn("plotMaxDelay-plotMinDelay", index)
+        self.assertIn("${fmt(plotMinDelay,axisDigits)} samples", index)
+        self.assertIn("${fmt(plotMaxDelay,axisDigits)} samples", index)
+        self.assertNotIn(">20 samples</text>", index)
+        self.assertIn(
+            "automatically frames the earliest and latest taps with a small margin",
+            index,
+        )
+        self.assertIn("sampling frequency (sample rate)", index)
+        self.assertIn("nanoseconds", index)
+        self.assertIn("1e9/sampleRateHz", index)
+        self.assertNotIn("label:'Total GPU'", index)
+        self.assertNotIn("label:'Other GPU'", index)
         self.assertIn("label:'Web UI'", index)
-        self.assertIn("label:'기타/OS'", index)
+        self.assertIn("label:'Other / OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
         self.assertIn("windowMs=config.windowMs||5000", index)
         self.assertIn("secondTicks=[5,4,3,2,1,0]", index)
-        self.assertIn("`${secondsAgo}초 전`", index)
+        self.assertIn("`${secondsAgo}s ago`", index)
         self.assertIn("hardware-card.active", index)
         self.assertIn("started_unix_ms", index)
         self.assertIn("warmup_started_unix_ms", index)
         self.assertIn("maxGapMs", index)
         self.assertIn("warmupMarkerWidth=6", index)
-        self.assertIn("W warm-up 강조", index)
+        self.assertIn("■ W warm-up", index)
         self.assertNotIn("ctx.fillRect(x0,top,Math.max(1,x1-x0),plotH)", index)
 
     def test_store_tracks_iteration_boundaries_and_warmup_interval(self) -> None:

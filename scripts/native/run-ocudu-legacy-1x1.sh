@@ -136,8 +136,11 @@ for binary in \
   fi
   rm -f "${ldd_report}"
 done
-exec {lock_fd}<"${BASH_SOURCE[0]}"
-flock -n "${lock_fd}" || usage_error "another native 1x1 run is active"
+# Keep the lock in this supervisor only. A fixed descriptor lets every
+# long-lived child close it explicitly, so an interrupted supervisor cannot
+# leave the native 1x1 lock pinned by an orphaned radio/core process.
+exec 9<"${BASH_SOURCE[0]}"
+flock -n 9 || usage_error "another native 1x1 run is active"
 parent_netns="$(readlink /proc/self/ns/net)"
 parent_mntns="$(readlink /proc/self/ns/mnt)"
 
@@ -268,13 +271,13 @@ PY
 # any live radio/core process is created for the acceptance run.
 postbuild_probe="$(mktemp -d /tmp/ocudu-native-postbuild-probe.XXXXXX)"
 mkdir "${postbuild_probe}/run-netns"
-if ! unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
+if ! unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagation private \
   "${inner}" --mode probe --parent-netns "${parent_netns}" --parent-mntns "${parent_mntns}" \
   --outer-uid "$(id -u)" --netns-dir "${postbuild_probe}/run-netns" \
   --physical-gpu "${physical_gpu}" --hardware-probe "${channel_build}/test_hardware_probe" \
   --probe-broker "${channel_build}/ocudu-gpu-channel" \
   --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml" \
-  >"${log_dir}/postbuild-primitive-probe.log" 2>&1; then
+  >"${log_dir}/postbuild-primitive-probe.log" 2>&1 9<&-; then
   rmdir "${postbuild_probe}/run-netns" "${postbuild_probe}" >/dev/null 2>&1 || true
   usage_error "fresh broker rootless/CUDA primitive probe failed; see ${log_dir}/postbuild-primitive-probe.log"
 fi
@@ -296,8 +299,8 @@ common_inner_args=(
 
 if [[ "${channel_mode}" == "legacy" ]]; then
   set +e
-  unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
-    "${common_inner_args[@]}"
+  unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagation private \
+    "${common_inner_args[@]}" 9<&-
   run_status="$?"
   set -e
   if [[ "${run_status}" -ne 0 ]]; then
@@ -311,6 +314,7 @@ if [[ "${channel_mode}" == "legacy" ]]; then
 fi
 
 runtime_pid=""
+runtime_child_pid=""
 web_pid=""
 process_running()
 {
@@ -337,13 +341,42 @@ stop_pid()
   wait "${pid}" >/dev/null 2>&1 || true
 }
 
+runtime_child()
+{
+  local supervisor_pid="$1"
+  local child_pid=""
+  [[ "${supervisor_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  if [[ -r "/proc/${supervisor_pid}/task/${supervisor_pid}/children" ]]; then
+    read -r child_pid _ <"/proc/${supervisor_pid}/task/${supervisor_pid}/children" || true
+  fi
+  [[ "${child_pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s\n' "${child_pid}"
+}
+
+stop_runtime()
+{
+  local supervisor_pid="$1"
+  local child_pid="$2"
+  local deadline
+  if [[ "${child_pid}" =~ ^[1-9][0-9]*$ ]] && process_running "${child_pid}"; then
+    # Signal the inner runner first so its EXIT trap can stop every setsid
+    # process group and remove the disposable network/mount state.
+    kill -s TERM "${child_pid}" >/dev/null 2>&1 || true
+    deadline=$((SECONDS + 30))
+    while process_running "${child_pid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+      sleep 0.1
+    done
+  fi
+  stop_pid "${supervisor_pid}"
+}
+
 cleanup_live_run()
 {
   local original_status="$?"
   set +e
   trap - EXIT INT TERM HUP
   stop_pid "${web_pid}"
-  stop_pid "${runtime_pid}"
+  stop_runtime "${runtime_pid}" "${runtime_child_pid}"
   exit "${original_status}"
 }
 trap cleanup_live_run EXIT
@@ -351,18 +384,26 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
+unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagation private \
   "${common_inner_args[@]}" \
   --control-endpoint "${control_endpoint}" --telemetry-endpoint "${telemetry_endpoint}" \
   --sionna-python "${sionna_python}" --sionna-bridge "${sionna_bridge}" \
   --sionna-status-jsonl "${sionna_status_jsonl}" --sionna-update-hz "${sionna_update_hz}" \
   --sionna-ready-seconds "${sionna_ready_seconds}" --live-ready-path "${live_ready_path}" \
-  >"${log_dir}/native-runtime-console.log" 2>&1 &
+  >"${log_dir}/native-runtime-console.log" 2>&1 9<&- &
 runtime_pid="$!"
+runtime_child_deadline=$((SECONDS + 5))
+while [[ "${SECONDS}" -lt "${runtime_child_deadline}" ]]; do
+  runtime_child_pid="$(runtime_child "${runtime_pid}" || true)"
+  [[ -n "${runtime_child_pid}" ]] && break
+  process_running "${runtime_pid}" || break
+  sleep 0.05
+done
+[[ -n "${runtime_child_pid}" ]] || usage_error "native runtime supervisor did not start its child"
 
 "${sionna_python}" "${web_server}" --bind "${web_bind}" --port "${web_port}" \
   --telemetry-endpoint "${telemetry_endpoint}" --status-jsonl "${sionna_status_jsonl}" \
-  --index "${web_index}" >"${log_dir}/web-ui.log" 2>&1 &
+  --index "${web_index}" >"${log_dir}/web-ui.log" 2>&1 9<&- &
 web_pid="$!"
 web_url="http://${web_bind}:${web_port}"
 
@@ -431,6 +472,7 @@ wait "${runtime_pid}"
 run_status="$?"
 set -e
 runtime_pid=""
+runtime_child_pid=""
 stop_pid "${web_pid}"
 web_pid=""
 if [[ "${run_status}" -ne 0 ]]; then

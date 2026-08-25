@@ -72,6 +72,17 @@ struct TelemetrySnapshot {
   std::uint64_t sample_rate_hz     = 0;
   double        slot_deadline_us   = 0.0;
   double        channel_process_us = 0.0;
+
+  // Run-cumulative receiver-scoped timing statistics. These are updated for
+  // every completed process_superposition() call, not at the slower telemetry
+  // publication cadence, so short deadline misses cannot disappear between
+  // PUB samples. Percentiles are derived from a fixed 1 us histogram owned by
+  // the destination server thread.
+  std::uint64_t slot_process_count        = 0;
+  std::uint64_t slot_deadline_miss_count  = 0;
+  double        slot_process_max_us       = 0.0;
+  double        slot_process_p95_us       = 0.0;
+  double        slot_process_p99_us       = 0.0;
 };
 
 // v2 ProfileShadow — the multi-tap payload a `profile_swap` REQ writes.

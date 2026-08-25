@@ -177,6 +177,14 @@ void scenario_loopback()
     require(telemetry.sample_rate_hz == 23040000, "slot timing reports the wrong sample rate");
     require(telemetry.slot_deadline_us > 0.0, "slot timing reports no deadline");
     require(telemetry.channel_process_us > 0.0, "slot timing reports no channel process time");
+    require(telemetry.slot_process_count > 0, "slot timing reports no cumulative processed-slot count");
+    require(telemetry.slot_deadline_miss_count <= telemetry.slot_process_count,
+            "slot timing cumulative deadline misses exceed processed slots");
+    require(telemetry.slot_process_max_us >= telemetry.channel_process_us,
+            "slot timing cumulative maximum is below the latest sample");
+    require(telemetry.slot_process_p95_us > 0.0, "slot timing reports no cumulative p95");
+    require(telemetry.slot_process_p99_us >= telemetry.slot_process_p95_us,
+            "slot timing cumulative p99 is below p95");
     const double expected_deadline =
         static_cast<double>(telemetry.processed_samples) * 1'000'000.0 /
         static_cast<double>(telemetry.sample_rate_hz);

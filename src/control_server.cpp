@@ -1036,6 +1036,10 @@ void ControlServer::run_telemetry_loop()
       const double deadline_usage_percent = ts.slot_deadline_us > 0.0
           ? (ts.channel_process_us / ts.slot_deadline_us) * 100.0
           : 0.0;
+      const double deadline_miss_percent = ts.slot_process_count > 0
+          ? (static_cast<double>(ts.slot_deadline_miss_count) /
+             static_cast<double>(ts.slot_process_count)) * 100.0
+          : 0.0;
 
       // Build the JSON frame. link_id as topic prefix → subscribers
       // filter via setsockopt(ZMQ_SUBSCRIBE, "ue0-gnb0", …). Frame
@@ -1077,6 +1081,15 @@ void ControlServer::run_telemetry_loop()
         <<   "\"deadline_met\":"
         <<     ((ts.slot_deadline_us > 0.0 && ts.channel_process_us <= ts.slot_deadline_us)
                   ? "true" : "false")
+        <<   ",\"cumulative\":{"
+        <<     "\"processed_slots\":" << ts.slot_process_count << ","
+        <<     "\"deadline_misses\":" << ts.slot_deadline_miss_count << ","
+        <<     "\"deadline_miss_percent\":" << deadline_miss_percent << ","
+        <<     "\"max_elapsed_us\":" << ts.slot_process_max_us << ","
+        <<     "\"p95_elapsed_us\":" << ts.slot_process_p95_us << ","
+        <<     "\"p99_elapsed_us\":" << ts.slot_process_p99_us << ","
+        <<     "\"percentile_resolution_us\":1"
+        <<   "}"
         << "}"
         << "}";
       const std::string frame = f.str();

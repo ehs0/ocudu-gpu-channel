@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstring>
 #include <iostream>
@@ -175,6 +176,59 @@ struct Device {
   std::size_t batch = 0;
 };
 
+// Fixed-memory, run-cumulative timing distribution for one RX destination.
+// One-microsecond buckets cover 0..20 ms; the final bucket is overflow. A
+// percentile that lands in overflow is reported as the observed maximum.
+// Only the destination's server thread touches this object, so the IQ hot path
+// needs neither locks nor atomics here.
+struct SlotTimingAccumulator {
+  static constexpr std::size_t kOverflowBucket = 20'000;
+
+  std::vector<std::uint64_t> histogram =
+      std::vector<std::uint64_t>(kOverflowBucket + 1, 0);
+  std::uint64_t count = 0;
+  std::uint64_t deadline_misses = 0;
+  double max_us = 0.0;
+  double p95_us = 0.0;
+  double p99_us = 0.0;
+
+  void observe(double elapsed_us, double deadline_us)
+  {
+    ++count;
+    if (deadline_us > 0.0 && elapsed_us > deadline_us) {
+      ++deadline_misses;
+    }
+    max_us = std::max(max_us, elapsed_us);
+    const auto bucket = elapsed_us >= static_cast<double>(kOverflowBucket)
+                            ? kOverflowBucket
+                            : static_cast<std::size_t>(std::max(0.0, std::floor(elapsed_us)));
+    ++histogram[bucket];
+    // The telemetry PUB runs at 20 Hz while a normal IQ serve runs at 1 kHz.
+    // Keep exact counters/histogram updates on every call, but refresh the
+    // O(number-of-buckets) percentile scan only at roughly the publication
+    // cadence so observability cannot become a slot-deadline cost itself.
+    if (count == 1 || count % 50 == 0) {
+      p95_us = percentile(0.95);
+      p99_us = percentile(0.99);
+    }
+  }
+
+  double percentile(double quantile) const
+  {
+    if (count == 0) return 0.0;
+    const auto target = static_cast<std::uint64_t>(
+        std::ceil(quantile * static_cast<double>(count)));
+    std::uint64_t cumulative = 0;
+    for (std::size_t bucket = 0; bucket < histogram.size(); ++bucket) {
+      cumulative += histogram[bucket];
+      if (cumulative >= target) {
+        return bucket == kOverflowBucket ? max_us : static_cast<double>(bucket + 1);
+      }
+    }
+    return max_us;
+  }
+};
+
 // One link's runtime state. The cursor is advanced by the destination device's
 // server thread and read by the source device's puller thread, so it is atomic.
 struct LinkRuntime {
@@ -319,6 +373,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
   // heartbeat can reference stable elements without synchronisation.
   std::vector<WorkerDiag> puller_diag(devices.size());
   std::vector<WorkerDiag> server_diag(devices.size());
+  std::vector<SlotTimingAccumulator> slot_timing(devices.size());
 
   const auto report_thread_error = [&stats](const char* role, const std::exception& e) {
     stats.zmq_errors.fetch_add(1);
@@ -587,6 +642,8 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         // pretending the shared execution time is a per-edge measurement.
         const double slot_deadline_us =
             static_cast<double>(serve) * 1'000'000.0 / static_cast<double>(rate);
+        auto& timing_stats = slot_timing[d];
+        timing_stats.observe(process_us, slot_deadline_us);
         for (const std::size_t link_index : incoming) {
           const auto ctl_it = control_links.find(links[link_index].key);
           if (ctl_it == control_links.end() || ctl_it->second == nullptr) {
@@ -597,6 +654,11 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
           ts.sample_rate_hz     = rate;
           ts.slot_deadline_us   = slot_deadline_us;
           ts.channel_process_us = process_us;
+          ts.slot_process_count = timing_stats.count;
+          ts.slot_deadline_miss_count = timing_stats.deadline_misses;
+          ts.slot_process_max_us = timing_stats.max_us;
+          ts.slot_process_p95_us = timing_stats.p95_us;
+          ts.slot_process_p99_us = timing_stats.p99_us;
           publish_telemetry_snapshot(*ctl_it->second, ts);
         }
 
