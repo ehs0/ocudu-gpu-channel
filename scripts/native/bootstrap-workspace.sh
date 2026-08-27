@@ -310,6 +310,50 @@ extract_debian_overlay()
   echo "debian_overlay=extracted"
 }
 
+relocate_autotools_overlay()
+{
+  local sysroot="${native_root}/install/sysroot"
+  local aclocal_script="${sysroot}/usr/bin/aclocal-1.16"
+  local autom4te_config="${sysroot}/usr/share/autoconf/autom4te.cfg"
+  local libtoolize_script="${sysroot}/usr/bin/libtoolize"
+
+  for path in "${aclocal_script}" "${autom4te_config}" "${libtoolize_script}"; do
+    [[ -f "${path}" && ! -L "${path}" ]] || \
+      die "autotools relocation input is missing or unsafe: ${path}"
+  done
+
+  # Debian's scripts embed /usr/share paths which do not follow PATH or the
+  # environment overrides in env.sh. Rewrite only those known installation
+  # variables, leaving interpreter paths such as /usr/bin/perl untouched.
+  if ! grep -Fq "${sysroot}/usr/share/automake-1.16" "${aclocal_script}"; then
+    sed -i \
+      -e "s|/usr/share/automake-1.16|${sysroot}/usr/share/automake-1.16|g" \
+      -e "s|/usr/share/aclocal|${sysroot}/usr/share/aclocal|g" \
+      "${aclocal_script}"
+  fi
+  if ! grep -Fq "${sysroot}/usr/share/autoconf" "${autom4te_config}"; then
+    sed -i \
+      -e "s|/usr/share/autoconf|${sysroot}/usr/share/autoconf|g" \
+      "${autom4te_config}"
+  fi
+  sed -i -E \
+    -e "s|^prefix=.*$|prefix='${sysroot}/usr'|" \
+    -e "s|^datadir=.*$|datadir='${sysroot}/usr/share'|" \
+    -e "s|^pkgauxdir=.*$|pkgauxdir='${sysroot}/usr/share/libtool/build-aux'|" \
+    -e "s|^pkgltdldir=.*$|pkgltdldir='${sysroot}/usr/share/libtool'|" \
+    -e "s|^aclocaldir=.*$|aclocaldir='${sysroot}/usr/share/aclocal'|" \
+    "${libtoolize_script}"
+
+  for link_name in automake aclocal; do
+    local target="${link_name}-1.16"
+    local link_path="${sysroot}/usr/bin/${link_name}"
+    [[ ! -e "${link_path}" || -L "${link_path}" ]] || \
+      die "refusing to replace non-symlink autotools entry: ${link_path}"
+    ln -sfn "${target}" "${link_path}"
+  done
+  echo "autotools_overlay=relocated"
+}
+
 ensure_git_checkout()
 {
   local name="$1"
@@ -358,6 +402,7 @@ prepare_git_sources()
   ensure_git_checkout freeDiameter
   ensure_git_checkout libtins
   ensure_git_checkout usrsctp
+  ensure_git_checkout oai
 }
 
 export_overlay_environment()
@@ -522,6 +567,7 @@ if [[ "${verify_only}" != true ]]; then
     "${native_root}/src" "${native_root}/tools"
   download_locked_inputs
   extract_debian_overlay
+  relocate_autotools_overlay
   build_user_dependencies
   install_mongodb
   prepare_git_sources

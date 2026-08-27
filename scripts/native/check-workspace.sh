@@ -137,3 +137,8 @@ fi
 "/usr/bin/python3" "${script_dir}/verify-legacy-1x1-artifacts.py" --self-test
 "/usr/bin/python3" "${script_dir}/verify-open5gs-subscriber.py" --self-test
 echo "native_legacy_1x1_dependencies=ready"
+
+"${OCUDU_NATIVE_ROOT}/builds/ocudu-zmq-release/apps/gnb/gnb" \
+  -c "${script_dir}/../../examples/native/ocudu/gnb_zmq_b210_fdd_2port_no_core.yaml" \
+  --dryrun >/dev/null
+echo "native_2port_no_core_dependencies=ready"
