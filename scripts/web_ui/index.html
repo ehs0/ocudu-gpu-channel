@@ -55,12 +55,42 @@
     .metric-guide th,.metric-guide td { padding:6px; white-space:normal; vertical-align:top; text-align:left; }
     .metric-guide p { margin:8px 0 0; }
     .edge-meta { color:var(--muted); font-size:11px; margin-bottom:8px; overflow-wrap:anywhere; }
+    .brief { display:grid; gap:16px; }
+    .brief h3 { margin:0 0 6px; font-size:16px; line-height:1.35; color:var(--text); }
+    .brief-head { margin:0 0 8px; font-size:12px; color:#bed1de; text-transform:uppercase; letter-spacing:.08em; }
+    .brief-head span { color:var(--muted); text-transform:none; letter-spacing:0; font-size:11px; font-weight:400; }
+    .brief-lede { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(240px,.9fr); gap:16px; align-items:start; }
+    .brief-lede p { margin:0; color:var(--muted); font-size:12.5px; }
+    .brief-modes { display:grid; gap:7px; }
+    .brief-mode { display:flex; align-items:baseline; gap:9px; min-width:0; }
+    .mode-pill { flex:none; border-radius:99px; padding:3px 11px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; }
+    .mode-pill.dl { color:var(--cyan); border:1px solid #285c6e; background:#0c2431; }
+    .mode-pill.ul { color:var(--amber); border:1px solid #6b5725; background:#2b2414; }
+    .brief-mode span { color:var(--muted); font-size:11.5px; }
+    .arch-figure { display:block; width:100%; height:auto; border:1px solid #20323f; border-radius:10px; background:#07111a; }
+    .brief-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
+    .brief-card { border:1px solid #20323f; border-radius:9px; background:#07111a; padding:11px; min-width:0; }
+    .brief-card strong { display:block; color:#bed1de; margin-bottom:5px; font-size:12.5px; }
+    .brief-card p { margin:0 0 8px; color:var(--muted); font-size:11.5px; }
+    .brief-card .mono { color:var(--cyan); font-size:11px; overflow-wrap:anywhere; }
+    .score-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:10px; }
+    .score-card { border:1px solid #20323f; border-radius:9px; background:#07111a; padding:11px; min-width:0; }
+    .score-card strong { display:block; font-size:12.5px; margin-bottom:5px; }
+    .score-card b { display:block; font-size:15px; font-variant-numeric:tabular-nums; overflow-wrap:anywhere; margin-bottom:5px; }
+    .score-card p { margin:0; color:var(--muted); font-size:11.5px; }
+    .score-card.dl { border-color:#285c6e; } .score-card.dl strong,.score-card.dl b { color:var(--cyan); }
+    .score-card.ok { border-color:#276d48; } .score-card.ok strong,.score-card.ok b { color:var(--green); }
+    .score-card.gate { border-color:#73313e; } .score-card.gate strong,.score-card.gate b { color:var(--red); }
+    .brief-table th,.brief-table td { text-align:left; white-space:normal; vertical-align:top; padding:7px 8px; font-size:11.5px; }
+    .brief-table td.value { color:var(--text); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .claim { border:1px solid #6b5725; border-radius:9px; background:#2b2414; color:#ffdd9e; padding:11px; font-size:11.5px; }
+    .claim b { color:var(--amber); }
+    .brief-repro { border:1px solid #20323f; border-radius:8px; background:#07111a; padding:10px; color:var(--cyan); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; overflow-x:auto; white-space:pre; }
     .tap-plot { width:100%; height:136px; display:block; border:1px solid #20323f; border-radius:8px; background:#07111a; margin-bottom:8px; }
-    .delay-doppler-stack { display:grid; gap:9px; margin:9px 0; }
-    .delay-doppler-block { border:1px solid #20323f; border-radius:8px; background:#07111a; overflow:hidden; }
-    .delay-doppler-head { display:flex; justify-content:space-between; gap:10px; padding:7px 9px; border-bottom:1px solid #20323f; color:var(--muted); font-size:10px; }
-    .delay-doppler-head b { color:var(--text); }
-    .delay-doppler-plot { width:100%; height:240px; display:block; background:#07111a; }
+    .freq-block { border:1px solid #20323f; border-radius:8px; background:#07111a; overflow:hidden; margin:9px 0; }
+    .freq-head { display:flex; justify-content:space-between; gap:10px; padding:7px 9px; border-bottom:1px solid #20323f; color:var(--muted); font-size:10px; }
+    .freq-head b { color:var(--text); }
+    .freq-plot { width:100%; height:170px; display:block; background:#07111a; }
     .lane-tables { max-height:680px; overflow:auto; }
     .lane-tap-block { border:1px solid #20323f; border-radius:8px; background:#07111a; overflow:hidden; }
     .lane-tap-block + .lane-tap-block { margin-top:9px; }
@@ -116,7 +146,7 @@
     @media (max-width:1300px) { header { align-items:flex-start; flex-direction:column; } .pills { width:100%; grid-template-columns:repeat(4,minmax(145px,1fr)); } }
     @media (max-width:1100px) { .resource-charts { grid-template-columns:1fr; } .system-metrics { grid-template-columns:repeat(3,1fr); } }
     @media (max-width:700px) { .pills { grid-template-columns:repeat(2,minmax(0,1fr)); } #updatedPill { grid-column:2; } .runtime-grid,.gpu-processes { grid-template-columns:1fr; } .system-metrics,.gpu-metrics { grid-template-columns:repeat(2,1fr); } .deadline-cumulative { grid-template-columns:repeat(2,1fr); } .memory-process-row { grid-template-columns:minmax(110px,1.2fr) repeat(2,minmax(76px,1fr)); } }
-    @media (max-width:950px) { .grid { grid-template-columns:1fr; } canvas { height:420px; } }
+    @media (max-width:950px) { .grid { grid-template-columns:1fr; } canvas { height:420px; } .brief-lede { grid-template-columns:1fr; } }
   </style>
 </head>
 <body>
@@ -126,6 +156,133 @@
   </header>
   <main>
     <div class="grid">
+      <section class="panel wide">
+        <h2>Rank-1 multi-antenna channel emulation · workstream brief</h2>
+        <div class="brief">
+          <div class="brief-lede">
+            <div>
+              <h3>A real 4T4R base station and a real handset exchange live traffic through a GPU-synthesised radio channel — and every run proves the channel was exactly the one we declared.</h3>
+              <p>The emulator used to model each node as a single scalar stream. It now models a node as a set of antenna ports (<span class="mono">RadioNode</span>), so the channel between two nodes is a matrix, not a number. The base station is an unmodified OCUDU stack (4T4R) and the handset is a real srsUE held at <span class="mono">nof_antennas = 1</span> throughout — none of this comes from modifying the UE. Transport is ZMQ: no RF hardware anywhere in the loop.</p>
+            </div>
+            <div class="brief-modes">
+              <div class="brief-mode"><span class="mode-pill dl">Downlink</span><span>4 gNB TX ports → 1 UE RX port · row vector (1×4) · MISO</span></div>
+              <div class="brief-mode"><span class="mode-pill ul">Uplink</span><span>1 UE TX port → 4 gNB RX ports · column vector (4×1) · SIMO</span></div>
+            </div>
+          </div>
+          <svg class="arch-figure" viewBox="0 0 1400 600" role="img" aria-label="Architecture: an unmodified OCUDU 4T4R gNB and a single-antenna srsUE exchange traffic through the GPU channel emulator, which applies a 1x4 downlink row vector and a 4x1 uplink column vector once per 1 ms slot" font-family="ui-sans-serif,system-ui,sans-serif">
+            <rect x="20" y="24" width="320" height="540" rx="14" fill="#09141d" stroke="#285c6e"/>
+            <text x="180" y="66" text-anchor="middle" fill="#42d3ff" font-size="21" font-weight="700">OCUDU gNB</text>
+            <text x="180" y="88" text-anchor="middle" fill="#8ca4b5" font-size="12">4T4R · real base-station stack</text>
+            <rect x="115" y="102" width="130" height="24" rx="12" fill="#0c2431" stroke="#285c6e"/>
+            <text x="180" y="118" text-anchor="middle" fill="#42d3ff" font-size="12" font-weight="700">unmodified</text>
+            <text x="42" y="169" fill="#42d3ff" font-size="13" font-weight="700">TX ports ×4</text>
+            <text x="322" y="199" text-anchor="end" fill="#8ca4b5" font-size="12">tx0</text><rect x="333" y="187" width="14" height="14" rx="3" fill="#42d3ff"/>
+            <text x="322" y="231" text-anchor="end" fill="#8ca4b5" font-size="12">tx1</text><rect x="333" y="219" width="14" height="14" rx="3" fill="#42d3ff"/>
+            <text x="322" y="263" text-anchor="end" fill="#8ca4b5" font-size="12">tx2</text><rect x="333" y="251" width="14" height="14" rx="3" fill="#42d3ff"/>
+            <text x="322" y="295" text-anchor="end" fill="#8ca4b5" font-size="12">tx3</text><rect x="333" y="283" width="14" height="14" rx="3" fill="#42d3ff"/>
+            <text x="42" y="349" fill="#ffc857" font-size="13" font-weight="700">RX ports ×4</text>
+            <text x="322" y="389" text-anchor="end" fill="#8ca4b5" font-size="12">rx0</text><rect x="333" y="377" width="14" height="14" rx="3" fill="#ffc857"/>
+            <text x="322" y="421" text-anchor="end" fill="#8ca4b5" font-size="12">rx1</text><rect x="333" y="409" width="14" height="14" rx="3" fill="#ffc857"/>
+            <text x="322" y="453" text-anchor="end" fill="#8ca4b5" font-size="12">rx2</text><rect x="333" y="441" width="14" height="14" rx="3" fill="#ffc857"/>
+            <text x="322" y="485" text-anchor="end" fill="#8ca4b5" font-size="12">rx3</text><rect x="333" y="473" width="14" height="14" rx="3" fill="#ffc857"/>
+            <line x1="349" y1="194" x2="492" y2="242" stroke="#42d3ff" stroke-width="1.4"/>
+            <line x1="349" y1="226" x2="492" y2="242" stroke="#42d3ff" stroke-width="1.4"/>
+            <line x1="349" y1="258" x2="492" y2="242" stroke="#42d3ff" stroke-width="1.4"/>
+            <line x1="349" y1="290" x2="492" y2="242" stroke="#42d3ff" stroke-width="1.4"/>
+            <path d="M490,229 L512,242 L490,255 z" fill="#42d3ff"/>
+            <line x1="505" y1="432" x2="368" y2="384" stroke="#ffc857" stroke-width="1.4"/><path d="M370,377 L354,384 L370,391 z" fill="#ffc857"/>
+            <line x1="505" y1="432" x2="368" y2="416" stroke="#ffc857" stroke-width="1.4"/><path d="M370,409 L354,416 L370,423 z" fill="#ffc857"/>
+            <line x1="505" y1="432" x2="368" y2="448" stroke="#ffc857" stroke-width="1.4"/><path d="M370,441 L354,448 L370,455 z" fill="#ffc857"/>
+            <line x1="505" y1="432" x2="368" y2="480" stroke="#ffc857" stroke-width="1.4"/><path d="M370,473 L354,480 L370,487 z" fill="#ffc857"/>
+            <text x="425" y="134" text-anchor="middle" fill="#8ca4b5" font-size="11">4 ZMQ sockets</text>
+            <text x="425" y="149" text-anchor="middle" fill="#8ca4b5" font-size="11">cf32 @ 23.04 MS/s</text>
+            <text x="425" y="522" text-anchor="middle" fill="#ffc857" font-size="11" font-weight="700">4 branches,</text>
+            <text x="425" y="537" text-anchor="middle" fill="#ffc857" font-size="11" font-weight="700">scored row by row</text>
+            <rect x="510" y="24" width="390" height="540" rx="14" fill="#0b1a1f" stroke="#276d48"/>
+            <text x="705" y="66" text-anchor="middle" fill="#53e58b" font-size="21" font-weight="700">GPU Channel Emulator</text>
+            <text x="705" y="88" text-anchor="middle" fill="#8ca4b5" font-size="12">ocudu-gpu-channel · CUDA</text>
+            <text x="705" y="108" text-anchor="middle" fill="#53e58b" font-size="12">synthesises y = H·x once per 1 ms slot</text>
+            <text x="705" y="146" text-anchor="middle" fill="#42d3ff" font-size="13" font-weight="700">Downlink channel = row vector (1×4)</text>
+            <rect x="535" y="158" width="340" height="58" rx="8" fill="#07111a" stroke="#285c6e"/>
+            <text x="705" y="195" text-anchor="middle" fill="#e9f2f8" font-size="17" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">y = [ h0  h1  h2  h3 ] · x</text>
+            <text x="705" y="238" text-anchor="middle" fill="#8ca4b5" font-size="11.5">four transmit branches combine into one</text>
+            <text x="705" y="254" text-anchor="middle" fill="#8ca4b5" font-size="11.5">waveform at the handset's antenna</text>
+            <text x="705" y="300" text-anchor="middle" fill="#ffc857" font-size="13" font-weight="700">Uplink channel = column vector (4×1)</text>
+            <rect x="535" y="312" width="340" height="160" rx="8" fill="#07111a" stroke="#6b5725"/>
+            <text x="585" y="400" fill="#e9f2f8" font-size="17" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">y =</text>
+            <text x="705" y="348" text-anchor="middle" fill="#e9f2f8" font-size="15" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">[ g0 ]</text>
+            <text x="705" y="380" text-anchor="middle" fill="#e9f2f8" font-size="15" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">[ g1 ]</text>
+            <text x="705" y="412" text-anchor="middle" fill="#e9f2f8" font-size="15" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">[ g2 ]</text>
+            <text x="705" y="444" text-anchor="middle" fill="#e9f2f8" font-size="15" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">[ g3 ]</text>
+            <text x="800" y="400" fill="#e9f2f8" font-size="17" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">· x</text>
+            <text x="705" y="500" text-anchor="middle" fill="#8ca4b5" font-size="11.5">each receive port carries its own coefficient</text>
+            <line x1="900" y1="242" x2="1040" y2="242" stroke="#42d3ff" stroke-width="3.5"/><path d="M1038,232 L1058,242 L1038,252 z" fill="#42d3ff"/>
+            <line x1="1050" y1="432" x2="922" y2="432" stroke="#ffc857" stroke-width="3.5"/><path d="M924,422 L904,432 L924,442 z" fill="#ffc857"/>
+            <text x="985" y="134" text-anchor="middle" fill="#8ca4b5" font-size="11">1 ZMQ socket</text>
+            <text x="985" y="149" text-anchor="middle" fill="#8ca4b5" font-size="11">no RF front end</text>
+            <text x="985" y="226" text-anchor="middle" fill="#42d3ff" font-size="12" font-weight="700">1 combined stream</text>
+            <text x="985" y="416" text-anchor="middle" fill="#ffc857" font-size="12" font-weight="700">1 stream</text>
+            <rect x="1070" y="24" width="310" height="540" rx="14" fill="#09141d" stroke="#6b5725"/>
+            <text x="1225" y="66" text-anchor="middle" fill="#ffc857" font-size="21" font-weight="700">srsUE</text>
+            <text x="1225" y="88" text-anchor="middle" fill="#8ca4b5" font-size="12">real handset stack</text>
+            <rect x="1090" y="102" width="270" height="26" rx="8" fill="#2b2414" stroke="#6b5725"/>
+            <text x="1225" y="119" text-anchor="middle" fill="#ffc857" font-size="12" font-weight="700">nof_antennas = 1 (never changed)</text>
+            <rect x="1063" y="235" width="14" height="14" rx="3" fill="#42d3ff"/>
+            <text x="1090" y="247" fill="#e9f2f8" font-size="13">RX port ×1</text>
+            <text x="1090" y="265" fill="#8ca4b5" font-size="11.5">single-layer reception only</text>
+            <rect x="1063" y="425" width="14" height="14" rx="3" fill="#ffc857"/>
+            <text x="1090" y="437" fill="#e9f2f8" font-size="13">TX port ×1</text>
+            <text x="1090" y="455" fill="#8ca4b5" font-size="11.5">no UE-side beamforming</text>
+          </svg>
+          <div>
+            <h3 class="brief-head">How it is built</h3>
+            <div class="brief-grid">
+              <div class="brief-card"><strong>Antenna streams stay aligned</strong><p>All ports of one node share a single sample epoch owned by one producer thread, and a window is emitted whole — never split, never partial. Misalignment is made impossible by the data structure rather than checked for afterwards.</p><span class="mono">broker.cpp</span></div>
+              <div class="brief-card"><strong>One kernel launch per slot</strong><p>Edges into a destination row sit in a contiguous CSR range, so antenna count never multiplies launches. The grouping is built once at prepare time, not per slot.</p><span class="mono">superpose_kernel · row_begin[r]</span></div>
+              <div class="brief-card"><strong>Fading generated on-device</strong><p>TDL multi-tap, Jakes fading and Rician LOS grids are materialised in shared memory every slot, with no host round-trip. TR 38.901 TDL-A…E.</p><span class="mono">apply_steps_kernel</span></div>
+              <div class="brief-card"><strong>Real-time headroom</strong><p>Four-port p99 is 285 µs of the 1 ms slot (31 %) over n = 54,439 slots. Pinned staging buffers, no allocation anywhere on the hot path.</p><span class="mono">p50 115 µs · p99.9 675 µs</span></div>
+            </div>
+          </div>
+          <div>
+            <h3 class="brief-head">Scored on the wire, every run <span>— the same run captures the live waveform and checks it against the declared matrix H. Tolerance 1e-04, each receive port scored as its own row.</span></h3>
+            <div class="score-grid">
+              <div class="score-card dl"><strong>Uplink 1×4 — all four branches live</strong><b>4.66e-05 · 2.14e-05 · 1.68e-05 · 2.78e-05</b><p>per-row max |y − Hx| — each receive port scored separately</p></div>
+              <div class="score-card ok"><strong>Downlink 4×1 — multi-branch, no waiver</strong><b>5.27e-08</b><p>off-diagonal share 0.081 — other ports genuinely contribute</p></div>
+              <div class="score-card gate"><strong>Leave-one-out — passing alone is not accepted</strong><b>91.3 – 236.9</b><p>Remove any one link and the match must break, or the check fails. That range is the measured divergence when a link is removed.</p></div>
+            </div>
+          </div>
+          <div>
+            <h3 class="brief-head">Measured results</h3>
+            <table class="brief-table"><tbody>
+              <tr><td>Uplink 1×4 — all four branches live</td><td class="value">per-row max |y − Hx| = 4.66e-05 · 2.14e-05 · 1.68e-05 · 2.78e-05</td></tr>
+              <tr><td>Downlink 4×1 — multi-branch, no waiver</td><td class="value">5.27e-08, off-diagonal share 0.081</td></tr>
+              <tr><td>End-to-end procedure</td><td class="value">attach + PDU session + ping at 0 % loss</td></tr>
+              <tr><td>Data integrity</td><td class="value">overflow · sequence-gap · ZMQ error counters all zero</td></tr>
+              <tr><td>Array gain</td><td class="value">2×1 MRT vs port0-only = −0.54 dB measured, against −0.53 dB predicted (0.01 dB agreement)</td></tr>
+            </tbody></table>
+          </div>
+          <div class="claim"><b>Claim boundary</b> — not implemented and not claimed: rank &gt; 1 SU-MIMO · UE-side receive beamforming · closed-loop PMI · same-PRB MU-MIMO · “end-to-end 4×4 MIMO”. All results are stated as DL 2×1/4×1 MISO and UL 1×2/1×4 SIMO only. Multiple UEs are single-layer users sharing the time axis, not same-PRB MU-MIMO. Precoding weights are oracle-selected by the experimenter from channel knowledge, which implies no closed-loop PMI. Unverified signal replication is never called diversity — replication was measured to be 1.24 dB worse than MRT.</div>
+          <details class="metric-guide">
+            <summary>Backup material — integration findings, reproducibility, model coverage, downlink caveat</summary>
+            <p><b>What integrating two production stacks actually surfaced.</b> Every item below was confirmed by reading the source, and each has reproducible evidence.</p>
+            <table><thead><tr><th>Finding</th><th>Detail</th><th>Resolution</th></tr></thead><tbody>
+              <tr><td><b>OCUDU cannot combine fallback DCI with 2-port downlink</b></td><td>Multi-port DL requires the <span class="mono">ue_dedicated</span> search space and DCI format 1_1.</td><td>Pinned in the fixture; confirmed srsUE really does support 1_1/0_1.</td></tr>
+              <tr><td><b>srsUE does not implement 2-port CSI-RS</b></td><td>Per TS 38.211 Table 7.4.1.5.3-1, 2-port is row 3 → 6-bit frequency allocation → ASN.1 <span class="mono">other</span>, outside srsUE's whitelist. 4-port is row 4 (3-bit, FD-CDM2) and is recognised.</td><td>2-port runs with CSI off; multi-branch proven at 4 ports.</td></tr>
+              <tr><td><b>Defect in srsUE's CSI-RS RE accounting</b></td><td>Expected RE count is derived from density alone, but row 4 alone has density_one against a k-list length of 2 → <span class="mono">Unmatched number of RE (212 != 106)</span> → the UE discards the whole DL slot → zero PDSCH decodes.</td><td>Patched at source: unmatched errors 0, PDSCH decodes 0 → 19.</td></tr>
+              <tr><td><b>MAC pcap is incompatible with 2-port downlink</b></td><td>Enabling the instrumentation breaks the multi-port path.</td><td>Separated in the gates.</td></tr>
+              <tr><td><b>Intermittent 4-receiver uplink failures</b></td><td>With CSI off, the gNB's uplink link adaptation picks an over-aggressive MCS — a persistent ~20 % bimodal failure.</td><td>Capped via <span class="mono">pusch.max_ue_mcs: 9</span>, recorded in the fixture with its rationale.</td></tr>
+            </tbody></table>
+            <p><b>Why this is hard:</b> a commercial base-station stack only handles the transmitting side of multi-antenna operation. Reproducing how those four branches mix in the air — in real time, without breaking the standard procedure — requires alignment, the 1 ms budget, and provability at once. This workstream satisfies all three and automated the third as a standing gate.</p>
+            <p><b>Reproducibility:</b></p>
+            <div class="brief-repro">bash scripts/native/run-ocudu-rank1-2x1.sh   # 2×1 DL MISO + 1×2 UL SIMO
+bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
+            <p>Each script brings up the 5G core (Open5GS), the gNB, the GPU broker and the UE; performs attach, PDU session and ping; captures the wire in the same run; scores the matrix; and emits a verdict. Artefacts carry source commit hashes and binary SHA-256 (<span class="mono">source-evidence.json</span>), so it is always determinable which code produced a given number.</p>
+            <p><b>Channel model coverage:</b> TR 38.901 §7.7.2 TDL-A…TDL-E, multi-tap delay, Jakes fading, Rician LOS, spatial correlation, path loss, phase, CFO and AWGN. CPU and CUDA backends are held to agreement within 1e-3 by a standing regression test.</p>
+            <p><b>The downlink caveat:</b> in the baseline configuration (CSI disabled) the srsRAN scheduler sees the cell as single-port and selects codebook [1,0,0,0], so transmit ports 1–3 carry exactly zero power. That is the stack's real behaviour, and the gate declares it explicitly via <span class="mono">--allow-silent-source</span> rather than hiding it — a recorded measurement, not a relaxed check. Multi-branch downlink was therefore proven separately, in the CSI-enabled configuration: 5.27e-08 with no waiver, off-diagonal share 0.081. In that run, however, attach does not complete, so the two conditions do not yet hold in the same run, and the verdict table says so.</p>
+          </details>
+          <div class="foot">Conditions to quote alongside any number: RTX 5090 · 23.04 MS/s · 1 ms slot (batch 23040) · CUDA backend · <span class="mono">fixed_mimo</span> (1 tap) + TDL chain · percentiles come from a full-slot histogram and are always quoted with n · ctest 8/8, standing GPU sequence 9/9.</div>
+        </div>
+      </section>
       <section class="panel">
         <h2>Sionna environment · Near top-down 3D mobility</h2>
         <canvas id="scene" width="900" height="560"></canvas>
@@ -191,7 +348,7 @@
         </details>
       </section>
       <section class="panel wide">
-        <h2>Impulse response and delay–Doppler–power by edge link · Tap details</h2>
+        <h2>Impulse and frequency response by edge link · Tap details</h2>
         <div id="edgeCards" class="edge-grid"></div>
         <div id="impulseNote" class="foot">The horizontal axis automatically frames the earliest and latest taps with a small margin. Waiting for the current sampling frequency. In delay ns, ns means nanoseconds.</div>
       </section>
@@ -240,30 +397,51 @@
       return `<svg class="tap-plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="overlaid matrix-lane tap impulse responses">${legend}<line x1="${left}" y1="${base}" x2="${W-right}" y2="${base}" stroke="#526573"/><line x1="${left}" y1="${top}" x2="${left}" y2="${base}" stroke="#526573"/>${stems}<text x="${left}" y="124" fill="#8ca4b5" font-size="9">${fmt(plotMinDelay,axisDigits)} samples</text><text x="${W-right}" y="124" text-anchor="end" fill="#8ca4b5" font-size="9">${fmt(plotMaxDelay,axisDigits)} samples</text><text x="4" y="${top+4}" fill="#8ca4b5" font-size="9">${fmt(maxGain,0)}</text><text x="4" y="${base}" fill="#8ca4b5" font-size="9">${fmt(minGain,0)}</text></svg>`;
     }
 
-    function delayDopplerPlot(lane, color) {
-      const points=(lane?.delay_doppler_points||[]).filter(point=>finite(point.delay_samples)&&finite(point.doppler_hz)&&finite(point.power_db));
-      if(!points.length) return '<div class="empty delay-doppler-plot">Waiting for per-path Sionna Doppler data</div>';
-      const W=420,H=240,originX=52,originY=190,delayWidth=300,depthX=42,depthY=42,powerHeight=105;
-      const delays=points.map(point=>Number(point.delay_samples)),dopplers=points.map(point=>Number(point.doppler_hz)),powers=points.map(point=>Number(point.power_db));
-      const delayRawMin=Math.max(0,Math.min(...delays)),delayRawMax=Math.max(delayRawMin,...delays),delayPadding=Math.max(.125,(delayRawMax-delayRawMin)*.1),delayMin=Math.max(0,delayRawMin-delayPadding),delayMax=Math.max(delayMin+.25,delayRawMax+delayPadding);
-      const dopplerRawMin=Math.min(...dopplers),dopplerRawMax=Math.max(...dopplers),dopplerPadding=Math.max(1,(dopplerRawMax-dopplerRawMin)*.1,Math.max(Math.abs(dopplerRawMin),Math.abs(dopplerRawMax))*.05),dopplerMin=dopplerRawMin-dopplerPadding,dopplerMax=dopplerRawMax+dopplerPadding;
-      const powerMax=Math.max(...powers),powerMin=Math.max(Math.min(...powers,powerMax-10),powerMax-60);
-      const project=(delay,doppler)=>{const dx=(delay-delayMin)/(delayMax-delayMin),dy=(doppler-dopplerMin)/(dopplerMax-dopplerMin);return {x:originX+dx*delayWidth+dy*depthX,y:originY-dy*depthY,depth:dy}};
-      const floor=`<polygon points="${originX},${originY} ${originX+delayWidth},${originY} ${originX+delayWidth+depthX},${originY-depthY} ${originX+depthX},${originY-depthY}" fill="#0b1822" stroke="#526573"/>`;
-      const delayGrid=[0,.25,.5,.75,1].map(ratio=>`<line x1="${originX+ratio*delayWidth}" y1="${originY}" x2="${originX+ratio*delayWidth+depthX}" y2="${originY-depthY}" stroke="#203744" stroke-width=".7"/>`).join('');
-      const dopplerGrid=[0,.25,.5,.75,1].map(ratio=>`<line x1="${originX+ratio*depthX}" y1="${originY-ratio*depthY}" x2="${originX+delayWidth+ratio*depthX}" y2="${originY-ratio*depthY}" stroke="#203744" stroke-width=".7"/>`).join('');
-      const stems=points.map(point=>{const base=project(Number(point.delay_samples),Number(point.doppler_hz)),normalized=(Number(point.power_db)-powerMin)/(powerMax-powerMin),topY=base.y-Math.max(0,Math.min(1,normalized))*powerHeight;return {...point,x:base.x,baseY:base.y,topY,depth:base.depth}}).sort((a,b)=>b.depth-a.depth).map(point=>`<line x1="${point.x}" y1="${point.baseY}" x2="${point.x}" y2="${point.topY}" stroke="${color}" stroke-width="2"/><circle cx="${point.x}" cy="${point.topY}" r="4" fill="#07111a" stroke="${color}" stroke-width="2"><title>path ${Number(point.path_index)+1} · delay ${fmt(point.delay_samples,3)} samples / ${fmt(point.delay_ns,2)} ns · Doppler ${fmt(point.doppler_hz,2)} Hz · raw path power ${fmt(point.power_db,2)} dB</title></circle>`).join('');
-      return `<svg class="delay-doppler-plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="lane delay Doppler power three-dimensional plot">${floor}${delayGrid}${dopplerGrid}<line x1="${originX}" y1="${originY}" x2="${originX}" y2="${originY-powerHeight}" stroke="#8ca4b5"/>${stems}<text x="${originX}" y="211" fill="#8ca4b5" font-size="9">${fmt(delayMin,2)}</text><text x="${originX+delayWidth}" y="211" text-anchor="end" fill="#8ca4b5" font-size="9">${fmt(delayMax,2)} samples</text><text x="${originX+depthX-5}" y="${originY-depthY-8}" fill="#8ca4b5" font-size="9">${fmt(dopplerMax,1)} Hz</text><text x="${originX+5}" y="${originY-5}" fill="#8ca4b5" font-size="9">${fmt(dopplerMin,1)} Hz</text><text x="${originX-6}" y="${originY-powerHeight+4}" text-anchor="end" fill="#8ca4b5" font-size="9">${fmt(powerMax,1)} dB</text><text x="${originX-6}" y="${originY-2}" text-anchor="end" fill="#8ca4b5" font-size="9">${fmt(powerMin,1)}</text><text x="${originX+delayWidth/2}" y="229" text-anchor="middle" fill="#bed1de" font-size="10">Delay</text><text x="${originX+depthX+6}" y="${originY-depthY-20}" fill="#bed1de" font-size="10">Doppler</text><text x="8" y="76" fill="#bed1de" font-size="10" transform="rotate(-90 8 76)">Path power</text></svg>`;
+    // Discrete-time frequency response of one lane's complex tap set, evaluated
+    // directly rather than by FFT so fractional tap delays need no interpolation:
+    //   H(f) = sum_k 10^(gain_db/20) * exp(j*phase_rad) * exp(-j*2*pi*ratio*delay_samples)
+    // with ratio = f / sample_rate in [-0.5, 0.5]. Every tap contributes, unlike
+    // the eight-row impulse plot and tap tables, so the curve covers the whole
+    // profile the emulator applies.
+    function laneFrequencyResponse(lane, ratios) {
+      const num=(value,fallback)=>Number.isFinite(Number(value))?Number(value):fallback;
+      const taps=(lane?.taps||[]).map(tap=>({amplitude:10**(num(tap.gain_db,-200)/20),phase:num(tap.phase_rad,0),delay:num(tap.delay_samples,0)}));
+      return ratios.map(ratio=>{
+        let real=0,imaginary=0;
+        for(const tap of taps){const angle=tap.phase-2*Math.PI*ratio*tap.delay;real+=tap.amplitude*Math.cos(angle);imaginary+=tap.amplitude*Math.sin(angle)}
+        const magnitude=Math.hypot(real,imaginary);
+        return magnitude>0?20*Math.log10(magnitude):-200;
+      });
     }
 
-    function renderEdgeCards(channels) {
+    function frequencyResponsePlot(lanes, colors, sampleRateHz) {
+      const active=(lanes||[]).filter(lane=>Array.isArray(lane.taps)&&lane.taps.length);
+      if(!active.length) return '<div class="empty freq-plot">No taps</div>';
+      const W=420,H=170,left=34,right=12,top=26,base=132,POINTS=257;
+      const ratios=Array.from({length:POINTS},(_,index)=>-.5+index/(POINTS-1));
+      const curves=active.map(lane=>laneFrequencyResponse(lane,ratios));
+      const values=curves.flat().filter(Number.isFinite),maxDb=Math.ceil(Math.max(...values)),minDb=Math.max(Math.floor(Math.min(...values)),maxDb-40),span=Math.max(maxDb-minDb,1);
+      const x=ratio=>left+(ratio+.5)*(W-left-right),y=db=>top+(maxDb-Math.max(minDb,Math.min(maxDb,db)))/span*(base-top);
+      const grid=[0,.25,.5,.75,1].map(fraction=>`<line x1="${fmt(x(-.5+fraction),2)}" y1="${top}" x2="${fmt(x(-.5+fraction),2)}" y2="${base}" stroke="#203744" stroke-width=".7"/>`).join('')+[.25,.5,.75].map(fraction=>`<line x1="${left}" y1="${top+fraction*(base-top)}" x2="${W-right}" y2="${top+fraction*(base-top)}" stroke="#203744" stroke-width=".7"/>`).join('');
+      const legend=active.map((lane,laneIndex)=>`<text x="${left+laneIndex*92}" y="14" fill="${colors[laneIndex%colors.length]}" font-size="9">■ rx${lane.rx_port}←tx${lane.tx_port}</text>`).join('');
+      const traces=active.map((lane,laneIndex)=>{
+        const color=colors[laneIndex%colors.length],curve=curves[laneIndex],dash=laneIndex%2?' stroke-dasharray="4 2"':'';
+        const laneMax=Math.max(...curve),laneMin=Math.min(...curve),points=curve.map((db,index)=>`${fmt(x(ratios[index]),2)},${fmt(y(db),2)}`).join(' ');
+        return `<polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.8" stroke-linejoin="round"${dash}><title>lane (rx${lane.rx_port}, tx${lane.tx_port}) · ${lane.taps.length} taps · |H| peak ${fmt(laneMax,2)} dB · deepest notch ${fmt(laneMin,2)} dB · in-band ripple ${fmt(laneMax-laneMin,2)} dB</title></polyline>`;
+      }).join('');
+      const edgeText=sampleRateHz>0?`${fmt(sampleRateHz/2e6,2)} MHz`:'0.5 fs',axisLabel=sampleRateHz>0?'Baseband offset from carrier':'Baseband offset (normalized to sample rate)';
+      return `<svg class="freq-plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="overlaid matrix-lane frequency responses">${grid}${legend}<line x1="${left}" y1="${base}" x2="${W-right}" y2="${base}" stroke="#526573"/><line x1="${left}" y1="${top}" x2="${left}" y2="${base}" stroke="#526573"/>${traces}<text x="${left}" y="146" fill="#8ca4b5" font-size="9">−${edgeText}</text><text x="${fmt(x(0),2)}" y="146" text-anchor="middle" fill="#8ca4b5" font-size="9">0</text><text x="${W-right}" y="146" text-anchor="end" fill="#8ca4b5" font-size="9">+${edgeText}</text><text x="${left-6}" y="${top+4}" text-anchor="end" fill="#8ca4b5" font-size="9">${maxDb}</text><text x="${left-6}" y="${base}" text-anchor="end" fill="#8ca4b5" font-size="9">${minDb}</text><text x="${(left+W-right)/2}" y="163" text-anchor="middle" fill="#bed1de" font-size="10">${axisLabel}</text><text x="8" y="86" fill="#bed1de" font-size="10" transform="rotate(-90 8 86)">|H| dB</text></svg>`;
+    }
+
+    function renderEdgeCards(channels, sampleRateHz) {
       const laneColors=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e','#ff6577'];
       const cards=(channels||[]).map(channel=>{
-        const parts={...linkParts(channel.link_id),source:channel.source||linkParts(channel.link_id).source,destination:channel.destination||linkParts(channel.link_id).destination,model:channel.model||linkParts(channel.link_id).model},fallbackLane={rx_port:channel.rx_port||0,tx_port:channel.tx_port||0,taps:channel.taps||[],ray_count:channel.ray_count,tap_count:channel.tap_count,total_path_power_db:channel.total_path_power_db,delay_doppler_points:channel.delay_doppler_points||[],delay_doppler_point_count:channel.delay_doppler_point_count},lanes=(Array.isArray(channel.lanes)&&channel.lanes.length?channel.lanes:[fallbackLane]).slice().sort((a,b)=>Number(a.rx_port)-Number(b.rx_port)||Number(a.tx_port)-Number(b.tx_port));
-        const delayDopplerPlots=lanes.map((lane,laneIndex)=>{const color=laneColors[laneIndex%laneColors.length],shown=(lane.delay_doppler_points||[]).length,total=Number(lane.delay_doppler_point_count);return `<section class="delay-doppler-block"><div class="delay-doppler-head"><b><i class="phase-dot" style="background:${color}"></i>Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)}) · 3D delay–Doppler–power</b><span>${shown} shown${finite(total)&&total>shown?` / ${total} paths`:''}</span></div>${delayDopplerPlot(lane,color)}</section>`}).join('');
+        const parts={...linkParts(channel.link_id),source:channel.source||linkParts(channel.link_id).source,destination:channel.destination||linkParts(channel.link_id).destination,model:channel.model||linkParts(channel.link_id).model},fallbackLane={rx_port:channel.rx_port||0,tx_port:channel.tx_port||0,taps:channel.taps||[],ray_count:channel.ray_count,tap_count:channel.tap_count,total_path_power_db:channel.total_path_power_db},lanes=(Array.isArray(channel.lanes)&&channel.lanes.length?channel.lanes:[fallbackLane]).slice().sort((a,b)=>Number(a.rx_port)-Number(b.rx_port)||Number(a.tx_port)-Number(b.tx_port));
+        const tapTotal=lanes.reduce((sum,lane)=>sum+(lane.taps||[]).length,0),bandwidthText=Number(sampleRateHz)>0?`${fmt(Number(sampleRateHz)/1e6,2)} MHz span`:'waiting for sample rate';
+        const frequencyBlock=`<section class="freq-block"><div class="freq-head"><b>Frequency response · |H(f)| over all ${lanes.length} lane(s)</b><span>${tapTotal} taps · ${bandwidthText}</span></div>${frequencyResponsePlot(lanes,laneColors,Number(sampleRateHz))}</section>`;
         const laneTables=lanes.map((lane,laneIndex)=>{const color=laneColors[laneIndex%laneColors.length],taps=(lane.taps||[]).slice(0,8),tapRows=Array.from({length:8},(_,rowIndex)=>{const t=taps[rowIndex];return t?`<tr><td>${rowIndex+1}</td><td>${fmt(t.gain_db,2)}</td><td><i class="phase-dot" style="background:${color}"></i>${fmt(t.phase_rad,3)} / ${fmt(t.phase_deg,1)}°</td><td>${fmt(t.delay_samples,3)}</td><td>${fmt(t.delay_ns,2)}</td></tr>`:`<tr class="empty-tap-row"><td>${rowIndex+1}</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>`}).join('');return `<section class="lane-tap-block"><div class="lane-tap-head"><b><i class="phase-dot" style="background:${color}"></i>Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)})</b><span>${esc(lane.ray_count)} rays · ${esc(lane.tap_count)} taps · ${fmt(lane.total_path_power_db,2)} dB</span></div><table class="tap-table"><thead><tr><th>#</th><th>Gain dB</th><th>Phase rad / deg</th><th>Delay samples</th><th>Delay ns</th></tr></thead><tbody>${tapRows}</tbody></table></section>`}).join('');
         const matrix=channel.matrix||{nt:1,nr:1},matrixText=`H ${matrix.nr||1}×${matrix.nt||1} · ${lanes.length} lane(s)`;
-        return `<article class="edge-card"><div class="card-head"><strong class="mono">${esc(parts.source)} → ${esc(parts.destination)}</strong><span>${esc(channel.direction)} · ${fmt(Number(channel.carrier_frequency_hz)/1e6,1)} MHz</span></div><div class="edge-meta">model ${esc(parts.model)} · ${matrixText} · overlaid lane responses · matrix total ${fmt(channel.total_path_power_db,1)} dB</div>${tapPlot(lanes,laneColors)}<div class="delay-doppler-stack">${delayDopplerPlots}</div><div class="lane-tables">${laneTables}</div></article>`;
+        return `<article class="edge-card"><div class="card-head"><strong class="mono">${esc(parts.source)} → ${esc(parts.destination)}</strong><span>${esc(channel.direction)} · ${fmt(Number(channel.carrier_frequency_hz)/1e6,1)} MHz</span></div><div class="edge-meta">model ${esc(parts.model)} · ${matrixText} · overlaid lane responses · matrix total ${fmt(channel.total_path_power_db,1)} dB</div>${tapPlot(lanes,laneColors)}${frequencyBlock}<div class="lane-tables">${laneTables}</div></article>`;
       }).join('');
       $('edgeCards').innerHTML=cards||'<div class="empty">Waiting for Sionna channel profiles</div>';
     }
@@ -443,9 +621,9 @@
       $('envRates').textContent=env.sample_rate_hz?`${fmt(env.sample_rate_hz/1e6,2)} MS/s · ${fmt(env.update_rate_hz,2)} Hz updates`:'—';
       $('envTarget').textContent=env.dry_run?'dry run (no transmission)':`${env.control_endpoint||'—'} · ${backend}`;
       const sampleRateHz=Number(env.sample_rate_hz),sampleRateText=sampleRateHz>0?`${fmt(sampleRateHz/1e6,2)} MS/s`:'waiting',samplePeriodText=sampleRateHz>0?`${fmt(1e9/sampleRateHz,2)} ns`:'—';
-      $('impulseNote').textContent=`All matrix lanes for one physical link share one overlaid impulse-response plot and use distinct colors. A small display-only horizontal stem offset keeps equal-delay/equal-gain lanes visible; tooltips and tables retain the exact delay, gain, and phase. Below it, each used antenna lane has a separate 3D delay–Doppler–power projection stacked vertically. Those points are unmerged Sionna paths: delay is measured before tap quantization, Doppler is Paths.doppler in Hz, and path power is 10·log10(|a|²) before the emulator gain offset (not received dBm). The current sampling frequency (sample rate) is ${sampleRateText}; one sample is ${samplePeriodText}. Each lane has its own eight-row tap table, with unused rows marked —.`;
+      $('impulseNote').textContent=`All matrix lanes for one physical link share one overlaid impulse-response plot and use distinct colors. A small display-only horizontal stem offset keeps equal-delay/equal-gain lanes visible; tooltips and tables retain the exact delay, gain, and phase. Below it, the same lanes share one frequency-response plot: |H(f)| in dB is evaluated directly from every tap of the profile as H(f) = Σ 10^(gain/20)·e^(j·phase)·e^(−j2πf·delay), so fractional tap delays are exact and no window or FFT bin rounding is involved. The horizontal axis is the baseband offset from the link carrier over one full sampling band, ±${sampleRateHz>0?fmt(sampleRateHz/2e6,2)+' MHz':'half the sample rate'}, and the vertical axis is clamped to 40 dB below the strongest lane peak so deep fades stay readable. Hovering a curve reports that lane's peak, deepest notch, and in-band ripple. The current sampling frequency (sample rate) is ${sampleRateText}; one sample is ${samplePeriodText}. Each lane has its own eight-row tap table, with unused rows marked —.`;
       renderDeadlineCards(telemetry);
-      renderEdgeCards(s?.channels);
+      renderEdgeCards(s?.channels,sampleRateHz);
       renderNodeCards(s);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
       drawScene(s);

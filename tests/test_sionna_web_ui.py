@@ -324,12 +324,21 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("Array.from({length:8}", index)
         self.assertIn("overlaid matrix-lane tap impulse responses", index)
         self.assertIn("tapPlot(lanes,laneColors)", index)
-        self.assertIn("function delayDopplerPlot(lane, color)", index)
-        self.assertIn("delay_doppler_points", index)
-        self.assertIn("3D delay–Doppler–power", index)
-        self.assertIn("Paths.doppler in Hz", index)
-        self.assertIn("10·log10(|a|²)", index)
-        self.assertIn("delay-doppler-stack", index)
+        self.assertNotIn("delayDopplerPlot", index)
+        self.assertNotIn("delay_doppler_points", index)
+        self.assertNotIn("delay–Doppler–power", index)
+        self.assertNotIn("Paths.doppler in Hz", index)
+        self.assertNotIn("delay-doppler-stack", index)
+        self.assertIn("function laneFrequencyResponse(lane, ratios)", index)
+        self.assertIn("function frequencyResponsePlot(lanes, colors, sampleRateHz)", index)
+        self.assertIn("frequencyResponsePlot(lanes,laneColors,Number(sampleRateHz))", index)
+        self.assertIn("renderEdgeCards(s?.channels,sampleRateHz)", index)
+        self.assertIn("overlaid matrix-lane frequency responses", index)
+        self.assertIn("Frequency response · |H(f)| over all ${lanes.length} lane(s)", index)
+        self.assertIn("Impulse and frequency response by edge link", index)
+        self.assertIn("in-band ripple", index)
+        self.assertIn("Baseband offset from carrier", index)
+        self.assertIn("freq-block", index)
         self.assertIn("Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)})", index)
         self.assertIn("lane-tap-block", index)
         self.assertIn("rowIndex+1", index)
@@ -388,6 +397,42 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("warmupMarkerWidth=6", index)
         self.assertIn("■ W warm-up", index)
         self.assertNotIn("ctx.fillRect(x0,top,Math.max(1,x1-x0),plotH)", index)
+
+    def test_web_ui_leads_with_rank1_workstream_brief(self) -> None:
+        index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        # The brief must sit above the live dashboard, not below it.
+        self.assertLess(
+            index.index("Rank-1 multi-antenna channel emulation"),
+            index.index("Sionna environment · Near top-down 3D mobility"),
+        )
+        # The architecture figure is inline SVG built from the page palette, not
+        # an external raster, and must not depend on marker rendering.
+        self.assertIn('<svg class="arch-figure"', index)
+        self.assertNotIn("diag-mimo-rank1-architecture", index)
+        self.assertNotIn("<img", index)
+        self.assertNotIn("marker-end=", index)
+        for label in ("OCUDU gNB", "GPU Channel Emulator", "srsUE"):
+            self.assertIn(f">{label}</text>", index)
+        self.assertIn("y = [ h0  h1  h2  h3 ] · x", index)
+        self.assertIn("[ g0 ]", index)
+        self.assertIn("nof_antennas = 1 (never changed)", index)
+        self.assertIn("4 branches,", index)
+        # Downlink uses the dashboard cyan, uplink the dashboard amber.
+        self.assertIn('<rect x="333" y="187" width="14" height="14" rx="3" fill="#42d3ff"/>', index)
+        self.assertIn('<rect x="333" y="377" width="14" height="14" rx="3" fill="#ffc857"/>', index)
+        # Claims, evidence and boundary all travel together.
+        self.assertIn("4.66e-05 · 2.14e-05 · 1.68e-05 · 2.78e-05", index)
+        self.assertIn("off-diagonal share 0.081", index)
+        self.assertIn("Leave-one-out — passing alone is not accepted", index)
+        self.assertIn("Claim boundary", index)
+        self.assertIn("not claimed: rank &gt; 1 SU-MIMO", index)
+        self.assertIn("superpose_kernel · row_begin[r]", index)
+        self.assertIn("p50 115 µs · p99.9 675 µs", index)
+        self.assertIn("run-ocudu-rank1-4x1.sh", index)
+        self.assertIn("Unmatched number of RE (212 != 106)", index)
+        self.assertIn("--allow-silent-source", index)
 
     def test_store_tracks_iteration_boundaries_and_warmup_interval(self) -> None:
         store = StatusStore()
