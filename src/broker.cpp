@@ -1,4 +1,5 @@
 #include "ocudu_gpu_channel/broker.h"
+#include "ocudu_gpu_channel/timing_metrics.h"
 #include "ocudu_gpu_channel/pacing.h"
 #include "ocudu_gpu_channel/ring.h"
 #include "ocudu_gpu_channel/runtime_control.h"
@@ -311,55 +312,7 @@ struct LinkRuntime {
   std::atomic<bool> cursor_init{false};
 };
 
-// Fixed-memory, run-cumulative timing distribution for one RX node. One-us
-// buckets cover 0..20 ms and the final bucket is overflow. Only the node's
-// producer thread touches this object.
-struct SlotTimingAccumulator {
-  static constexpr std::size_t kOverflowBucket = 20'000;
-
-  std::vector<std::uint64_t> histogram =
-      std::vector<std::uint64_t>(kOverflowBucket + 1, 0);
-  std::uint64_t count = 0;
-  std::uint64_t deadline_misses = 0;
-  double max_us = 0.0;
-  double p95_us = 0.0;
-  double p99_us = 0.0;
-
-  double percentile(double quantile) const
-  {
-    if (count == 0) return 0.0;
-    const auto target = static_cast<std::uint64_t>(
-        std::ceil(quantile * static_cast<double>(count)));
-    std::uint64_t cumulative = 0;
-    for (std::size_t bucket = 0; bucket < histogram.size(); ++bucket) {
-      cumulative += histogram[bucket];
-      if (cumulative >= target) {
-        return bucket == kOverflowBucket ? max_us : static_cast<double>(bucket + 1);
-      }
-    }
-    return max_us;
-  }
-
-  void observe(double elapsed_us, double deadline_us)
-  {
-    ++count;
-    if (deadline_us > 0.0 && elapsed_us > deadline_us) {
-      ++deadline_misses;
-    }
-    max_us = std::max(max_us, elapsed_us);
-    const auto bucket = elapsed_us >= static_cast<double>(kOverflowBucket)
-                            ? kOverflowBucket
-                            : static_cast<std::size_t>(
-                                  std::max(0.0, std::floor(elapsed_us)));
-    ++histogram[bucket];
-    // Refresh percentiles at approximately the 20 Hz telemetry cadence.
-    if (count == 1 || count % 50 == 0) {
-      p95_us = percentile(0.95);
-      p99_us = percentile(0.99);
-    }
-  }
-};
-
+// Run-cumulative relay health counters shared by the worker threads.
 struct AtomicStats {
   std::atomic<std::uint64_t> tx_pulls{0};
   std::atomic<std::uint64_t> rx_requests{0};
@@ -708,7 +661,11 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
   std::vector<WorkerDiag> puller_diag(ports.size());
   std::vector<WorkerDiag> producer_diag(nodes.size());
   std::vector<WorkerDiag> rep_diag(ports.size());
-  std::vector<SlotTimingAccumulator> slot_timing(nodes.size());
+  std::vector<ReceiverTimingAccumulator> slot_timing;
+  slot_timing.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    slot_timing.emplace_back(node.batch, node.sample_rate_hz);
+  }
 
   // Bounded stall detector. A producer that cannot make progress emits one
   // diagnostic line per interval naming the phase it is stuck in and the live
@@ -1076,18 +1033,32 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         const double slot_deadline_us =
             static_cast<double>(count) * 1'000'000.0 / static_cast<double>(rate);
         auto& timing_stats = slot_timing[n];
-        timing_stats.observe(process_us, slot_deadline_us);
+        timing_stats.observe(count, process_us);
         for (BrokerLinkControl* ctl : node_controls[n]) {
           TelemetrySnapshot ts = read_telemetry_snapshot(*ctl);
           ts.processed_samples = count;
           ts.sample_rate_hz = rate;
           ts.slot_deadline_us = slot_deadline_us;
           ts.channel_process_us = process_us;
-          ts.slot_process_count = timing_stats.count;
-          ts.slot_deadline_miss_count = timing_stats.deadline_misses;
-          ts.slot_process_max_us = timing_stats.max_us;
-          ts.slot_process_p95_us = timing_stats.p95_us;
-          ts.slot_process_p99_us = timing_stats.p99_us;
+          ts.slot_process_count = timing_stats.calls.count;
+          ts.slot_deadline_miss_count = timing_stats.calls.deadline_misses;
+          ts.slot_process_max_us = timing_stats.calls.max_us;
+          ts.slot_process_p95_us = timing_stats.calls.p95_us;
+          ts.slot_process_p99_us = timing_stats.calls.p99_us;
+          ts.nominal_slot_samples = timing_stats.nominal_samples();
+          ts.nominal_pending_samples = timing_stats.pending_samples;
+          ts.nominal_pending_estimated_us = timing_stats.pending_estimated_us;
+          ts.nominal_latest_estimated_us = timing_stats.latest_nominal_estimated_us;
+          ts.nominal_slot_count = timing_stats.nominal_slots.count;
+          ts.nominal_deadline_miss_count = timing_stats.nominal_slots.deadline_misses;
+          ts.nominal_process_max_us = timing_stats.nominal_slots.max_us;
+          ts.nominal_process_p95_us = timing_stats.nominal_slots.p95_us;
+          ts.nominal_process_p99_us = timing_stats.nominal_slots.p99_us;
+          ts.fragment_call_count = timing_stats.fragment_calls;
+          ts.fragment_sample_count = timing_stats.fragment_samples;
+          ts.fragment_min_samples = timing_stats.fragment_min();
+          ts.fragment_max_samples = timing_stats.fragment_max_samples;
+          ts.fragmented_nominal_slot_count = timing_stats.fragmented_nominal_slots;
           publish_telemetry_snapshot(*ctl, ts);
         }
 

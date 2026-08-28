@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Drive a 2-gNB/2-UE OCUDU channel from Sionna RT.
+"""Drive an OCUDU channel graph and antenna matrix from Sionna RT.
 
 The two gNBs remain fixed. UE0 and UE1 follow configurable bounded horizontal
 trajectories. At a low control-plane cadence, Sionna RT
@@ -29,22 +29,26 @@ from typing import Any, Sequence
 if __package__ in (None, ""):
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from channel_adapter import (  # type: ignore
+        LaneProfile,
+        MatrixProfile,
         Ray,
         Tap,
         ZmqControlClient,
         channel_status,
         control_link_id,
-        make_profile_swap,
+        make_matrix_profile_swap,
         rays_to_taps,
     )
 else:
     from .channel_adapter import (
+        LaneProfile,
+        MatrixProfile,
         Ray,
         Tap,
         ZmqControlClient,
         channel_status,
         control_link_id,
-        make_profile_swap,
+        make_matrix_profile_swap,
         rays_to_taps,
     )
 
@@ -117,6 +121,160 @@ class Motion:
         return (self.velocity[0] * direction, self.velocity[1], self.velocity[2])
 
 
+@dataclass(frozen=True)
+class ArraySpec:
+    rows: int = 1
+    cols: int = 1
+    pattern: str = "iso"
+    polarization: str = "V"
+
+    @property
+    def antenna_count(self) -> int:
+        return self.rows * self.cols
+
+    def label(self) -> str:
+        return (
+            f"{self.rows}x{self.cols} {self.pattern}, "
+            f"{self.polarization} polarization"
+        )
+
+
+@dataclass(frozen=True)
+class ScenarioNode:
+    motion: Motion
+    tx_array: ArraySpec
+    rx_array: ArraySpec
+
+
+@dataclass(frozen=True)
+class ScenarioLink:
+    source: str
+    destination: str
+    direction: str
+    model: str = MODEL_ID
+
+
+@dataclass(frozen=True)
+class ScenarioDefinition:
+    name: str
+    nodes: dict[str, ScenarioNode]
+    links: tuple[ScenarioLink, ...]
+    scene: str | None = None
+
+
+def _array_spec(value: Any, *, where: str) -> ArraySpec:
+    if value is None:
+        return ArraySpec()
+    if not isinstance(value, dict):
+        raise ValueError(f"{where} must be an object")
+    rows = value.get("rows", 1)
+    cols = value.get("cols", 1)
+    if not isinstance(rows, int) or isinstance(rows, bool) or rows <= 0:
+        raise ValueError(f"{where}.rows must be a positive integer")
+    if not isinstance(cols, int) or isinstance(cols, bool) or cols <= 0:
+        raise ValueError(f"{where}.cols must be a positive integer")
+    pattern = value.get("pattern", "iso")
+    polarization = value.get("polarization", "V")
+    if not isinstance(pattern, str) or not pattern:
+        raise ValueError(f"{where}.pattern must be a non-empty string")
+    if not isinstance(polarization, str) or not polarization:
+        raise ValueError(f"{where}.polarization must be a non-empty string")
+    return ArraySpec(rows, cols, pattern, polarization)
+
+
+def _finite_vector(value: Any, *, where: str) -> tuple[float, float, float]:
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError(f"{where} must be a three-number array")
+    result = tuple(float(item) for item in value)
+    if not all(math.isfinite(item) for item in result):
+        raise ValueError(f"{where} values must be finite")
+    return result  # type: ignore[return-value]
+
+
+def load_scenario_config(path: pathlib.Path) -> ScenarioDefinition:
+    """Load the dependency-free JSON contract shared by launcher and bridge."""
+
+    try:
+        root = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load scenario config {path}: {exc}") from exc
+    if not isinstance(root, dict):
+        raise ValueError("scenario config root must be an object")
+    raw_nodes = root.get("nodes")
+    raw_links = root.get("links")
+    if not isinstance(raw_nodes, dict) or not raw_nodes:
+        raise ValueError("scenario config requires a non-empty nodes object")
+    if not isinstance(raw_links, list) or not raw_links:
+        raise ValueError("scenario config requires a non-empty links array")
+
+    nodes: dict[str, ScenarioNode] = {}
+    for node_id, value in raw_nodes.items():
+        if not isinstance(node_id, str) or not node_id or not isinstance(value, dict):
+            raise ValueError("scenario node ids must map to objects")
+        common_array = value.get("array")
+        tx_array = _array_spec(
+            value.get("tx_array", common_array), where=f"nodes.{node_id}.tx_array"
+        )
+        rx_array = _array_spec(
+            value.get("rx_array", common_array), where=f"nodes.{node_id}.rx_array"
+        )
+        route = value.get("route_x_m")
+        x_bounds: tuple[float, float] | None = None
+        if route is not None:
+            if not isinstance(route, list) or len(route) != 2:
+                raise ValueError(f"nodes.{node_id}.route_x_m must be [min,max]")
+            x_bounds = (float(route[0]), float(route[1]))
+            if not all(math.isfinite(item) for item in x_bounds) or x_bounds[0] >= x_bounds[1]:
+                raise ValueError(f"nodes.{node_id}.route_x_m must have finite min < max")
+        motion = Motion(
+            _finite_vector(value.get("start_m"), where=f"nodes.{node_id}.start_m"),
+            _finite_vector(
+                value.get("velocity_mps", [0.0, 0.0, 0.0]),
+                where=f"nodes.{node_id}.velocity_mps",
+            ),
+            x_bounds,
+            str(value.get("mobility", "static")),
+        )
+        nodes[node_id] = ScenarioNode(motion, tx_array, rx_array)
+
+    links: list[ScenarioLink] = []
+    seen_links: set[tuple[str, str, str]] = set()
+    for index, value in enumerate(raw_links):
+        if not isinstance(value, dict):
+            raise ValueError(f"links[{index}] must be an object")
+        source = value.get("from")
+        destination = value.get("to")
+        direction = value.get("direction")
+        model = value.get("model", MODEL_ID)
+        if source not in nodes or destination not in nodes:
+            raise ValueError(f"links[{index}] references an unknown node")
+        if direction not in ("downlink", "uplink", "crosstalk"):
+            raise ValueError(f"links[{index}].direction is invalid")
+        if not isinstance(model, str) or not model:
+            raise ValueError(f"links[{index}].model must be a non-empty string")
+        key = (source, destination, model)
+        if key in seen_links:
+            raise ValueError(f"links[{index}] duplicates {source}>{destination}:{model}")
+        seen_links.add(key)
+        lane_count = (
+            nodes[source].tx_array.antenna_count
+            * nodes[destination].rx_array.antenna_count
+        )
+        if lane_count > 16:
+            raise ValueError(
+                f"links[{index}] has {lane_count} lanes; broker limit is 16"
+            )
+        links.append(ScenarioLink(source, destination, direction, model))
+
+    name = root.get("name", path.stem)
+    scene = root.get("scene")
+    if not isinstance(name, str) or not name:
+        raise ValueError("scenario name must be a non-empty string")
+    if scene is not None and (not isinstance(scene, str) or not scene):
+        raise ValueError("scenario scene must be a non-empty string")
+    return ScenarioDefinition(name, nodes, tuple(links), scene)
+
+
 DEFAULT_MOTION = {
     "gnb0": Motion(
         (32.5, 10.5, DEFAULT_GNB_HEIGHT_M),
@@ -166,6 +324,11 @@ def link_layout(
 
 
 def configured_motion(args: argparse.Namespace) -> dict[str, Motion]:
+    configured = getattr(args, "scenario_definition", None)
+    if configured is not None:
+        return {
+            node_id: node.motion for node_id, node in configured.nodes.items()
+        }
     motion = {
         "gnb0": Motion(
             (
@@ -196,16 +359,41 @@ def configured_motion(args: argparse.Namespace) -> dict[str, Motion]:
     return {node_id: motion[node_id] for node_id in node_ids}
 
 
+def effective_scenario(args: argparse.Namespace) -> ScenarioDefinition:
+    configured = getattr(args, "scenario_definition", None)
+    if configured is not None:
+        return configured
+    node_ids, downlink, uplink, crosstalk, _ = link_layout(args.layout)
+    motion = configured_motion(args)
+    nodes = {
+        node_id: ScenarioNode(motion[node_id], ArraySpec(), ArraySpec())
+        for node_id in node_ids
+    }
+    links = tuple(
+        [ScenarioLink(source, destination, "downlink") for source, destination in downlink]
+        + [ScenarioLink(source, destination, "uplink") for source, destination in uplink]
+        + [ScenarioLink(source, destination, "crosstalk") for source, destination in crosstalk]
+    )
+    return ScenarioDefinition(args.layout, nodes, links, args.scene)
+
+
 def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
     """Describe the effective Sionna setup in a UI-friendly stable schema."""
 
-    motion = configured_motion(args)
-    _, downlink_links, uplink_links, crosstalk_links, links = link_layout(
-        args.layout
-    )
+    definition = effective_scenario(args)
+    motion = {node_id: node.motion for node_id, node in definition.nodes.items()}
+    link_groups = {
+        direction: sum(link.direction == direction for link in definition.links)
+        for direction in ("downlink", "uplink", "crosstalk")
+    }
+    tx_labels = {node.tx_array.label() for node in definition.nodes.values()}
+    rx_labels = {node.rx_array.label() for node in definition.nodes.values()}
     return {
-        "layout": args.layout,
-        "scene": args.scene,
+        "layout": definition.name,
+        "scenario_config": (
+            str(args.scenario_config) if args.scenario_config is not None else None
+        ),
+        "scene": definition.scene or args.scene,
         "simple_road": {
             "enabled": args.simple_road,
             "width_m": args.road_width_m if args.simple_road else None,
@@ -226,8 +414,8 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
             },
         },
         "antenna": {
-            "tx": "1x1 isotropic, vertical polarization",
-            "rx": "1x1 isotropic, vertical polarization",
+            "tx": next(iter(tx_labels)) if len(tx_labels) == 1 else "per-node configuration",
+            "rx": next(iter(rx_labels)) if len(rx_labels) == 1 else "per-node configuration",
         },
         "sample_rate_hz": args.sample_rate_hz,
         "update_rate_hz": args.update_hz,
@@ -243,14 +431,23 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
                 "speed_mps": math.sqrt(sum(value * value for value in item.velocity)),
                 "mobility": item.mobility,
                 "route_x_m": item.x_bounds,
+                "tx_array": definition.nodes[node_id].tx_array.label(),
+                "rx_array": definition.nodes[node_id].rx_array.label(),
+                "tx_antennas": definition.nodes[node_id].tx_array.antenna_count,
+                "rx_antennas": definition.nodes[node_id].rx_array.antenna_count,
             }
             for node_id, item in motion.items()
         },
-        "link_count": len(links),
+        "link_count": len(definition.links),
+        "matrix_lane_count": sum(
+            definition.nodes[link.source].tx_array.antenna_count
+            * definition.nodes[link.destination].rx_array.antenna_count
+            for link in definition.links
+        ),
         "link_groups": {
-            "downlink": len(downlink_links),
-            "uplink": len(uplink_links),
-            "ue_crosstalk": len(crosstalk_links),
+            "downlink": link_groups["downlink"],
+            "uplink": link_groups["uplink"],
+            "ue_crosstalk": link_groups["crosstalk"],
         },
         "control_endpoint": None if args.dry_run else args.control_endpoint,
         "dry_run": args.dry_run,
@@ -284,6 +481,11 @@ def parse_range(text: str) -> tuple[float, float]:
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-endpoint", default="tcp://127.0.0.1:5559")
+    parser.add_argument(
+        "--scenario-config",
+        type=pathlib.Path,
+        help="JSON node/link/antenna configuration; overrides --layout motion and arrays",
+    )
     parser.add_argument(
         "--layout",
         choices=("2x2", "1x1"),
@@ -372,11 +574,20 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("--road-width-m must be positive")
     if not math.isfinite(args.gnb_height_m) or args.gnb_height_m <= 0.0:
         parser.error("--gnb-height-m must be finite and positive")
-    for node_id in ("ue0", "ue1"):
-        start_x = getattr(args, f"{node_id}_start")[0]
-        low, high = getattr(args, f"{node_id}_route_x")
-        if not low <= start_x <= high:
-            parser.error(f"--{node_id}-start x must be inside --{node_id}-route-x")
+    if args.scenario_config is None:
+        for node_id in ("ue0", "ue1"):
+            start_x = getattr(args, f"{node_id}_start")[0]
+            low, high = getattr(args, f"{node_id}_route_x")
+            if not low <= start_x <= high:
+                parser.error(f"--{node_id}-start x must be inside --{node_id}-route-x")
+        args.scenario_definition = None
+    else:
+        try:
+            args.scenario_definition = load_scenario_config(args.scenario_config)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if args.scenario_definition.scene is not None:
+            args.scene = args.scenario_definition.scene
     return args
 
 
@@ -624,6 +835,11 @@ def import_sionna() -> tuple[Any, Any]:
         import numpy as np  # type: ignore
         import sionna.rt as rt  # type: ignore
     except ImportError as exc:  # pragma: no cover - live dependency path
+        if "sionna" not in str(exc).lower():
+            raise RuntimeError(
+                f"Sionna RT import failed because a native runtime dependency "
+                f"is unavailable: {exc}"
+            ) from exc
         raise RuntimeError(
             "Sionna RT is not installed. Run: "
             "python3 -m pip install -r scripts/sionna_rt/requirements.txt"
@@ -637,20 +853,36 @@ def numpy_value(value: Any, np: Any) -> Any:
     return np.asarray(value)
 
 
-def siso_slice(array: Any, rx_index: int, tx_index: int, *, has_time: bool) -> Any:
-    """Index either synthetic-array or center-device Sionna tensor layouts."""
+def antenna_slice(
+    array: Any,
+    rx_index: int,
+    tx_index: int,
+    rx_port: int,
+    tx_port: int,
+    *,
+    has_time: bool,
+) -> Any:
+    """Index synthetic-array tensors, with center-device layout fallback."""
 
     if has_time:
         if array.ndim == 6:
-            return array[rx_index, 0, tx_index, 0, :, 0]
+            return array[rx_index, rx_port, tx_index, tx_port, :, 0]
         if array.ndim == 4:
+            if rx_port != 0 or tx_port != 0:
+                raise RuntimeError("Sionna CIR omitted antenna axes for a multi-antenna link")
             return array[rx_index, tx_index, :, 0]
     else:
         if array.ndim == 5:
-            return array[rx_index, 0, tx_index, 0, :]
+            return array[rx_index, rx_port, tx_index, tx_port, :]
         if array.ndim == 3:
             return array[rx_index, tx_index, :]
     raise RuntimeError(f"unexpected Sionna tensor rank {array.ndim}")
+
+
+def siso_slice(array: Any, rx_index: int, tx_index: int, *, has_time: bool) -> Any:
+    """Backward-compatible scalar wrapper used by existing callers/tests."""
+
+    return antenna_slice(array, rx_index, tx_index, 0, 0, has_time=has_time)
 
 
 class SionnaScenario:
@@ -677,21 +909,26 @@ class SionnaScenario:
         self.scene = self.rt.load_scene(str(scene_xml), merge_shapes=True)
         self.scene.frequency = args.downlink_frequency_hz
         self.scene.bandwidth = args.sample_rate_hz
-        self.scene.tx_array = self.rt.PlanarArray(
-            num_rows=1, num_cols=1, pattern="iso", polarization="V"
+        self.definition = effective_scenario(args)
+        self.motion = {
+            node_id: node.motion for node_id, node in self.definition.nodes.items()
+        }
+        self.node_ids = tuple(self.definition.nodes)
+        self.downlink_links = tuple(
+            link for link in self.definition.links if link.direction == "downlink"
         )
-        self.scene.rx_array = self.rt.PlanarArray(
-            num_rows=1, num_cols=1, pattern="iso", polarization="V"
+        self.uplink_links = tuple(
+            link for link in self.definition.links if link.direction == "uplink"
         )
-
-        self.motion = configured_motion(args)
-        (
-            self.node_ids,
-            self.downlink_links,
-            self.uplink_links,
-            self.crosstalk_links,
-            self.links,
-        ) = link_layout(args.layout)
+        self.crosstalk_links = tuple(
+            link for link in self.definition.links if link.direction == "crosstalk"
+        )
+        self.links = self.definition.links
+        first_link = self.links[0]
+        self.configure_arrays(
+            self.definition.nodes[first_link.source].tx_array,
+            self.definition.nodes[first_link.destination].rx_array,
+        )
         self.current_velocities = {
             node_id: motion.velocity_at(0.0)
             for node_id, motion in self.motion.items()
@@ -718,6 +955,20 @@ class SionnaScenario:
             for index, name in enumerate(self.scene.receivers.keys())
         }
         self.solver = self.rt.PathSolver()
+
+    def configure_arrays(self, tx: ArraySpec, rx: ArraySpec) -> None:
+        self.scene.tx_array = self.rt.PlanarArray(
+            num_rows=tx.rows,
+            num_cols=tx.cols,
+            pattern=tx.pattern,
+            polarization=tx.polarization,
+        )
+        self.scene.rx_array = self.rt.PlanarArray(
+            num_rows=rx.rows,
+            num_cols=rx.cols,
+            pattern=rx.pattern,
+            polarization=rx.polarization,
+        )
 
     def update_positions(self, elapsed_seconds: float) -> dict[str, tuple[float, float, float]]:
         positions: dict[str, tuple[float, float, float]] = {}
@@ -750,11 +1001,11 @@ class SionnaScenario:
     def profiles(
         self,
         paths: Any,
-        links: Sequence[tuple[str, str]],
+        links: Sequence[ScenarioLink],
         *,
         direction: str,
         carrier_frequency_hz: float,
-    ) -> tuple[dict[str, list[Tap]], list[dict[str, Any]]]:
+    ) -> tuple[dict[str, MatrixProfile], list[dict[str, Any]]]:
         coefficients, delays = paths.cir(
             sampling_frequency=self.args.update_hz,
             num_time_steps=1,
@@ -763,84 +1014,126 @@ class SionnaScenario:
         )
         coefficients = numpy_value(coefficients, self.np)
         delays = numpy_value(delays, self.np)
+        dopplers = numpy_value(paths.doppler, self.np)
         valid = numpy_value(paths.valid, self.np)
 
-        profiles: dict[str, list[Tap]] = {}
+        profiles: dict[str, MatrixProfile] = {}
         statuses: list[dict[str, Any]] = []
-        for source, destination in links:
+        for link in links:
+            source = link.source
+            destination = link.destination
             tx_index = self.tx_indices[source]
             rx_index = self.rx_indices[destination]
-            coeff_slice = siso_slice(coefficients, rx_index, tx_index, has_time=True)
-            delay_slice = siso_slice(delays, rx_index, tx_index, has_time=False)
-            valid_slice = siso_slice(valid, rx_index, tx_index, has_time=False)
-            rays = [
-                Ray(float(delay), complex(coefficient))
-                for coefficient, delay, is_valid in zip(
-                    coeff_slice, delay_slice, valid_slice
-                )
-                if bool(is_valid)
-            ]
-            link_id = control_link_id(source, destination, MODEL_ID)
-            taps = rays_to_taps(
-                rays,
-                sample_rate_hz=self.args.sample_rate_hz,
-                gain_offset_db=self.args.gain_offset_db,
+            tx_count = self.definition.nodes[source].tx_array.antenna_count
+            rx_count = self.definition.nodes[destination].rx_array.antenna_count
+            lane_profiles: list[LaneProfile] = []
+            lane_statuses: list[dict[str, Any]] = []
+            all_rays: list[Ray] = []
+            for rx_port in range(rx_count):
+                for tx_port in range(tx_count):
+                    coeff_slice = antenna_slice(
+                        coefficients, rx_index, tx_index, rx_port, tx_port,
+                        has_time=True,
+                    )
+                    delay_slice = antenna_slice(
+                        delays, rx_index, tx_index, rx_port, tx_port,
+                        has_time=False,
+                    )
+                    valid_slice = antenna_slice(
+                        valid, rx_index, tx_index, rx_port, tx_port,
+                        has_time=False,
+                    )
+                    doppler_slice = antenna_slice(
+                        dopplers, rx_index, tx_index, rx_port, tx_port,
+                        has_time=False,
+                    )
+                    rays = [
+                        Ray(
+                            float(delay),
+                            complex(coefficient),
+                            float(doppler),
+                        )
+                        for coefficient, delay, doppler, is_valid in zip(
+                            coeff_slice, delay_slice, doppler_slice, valid_slice
+                        )
+                        if bool(is_valid)
+                    ]
+                    taps = rays_to_taps(
+                        rays,
+                        sample_rate_hz=self.args.sample_rate_hz,
+                        gain_offset_db=self.args.gain_offset_db,
+                    )
+                    lane_profiles.append(
+                        LaneProfile(rx_port, tx_port, tuple(taps))
+                    )
+                    lane_status = channel_status(
+                        "",
+                        rays,
+                        taps,
+                        sample_rate_hz=self.args.sample_rate_hz,
+                    )
+                    lane_status.update({"rx_port": rx_port, "tx_port": tx_port})
+                    lane_statuses.append(lane_status)
+                    all_rays.extend(rays)
+
+            link_id = control_link_id(source, destination, link.model)
+            matrix_profile = MatrixProfile(
+                nt=tx_count, nr=rx_count, lanes=tuple(lane_profiles)
             )
-            profiles[link_id] = taps
-            status = channel_status(
-                link_id,
-                rays,
-                taps,
-                sample_rate_hz=self.args.sample_rate_hz,
+            profiles[link_id] = matrix_profile
+            # Keep the established top-level scalar fields for charts and
+            # tables, using lane (0,0), and add the full matrix beside them.
+            status = dict(lane_statuses[0])
+            status["link_id"] = link_id
+            total_power = sum(abs(ray.coefficient) ** 2 for ray in all_rays)
+            status["total_path_power_db"] = (
+                10.0 * math.log10(total_power) if total_power > 0.0 else None
             )
+            status["matrix"] = {"nt": tx_count, "nr": rx_count}
+            status["lanes"] = lane_statuses
             status["source"] = source
             status["destination"] = destination
-            status["model"] = MODEL_ID
-            status["direction"] = direction
+            status["model"] = link.model
+            status["direction"] = link.direction
             status["carrier_frequency_hz"] = carrier_frequency_hz
             statuses.append(status)
         return profiles, statuses
 
     def trace_all_profiles(
         self,
-    ) -> tuple[dict[str, list[Tap]], list[dict[str, Any]], dict[str, float]]:
+    ) -> tuple[dict[str, MatrixProfile], list[dict[str, Any]], dict[str, float]]:
         """Trace desired/inter-cell and UE-to-UE crosstalk profiles."""
 
         timings_ms: dict[str, float] = {}
-        profiles: dict[str, list[Tap]] = {}
+        profiles: dict[str, MatrixProfile] = {}
         statuses: list[dict[str, Any]] = []
 
-        # A common carrier is useful for TDD and for compatibility with the
-        # former --carrier-frequency-hz behavior. In that case one solve can
-        # cover all ten directed links.
-        if self.args.downlink_frequency_hz == self.args.uplink_frequency_hz:
-            started = time.monotonic()
-            paths = self.trace(self.args.downlink_frequency_hz)
-            one_profiles, one_statuses = self.profiles(
-                paths,
-                self.links,
-                direction="bidirectional",
-                carrier_frequency_hz=self.args.downlink_frequency_hz,
+        groups: dict[tuple[float, ArraySpec, ArraySpec], list[ScenarioLink]] = {}
+        for link in self.links:
+            frequency_hz = (
+                self.args.downlink_frequency_hz
+                if link.direction == "downlink"
+                else self.args.uplink_frequency_hz
             )
-            timings_ms["bidirectional"] = (time.monotonic() - started) * 1000.0
-            return one_profiles, one_statuses, timings_ms
+            key = (
+                frequency_hz,
+                self.definition.nodes[link.source].tx_array,
+                self.definition.nodes[link.destination].rx_array,
+            )
+            groups.setdefault(key, []).append(link)
 
-        for direction, frequency_hz, links in (
-            ("downlink", self.args.downlink_frequency_hz, self.downlink_links),
-            ("uplink", self.args.uplink_frequency_hz, self.uplink_links),
-            ("crosstalk", self.args.uplink_frequency_hz, self.crosstalk_links),
-        ):
-            if not links:
-                continue
+        for group_index, ((frequency_hz, tx_array, rx_array), links) in enumerate(groups.items()):
+            self.configure_arrays(tx_array, rx_array)
             started = time.monotonic()
             paths = self.trace(frequency_hz)
             direction_profiles, direction_statuses = self.profiles(
                 paths,
                 links,
-                direction=direction,
+                direction=links[0].direction if len({link.direction for link in links}) == 1 else "mixed",
                 carrier_frequency_hz=frequency_hz,
             )
-            timings_ms[direction] = (time.monotonic() - started) * 1000.0
+            label = f"group_{group_index}_{rx_array.antenna_count}x{tx_array.antenna_count}"
+            timings_ms[label] = (time.monotonic() - started) * 1000.0
             profiles.update(direction_profiles)
             statuses.extend(direction_statuses)
         return profiles, statuses, timings_ms
@@ -856,7 +1149,7 @@ def append_status(path: pathlib.Path | None, record: dict[str, Any]) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    *_, configured_links = link_layout(args.layout)
+    configured_links = effective_scenario(args).links
     process_id = os.getpid()
     session_id = f"sionna-rt-{process_id}-{time.time_ns()}"
     process_started_unix_ms = time.time_ns() // 1_000_000
@@ -957,7 +1250,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     detail=f"sending the {len(configured_links)}-link profile batch and waiting for ACK",
                 )
                 control_started = time.monotonic()
-                reply = client.send_profiles(profiles, batch_id=batch_id)
+                reply = client.send_matrix_profiles(profiles, batch_id=batch_id)
                 control_transaction_ms: float | None = (
                     time.monotonic() - control_started
                 ) * 1000.0
@@ -974,8 +1267,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "dry_run": True,
                     "batch_id": batch_id,
                     "messages": [
-                        make_profile_swap(link_id, taps, batch_id=batch_id)
-                        for link_id, taps in profiles.items()
+                        make_matrix_profile_swap(link_id, profile, batch_id=batch_id)
+                        for link_id, profile in profiles.items()
                     ],
                 }
 

@@ -19,14 +19,18 @@ report_dir=""
 timestamp=""
 channel_mode="legacy"
 run_duration_seconds="15"
+run_family=""
+broker_ready_device="ue0"
 control_endpoint=""
 telemetry_endpoint=""
 sionna_python=""
 sionna_bridge=""
+sionna_scenario_config=""
 sionna_status_jsonl=""
 sionna_update_hz="2"
 sionna_ready_seconds="120"
 live_ready_path=""
+live_ready_event="native_sionna_1x1_live_ready"
 
 usage_error()
 {
@@ -54,14 +58,18 @@ while [[ "$#" -gt 0 ]]; do
     --timestamp) timestamp="${2:-}"; shift 2 ;;
     --channel-mode) channel_mode="${2:-}"; shift 2 ;;
     --run-duration-seconds) run_duration_seconds="${2:-}"; shift 2 ;;
+    --run-family) run_family="${2:-}"; shift 2 ;;
+    --broker-ready-device) broker_ready_device="${2:-}"; shift 2 ;;
     --control-endpoint) control_endpoint="${2:-}"; shift 2 ;;
     --telemetry-endpoint) telemetry_endpoint="${2:-}"; shift 2 ;;
     --sionna-python) sionna_python="${2:-}"; shift 2 ;;
     --sionna-bridge) sionna_bridge="${2:-}"; shift 2 ;;
+    --sionna-scenario-config) sionna_scenario_config="${2:-}"; shift 2 ;;
     --sionna-status-jsonl) sionna_status_jsonl="${2:-}"; shift 2 ;;
     --sionna-update-hz) sionna_update_hz="${2:-}"; shift 2 ;;
     --sionna-ready-seconds) sionna_ready_seconds="${2:-}"; shift 2 ;;
     --live-ready-path) live_ready_path="${2:-}"; shift 2 ;;
+    --live-ready-event) live_ready_event="${2:-}"; shift 2 ;;
     *) usage_error "unknown argument: $1" ;;
   esac
 done
@@ -70,8 +78,12 @@ done
 [[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
   usage_error "--channel-mode must be legacy or sionna"
 [[ "${run_duration_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid run duration"
+if [[ "${mode}" == "run" ]]; then
+  [[ "${run_family}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || usage_error "invalid --run-family"
+fi
 [[ "${outer_uid}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid --outer-uid"
 [[ "${physical_gpu}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid --physical-gpu"
+[[ "${broker_ready_device}" =~ ^[A-Za-z0-9_-]+$ ]] || usage_error "invalid --broker-ready-device"
 [[ "${netns_dir}" == /* && -d "${netns_dir}" && ! -L "${netns_dir}" ]] || usage_error "invalid --netns-dir"
 [[ "$(readlink /proc/self/ns/net)" != "${parent_netns}" ]] || usage_error "network namespace was not isolated"
 [[ "$(readlink /proc/self/ns/mnt)" != "${parent_mntns}" ]] || usage_error "mount namespace was not isolated"
@@ -89,12 +101,15 @@ done
 if [[ "${mode}" == "run" && "${channel_mode}" == "sionna" ]]; then
   [[ -x "${sionna_python}" ]] || usage_error "Sionna Python is missing"
   [[ -f "${sionna_bridge}" && ! -L "${sionna_bridge}" ]] || usage_error "Sionna bridge is missing"
+  [[ -f "${sionna_scenario_config}" && ! -L "${sionna_scenario_config}" ]] || \
+    usage_error "Sionna scenario config is missing"
   [[ "${sionna_status_jsonl}" == /* && "${live_ready_path}" == /* ]] || \
     usage_error "Sionna artifact paths must be absolute"
   [[ "${control_endpoint}" == ipc://* && "${telemetry_endpoint}" == ipc://* ]] || \
     usage_error "rootless Sionna control and telemetry must use ipc:// endpoints"
   [[ "${sionna_update_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || usage_error "invalid Sionna update rate"
   [[ "${sionna_ready_seconds}" =~ ^[1-9][0-9]*$ ]] || usage_error "invalid Sionna ready timeout"
+  [[ "${live_ready_event}" =~ ^[a-z0-9_]+$ ]] || usage_error "invalid live-ready event"
 fi
 
 mount_active=0
@@ -339,16 +354,16 @@ write_live_ready()
   [[ "${channel_mode}" == "sionna" ]] || return 0
   /usr/bin/python3 - "${live_ready_path}" "${timestamp}" "${rrc}" "${pdu}" \
     "${ping_ok}" "${sionna_status_jsonl}" "${control_endpoint}" \
-    "${telemetry_endpoint}" <<'PY'
+    "${telemetry_endpoint}" "${live_ready_event}" <<'PY'
 import json
 import sys
 
 (path, timestamp, rrc, pdu, ping_ok, status_jsonl, control_endpoint,
- telemetry_endpoint) = sys.argv[1:]
+ telemetry_endpoint, live_ready_event) = sys.argv[1:]
 with open(path, "x", encoding="utf-8") as output:
     json.dump(
         {
-            "event": "native_sionna_1x1_live_ready",
+            "event": live_ready_event,
             "timestamp": timestamp,
             "rrc_connected": int(rrc),
             "pdu_session_established": int(pdu),
@@ -393,8 +408,6 @@ run_stack()
   ip netns add "${nested_name}"
   nsenter --net="/run/netns/${nested_name}" -- ip link set lo up
 
-  local run_family="ocudu-legacy-1x1-native"
-  [[ "${channel_mode}" == "sionna" ]] && run_family="ocudu-sionna-1x1-native"
   local data_dir="${native_root}/data/${run_family}/${timestamp}"
   local mongod_pid fivegc_pid broker_pid gnb_pid srsue_pid sionna_pid=""
   local broker_index broker_exit_deadline sionna_index=-1 sionna_failed=0
@@ -461,19 +474,21 @@ PY
   else
     broker_exit_deadline=0
   fi
-  wait_log "${log_dir}/broker.log" 'event=socket_ready device=ue0 ' "${broker_pid}" 15 || usage_error "broker did not become ready"
+  wait_log "${log_dir}/broker.log" "event=socket_ready device=${broker_ready_device} " \
+    "${broker_pid}" 15 || usage_error "broker did not become ready"
   if [[ "${channel_mode}" == "sionna" ]]; then
     wait_log "${log_dir}/broker.log" 'event=control_start ' "${broker_pid}" 15 || \
       usage_error "broker control server did not become ready"
     start_group sionna "${log_dir}/sionna-bridge.log" \
       env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${sionna_python}" "${sionna_bridge}" \
-      --layout 1x1 --control-endpoint "${control_endpoint}" --duration 0 \
+      --scenario-config "${sionna_scenario_config}" \
+      --control-endpoint "${control_endpoint}" --duration 0 \
       --update-hz "${sionna_update_hz}" --status-jsonl "${sionna_status_jsonl}"
     sionna_pid="${started_pid}"
     sionna_index=$((${#process_pids[@]} - 1))
     wait_log "${log_dir}/sionna-bridge.log" '"event":"sionna_rt_update"' \
       "${sionna_pid}" "${sionna_ready_seconds}" || \
-      usage_error "Sionna RT did not publish its first 1x1 profile update"
+      usage_error "Sionna RT did not publish its first matrix profile update"
   fi
   start_group gnb "${log_dir}/gnb-console.log" "${gnb}" -c "${config_dir}/gnb.yaml"
   gnb_pid="${started_pid}"

@@ -45,6 +45,15 @@ topology_rel="${OCUDU_MUE_TOPOLOGY:-examples/topology.ocudu-docker.multi-ue.cuda
 matrix_enabled="${OCUDU_MUE_MATRIX:-0}"
 matrix_args="${OCUDU_MUE_MATRIX_ARGS:-}"
 gate_name="${OCUDU_MUE_GATE_NAME:-ocudu-multi-ue}"
+channel_mode="${OCUDU_MUE_CHANNEL_MODE:-static}"
+sionna_python="${OCUDU_MUE_SIONNA_PYTHON:-${REMOTE_WORKSPACE}/venvs/sionna/bin/python}"
+sionna_update_hz="${OCUDU_MUE_SIONNA_UPDATE_HZ:-2}"
+sionna_ready_seconds="${OCUDU_MUE_SIONNA_READY_SECONDS:-120}"
+sionna_web_port="${OCUDU_MUE_WEB_PORT:-8080}"
+[[ "${channel_mode}" == "static" || "${channel_mode}" == "sionna" ]] || {
+  echo "OCUDU_MUE_CHANNEL_MODE must be static or sionna" >&2
+  exit 2
+}
 
 case "${REMOTE_PROJECT_ROOT}" in
   "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
@@ -74,7 +83,12 @@ remote_sh bash -s -- \
   "$(printf '%s' "${matrix_args}" | base64 | tr -d '\n'):-" \
   "${ping_count}" \
   "${ue_count}" \
-  "${gate_name}" <<'REMOTE'
+  "${gate_name}" \
+  "${channel_mode}" \
+  "${sionna_python}" \
+  "${sionna_update_hz}" \
+  "${sionna_ready_seconds}" \
+  "${sionna_web_port}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -101,6 +115,11 @@ fi
 ping_count="${16}"
 ue_count="${17}"
 gate_name="${18}"
+channel_mode="${19}"
+sionna_python="${20}"
+sionna_update_hz="${21}"
+sionna_ready_seconds="${22}"
+sionna_web_port="${23}"
 
 expand_remote_path() {
   case "$1" in
@@ -121,6 +140,26 @@ project_root="$(expand_remote_path "${project_root}")"
 builds_root="$(expand_remote_path "${builds_root}")"
 results_root="$(expand_remote_path "${results_root}")"
 ocudu_root="$(expand_remote_path "${ocudu_root}")"
+sionna_python="$(expand_remote_path "${sionna_python}")"
+
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ -x "${sionna_python}" ]] || { echo "missing Sionna Python: ${sionna_python}" >&2; exit 2; }
+  [[ "${sionna_web_port}" =~ ^[1-9][0-9]*$ && "${sionna_web_port}" -le 65535 ]] || {
+    echo "invalid OCUDU_MUE_WEB_PORT" >&2
+    exit 2
+  }
+  if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
+    optix_file="$(find "${workspace}/local" -type f -name 'libnvoptix.so*' -print -quit 2>/dev/null || true)"
+    if [[ -n "${optix_file}" ]]; then
+      export DRJIT_LIBOPTIX_PATH="${optix_file}"
+      export LD_LIBRARY_PATH="$(dirname "${optix_file}"):${LD_LIBRARY_PATH:-}"
+    fi
+  fi
+  "${sionna_python}" -c 'import sionna.rt, zmq' >/dev/null 2>&1 || {
+    echo "${sionna_python} cannot import sionna.rt and zmq" >&2
+    exit 2
+  }
+fi
 
 if [[ ! -f "${workspace}/tools/env.sh" ]]; then
   echo "missing ${workspace}/tools/env.sh; run scripts/remote/bootstrap-user-tools.sh first" >&2
@@ -155,6 +194,7 @@ write_summary() {
 {
   "timestamp": "${timestamp}",
   "status": "${status}",
+  "channel_mode": "${channel_mode}",
   "duration_seconds": ${duration_seconds},
   "ue_count": ${ue_count},
   "ues": [$(for ((i = 0; i < ue_count; i++)); do
@@ -169,6 +209,8 @@ write_summary() {
   "zmq_errors": ${zmq_errors},
   "matrix_enabled": ${matrix_enabled:-0},
   "matrix_status": ${matrix_status:-0},
+  "sionna_updates": ${sionna_updates:-0},
+  "web_ui": $([[ "${channel_mode}" == "sionna" ]] && printf '"http://127.0.0.1:%s"' "${sionna_web_port}" || printf 'null'),
   "gate": "${gate_name}",
   "log_dir": "${log_dir}"
 }
@@ -393,6 +435,8 @@ export OCUDU_ZMQ_DOCKERFILE="${ocudu_dockerfile}"
 export OS=ubuntu OS_VERSION=24.04
 srsue_image="ocudu-gpu-channel/srsue-zmq:${srsran_ref}"
 broker_pid=""
+sionna_pid=""
+sionna_updates=0
 
 cleanup() {
   set +e
@@ -400,6 +444,7 @@ cleanup() {
     [[ -n "${ue_pids[i]:-}" ]] && kill "${ue_pids[i]}" >/dev/null 2>&1
   done
   [[ -n "${broker_pid}" ]] && kill "${broker_pid}" >/dev/null 2>&1
+  [[ -n "${sionna_pid}" ]] && kill "${sionna_pid}" >/dev/null 2>&1
   [[ -n "${broker_image}" ]] && docker rm -f ocudu_broker_mue >/dev/null 2>&1
   for ((i = 0; i < ue_count; i++)); do docker rm -f "ocudu_srsue_${i}" >/dev/null 2>&1; done
   docker cp ocudu_gnb:/tmp/gnb.log "${log_dir}/ocudu-gnb-internal.log" >/dev/null 2>&1
@@ -432,11 +477,17 @@ echo "open5gs: ${h:-?}"
 
 # CUDA broker on the multi-UE topology (gnb0 RX = ue0->gnb0 + ue1->gnb0).
 # Native binary by default; container image when OCUDU_MUE_BROKER_IMAGE is set.
+broker_duration="${duration_seconds}s"
+broker_extra=()
+if [[ "${channel_mode}" == "sionna" ]]; then
+  broker_duration="0s"
+  broker_extra=(--control-endpoint 'tcp://*:5559' --telemetry-endpoint 'tcp://*:5560' --telemetry-rate-hz 20)
+fi
 if [[ -z "${broker_image}" ]]; then
   "${cuda_build}/ocudu-gpu-channel" \
     --config "${project_root}/${topology_rel}" \
     "${capture_args[@]}" \
-    --duration "${duration_seconds}s" >"${log_dir}/broker.log" 2>&1 &
+    --duration "${broker_duration}" "${broker_extra[@]}" >"${log_dir}/broker.log" 2>&1 &
   broker_pid="$!"
 else
   echo "broker mode: container image ${broker_image}" >"${log_dir}/broker-mode.txt"
@@ -445,8 +496,39 @@ else
     -v "${project_root}:/work:ro" \
     "${broker_image}" \
     --config "/work/${topology_rel}" \
-    --duration "${duration_seconds}s" >"${log_dir}/broker.log" 2>&1 &
+    --duration "${broker_duration}" "${broker_extra[@]}" >"${log_dir}/broker.log" 2>&1 &
   broker_pid="$!"
+fi
+
+if [[ "${channel_mode}" == "sionna" ]]; then
+  for _ in $(seq 1 50); do
+    grep -q 'event=control_start' "${log_dir}/broker.log" 2>/dev/null && break
+    kill -0 "${broker_pid}" 2>/dev/null || write_summary "broker_failed_before_sionna" 1
+    sleep 0.1
+  done
+  grep -q 'event=control_start' "${log_dir}/broker.log" 2>/dev/null || \
+    write_summary "control_server_not_ready" 1
+  "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
+    --python "${sionna_python}" \
+    --scenario "${project_root}/examples/sionna/ocudu-docker-multi-ue.json" \
+    --control-endpoint tcp://127.0.0.1:5559 \
+    --telemetry-endpoint tcp://127.0.0.1:5560 \
+    --status-jsonl "${log_dir}/sionna-status.jsonl" \
+    --update-hz "${sionna_update_hz}" --duration 0 \
+    --ready-seconds "${sionna_ready_seconds}" --port "${sionna_web_port}" \
+    >"${log_dir}/sionna-web-ui.log" 2>&1 &
+  sionna_pid="$!"
+  sionna_ready=0
+  for _ in $(seq 1 "${sionna_ready_seconds}"); do
+    if grep -q 'event=sionna_web_ui_ready' "${log_dir}/sionna-web-ui.log" 2>/dev/null; then
+      sionna_ready=1
+      break
+    fi
+    kill -0 "${sionna_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  [[ "${sionna_ready}" -eq 1 ]] || write_summary "sionna_web_ui_not_ready" 2
+  echo "Sionna Web UI: http://127.0.0.1:${sionna_web_port}"
 fi
 
 "${compose[@]}" up -d gnb >"${log_dir}/docker-gnb-up.log" 2>&1
@@ -533,6 +615,15 @@ if [[ "${matrix_enabled}" == "1" ]]; then
 fi
 
 set +e
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ -n "${sionna_pid}" ]] && { kill -INT "${sionna_pid}" >/dev/null 2>&1; wait "${sionna_pid}" >/dev/null 2>&1; sionna_pid=""; }
+  sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-web-ui.log" 2>/dev/null)" || sionna_updates=0
+  if [[ -z "${broker_image}" ]]; then
+    kill -INT "${broker_pid}" >/dev/null 2>&1
+  else
+    docker stop -t 10 ocudu_broker_mue >/dev/null 2>&1
+  fi
+fi
 wait "${broker_pid}"; broker_status="$?"; broker_pid=""
 for ((i = 0; i < ue_count; i++)); do
   docker rm -f "ocudu_srsue_${i}" >/dev/null 2>&1

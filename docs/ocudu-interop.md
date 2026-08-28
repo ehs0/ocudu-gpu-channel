@@ -109,7 +109,67 @@ Pass criteria:
 
 If srsUE build/runtime fails before attach while the broker path is otherwise intact, record the result as a UE-stack blocker, not as a CUDA broker failure.
 
-## Local 2-gNB / 2-UE Sionna Test
+## Sionna RT + Web UI validation
+
+The bridge now reads node positions, directed links, model IDs, and TX/RX
+arrays from a JSON scenario file. It sends one `matrix_profile_swap` for each
+physical link. The Broker validates `Nt` and `Nr` against the topology's
+startup port lists, requires every `(rx_port, tx_port)` lane exactly once, and
+snaps the complete matrix at one slot boundary. Array dimensions cannot change
+during a run.
+
+The four tracked scenario/topology pairs are:
+
+| Validation | Broker topology | Sionna scenario |
+|---|---|---|
+| single cell / UE | `examples/topology.ocudu-docker.cuda.yaml` | `examples/sionna/ocudu-docker.json` |
+| one cell / multiple UEs | `examples/topology.ocudu-docker.multi-ue.cuda.yaml` | `examples/sionna/ocudu-docker-multi-ue.json` |
+| interference + crosstalk graph | `examples/topology.graph.cuda.yaml` | `examples/sionna/graph.json` |
+| two cells / eight directed links | `examples/topology.multi-gnb.cuda.yaml` | `examples/sionna/multi-gnb.json` |
+
+The existing post-TDL chain remains active. For example, the near/far path
+loss and AWGN settings still apply after Sionna's instantaneous CIR. Models
+that previously had no TDL now contain a neutral leading impulse, so the
+static test behaves the same while a live Sionna profile has a prepared device
+path to replace.
+
+For a quick synthetic radio-flow check and a live dashboard, choose any pair:
+
+```bash
+cd /home/ubuntu/OCUDU/ocudu-gpu-channel
+./scripts/sionna_rt/run_synthetic_web_ui.sh single
+./scripts/sionna_rt/run_synthetic_web_ui.sh multi-ue
+./scripts/sionna_rt/run_synthetic_web_ui.sh graph
+./scripts/sionna_rt/run_synthetic_web_ui.sh multi-gnb
+```
+
+Run one command at a time. The launcher prints its temporary log directory and
+serves `http://127.0.0.1:8080`. The page shows Sionna positions and per-link
+matrix dimensions, lane-(0,0) taps, aggregate matrix power, control ACK
+sequence numbers, Broker application/warm-up state, slot latency, integrity
+counters, and CPU/GPU usage. Set `OCUDU_SIONNA_DEMO_DURATION_SECONDS=0` only
+when intentionally running until interrupted; the normal default is 60 s.
+
+For the full Docker-free single-cell attach, PDU, and ping verdict plus the
+same Web UI:
+
+```bash
+./scripts/native/run-ocudu-sionna-1x1.sh
+```
+
+For the full multi-UE remote gate:
+
+```bash
+OCUDU_MUE_CHANNEL_MODE=sionna \
+  ./scripts/remote/ocudu-multi-ue-smoke.sh
+```
+
+The multi-UE dashboard is `http://127.0.0.1:8080` on the execution host and its
+JSONL evidence is `results/logs/ocudu-multi-ue/<timestamp>/sionna-status.jsonl`.
+Use an SSH tunnel such as `ssh -L 8080:127.0.0.1:8080 <host>` when the gate runs
+remotely.
+
+### Local 2-gNB / 2-UE Sionna gate
 
 On a GPU host containing sibling `ocudu`, `ocudu-gpu-channel`, and
 `venvs/sionna` directories, run the complete two-cell test without configuring
@@ -120,11 +180,29 @@ cd /home/ubuntu/OCUDU/ocudu-gpu-channel
 ./scripts/local/ocudu-gnb-ue-sionna-smoke.sh
 ```
 
-The launcher uses the Sionna-driven 10-edge topology and verifies both gNB
+The launcher drives the same validated eight-link multi-gNB topology from
+`examples/sionna/multi-gnb.json`, serves `http://127.0.0.1:8080`, and verifies both gNB
 cells, both UE RRC connections, both PDU sessions, both data-plane pings, live
 Sionna profile updates, and the broker telemetry feed. Override detected paths
 when needed with `OCUDU_MGNB_OCUDU_ROOT`, `OCUDU_MGNB_SIONNA_PYTHON`, or
-`OCUDU_MGNB_CUDA_COMPILER`.
+`OCUDU_MGNB_CUDA_COMPILER`; use `OCUDU_MGNB_WEB_PORT` to change the Web UI
+port.
+
+### Config-driven arrays and the fixed-MIMO boundary
+
+`array`, `tx_array`, and `rx_array` in a scenario accept `rows`, `cols`,
+`pattern`, and `polarization`. Per-link `Nt` is the source node's TX antenna
+count and `Nr` is the destination node's RX antenna count. The order is the
+Broker's canonical row-major order, `lane = rx_port * Nt + tx_port`.
+
+Changing only the JSON from 1×1 to 1×2 or 1×4 is intentionally rejected: the
+matching Broker `radio_nodes.tx_ports`/`rx_ports` and radio transport endpoints
+must also be present at startup. Runtime resizing would invalidate prepared
+CUDA buffers. A topology model with `fixed_mimo` is also rejected for dynamic
+matrix updates because zero coefficients may have pruned lanes at load time;
+use a normal leading-TDL model when Sionna owns the full matrix. Static
+`fixed_mimo` tests and their atomic physical-link control behavior are
+otherwise unchanged.
 
 The host must allow Docker to create bridge-network namespaces. Recent `runc`
 security fixes can expose an LXC/LXD AppArmor incompatibility that fails with

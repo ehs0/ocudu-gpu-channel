@@ -47,6 +47,7 @@ channel_mode="${OCUDU_MGNB_CHANNEL_MODE:-static}"
 sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
 sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-2}"
 sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
+sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: the two UEs camp on different cells so they do not
 # collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
@@ -91,6 +92,7 @@ remote_sh bash -s -- \
   "${sionna_python_arg}" \
   "${sionna_update_hz}" \
   "${sionna_ready_seconds}" \
+  "${sionna_web_port}" \
   "${cuda_compiler_arg}" \
   "${execution_mode}" <<'REMOTE'
 set -euo pipefail
@@ -109,8 +111,9 @@ channel_mode="${11}"
 sionna_python="${12}"
 sionna_update_hz="${13}"
 sionna_ready_seconds="${14}"
-cuda_compiler="${15}"
-execution_mode="${16}"
+sionna_web_port="${15}"
+cuda_compiler="${16}"
+execution_mode="${17}"
 [[ "${broker_image}" == "__native__" ]] && broker_image=""
 
 expand_remote_path() {
@@ -198,6 +201,10 @@ if [[ "${execution_mode}" == "local" ]]; then
 fi
 
 if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ "${sionna_web_port}" =~ ^[1-9][0-9]*$ && "${sionna_web_port}" -le 65535 ]] || {
+    echo "invalid OCUDU_MGNB_WEB_PORT" >&2
+    exit 2
+  }
   if [[ ! -x "${sionna_python}" ]]; then
     echo "missing Sionna Python: ${sionna_python}" >&2
     echo "create ${workspace}/venvs/sionna and install scripts/sionna_rt/requirements.txt" >&2
@@ -495,16 +502,14 @@ echo "open5gs: ${h:-?}"
 
 # CUDA broker on the multi-gNB topology (4 nodes, inter-cell interference).
 # The proven static path remains the default. Sionna mode selects the external
-# runtime-profile topology and enables control/telemetry without changing
-# OCUDU. A Sionna run is stopped explicitly after attach/ping so tracing setup
+# runtime profiles on the same validated topology and enables control/telemetry
+# without changing OCUDU. A Sionna run is stopped explicitly after attach/ping so tracing setup
 # time does not consume the radio validation window.
 topology_host="${project_root}/examples/topology.multi-gnb.cuda.yaml"
 topology_container="/work/examples/topology.multi-gnb.cuda.yaml"
 broker_duration="${duration_seconds}s"
 broker_extra=()
 if [[ "${channel_mode}" == "sionna" ]]; then
-  topology_host="${project_root}/examples/topology.sionna-2gnb-2ue.cuda.yaml"
-  topology_container="/work/examples/topology.sionna-2gnb-2ue.cuda.yaml"
   broker_duration="0s"
   broker_extra=(
     --control-endpoint 'tcp://*:5559'
@@ -543,10 +548,15 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     write_summary "control_server_not_ready" 1
   fi
 
-  "${sionna_python}" "${project_root}/scripts/sionna_rt/run_bridge.py" \
+  "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
+    --python "${sionna_python}" \
+    --scenario "${project_root}/examples/sionna/multi-gnb.json" \
     --control-endpoint tcp://127.0.0.1:5559 \
+    --telemetry-endpoint tcp://127.0.0.1:5560 \
     --duration 0 \
     --update-hz "${sionna_update_hz}" \
+    --port "${sionna_web_port}" \
+    --ready-seconds "${sionna_ready_seconds}" \
     --status-jsonl "${log_dir}/sionna-status.jsonl" \
     >"${log_dir}/sionna-bridge.log" 2>&1 &
   sionna_pid="$!"
@@ -555,7 +565,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   # first successful record means all ten profiles were committed atomically.
   sionna_ready=0
   for _ in $(seq 1 "${sionna_ready_seconds}"); do
-    if grep -q '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null; then
+    if grep -q 'event=sionna_web_ui_ready' "${log_dir}/sionna-bridge.log" 2>/dev/null; then
       sionna_ready=1
       break
     fi
@@ -566,6 +576,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     write_summary "sionna_bridge_not_ready" 2
   fi
   sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
+  echo "Sionna Web UI: http://127.0.0.1:${sionna_web_port}"
 
   "${sionna_python}" "${project_root}/scripts/telemetry/check_feed.py" \
     --endpoint tcp://127.0.0.1:5560 --duration 10 \

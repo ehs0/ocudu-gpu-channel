@@ -98,6 +98,7 @@ struct LinkModelState {
   // The physical link this lane belongs to: its clock (M2.3), its lanes' grids
   // (M3.3) and its control block (M4.2). Borrowed from the processor's table.
   PhysicalLinkRuntime* link = nullptr;
+  int lane_index = 0;
 };
 
 void init_model_state(LinkModelState& state, std::size_t steps, const std::string& seed_prefix)
@@ -455,6 +456,7 @@ public:
       // M2.3 / M4.2: time, grids and control all belong to the physical link,
       // so sibling lanes borrow one runtime rather than each keeping a copy.
       slot.model.link = &links_[lane.physical_link_key];
+      slot.model.lane_index = lane.rx_port * lane.nt + lane.tx_port;
       init_model_state(slot.model, model->chain.size(), lane.key);
       // The leading tdl is chain step 0 by construction (validate_cuda_support
       // rejects a non-leading one), so the lane's step-0 seed is the one this
@@ -491,7 +493,11 @@ public:
       slot.model.link->control.nt_hint = lane.nt;
       slot.model.link->control.nr_hint = lane.nr;
       slot.model.link->control.correlation_declared = model->spatial_correlation.declared;
-      slot.model.link->control.fixed_mimo_declared = model->fixed_mimo_declared;
+      const auto* base_model = lane.link_index < config.links.size()
+          ? find_model(config, config.links[lane.link_index].model)
+          : nullptr;
+      slot.model.link->control.fixed_mimo_declared =
+          base_model != nullptr && base_model->fixed_mimo_declared;
       slot.model.link->control.slot_count_hint =
           static_cast<int>(resolve_batch_samples(config.runtime, destination_node.sample_rate_hz));
     }
@@ -968,7 +974,21 @@ public:
               "snap-refresh D2H");
         check(cudaStreamSynchronize(sp.stream), "snap-refresh D2H sync");
         h_state->live = lms_for_snap.live;
-        if (link.live_profile_active) {
+        if (link.live_matrix_profile_active) {
+          const auto& matrix = link.live_matrix_profile;
+          const int lane_index = lms_for_snap.lane_index;
+          if (lane_index < 0 || lane_index >= matrix.lane_count) {
+            throw std::runtime_error("matrix profile lane index is outside the active matrix");
+          }
+          const auto& lane_profile = matrix.lanes[lane_index];
+          refresh_all_taps_from_live(*h_state, lane_profile.n_taps,
+                                     lane_profile.taps);
+          if (outcome.matrix_profile_activated) {
+            for (int i = 0; i < kDeviceMaxDelayLine; ++i) {
+              h_state->delay_line[i] = IqSample{};
+            }
+          }
+        } else if (link.live_profile_active) {
           // v2.0-F3b: all-taps refresh -- the live profile is the canonical
           // layout for this link.
           refresh_all_taps_from_live(*h_state, link.live_profile.n_taps,

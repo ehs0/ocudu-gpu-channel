@@ -1104,6 +1104,8 @@ def delivery_status(
                 "observed_seqno": observed_seqno,
                 "observed_slot": observed_slot,
                 "profile_active": observed.get("profile_active") is True,
+                "matrix_profile_active": observed.get("matrix_profile_active") is True,
+                "array": observed.get("array") if isinstance(observed.get("array"), dict) else {},
                 "backend": observed_backend,
                 "applied": applied,
                 "warming_up": warming_up,

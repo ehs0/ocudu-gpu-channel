@@ -168,6 +168,39 @@ Sionna control and Web UI telemetry. They cross the disposable mount/network
 namespace through the shared filesystem without exposing a host TCP control
 port or requiring host networking privileges.
 
+## Run scenario-sized rank-1 MISO/SIMO with Sionna and the Web UI
+
+The rank-1 launcher reads the gNB transmit and receive port counts from the
+Sionna scenario instead of carrying a separate 2x1 or 4x1 shell setting. The
+default scenario resolves to 2 gNB TX ports, 2 gNB RX ports, and a one-port UE:
+
+```bash
+export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+export CUDACXX=/opt/conda/envs/torch/bin/nvcc
+export OCUDU_NATIVE_GPU_DEVICE=0
+export OCUDU_NATIVE_SIONNA_PYTHON=/home/ubuntu/OCUDU/venvs/sionna/bin/python
+
+./scripts/native/run-ocudu-sionna-rank1.sh
+```
+
+To change the live dimensions, point the launcher at an absolute scenario
+path and edit `nodes.gnb0.tx_array` / `nodes.gnb0.rx_array`. The native OCUDU
+gate accepts 1, 2, or 4 ports in each direction; the srsUE arrays must remain
+1x1. The scenario links must remain the single `gnb0 -> ue0` downlink and
+`ue0 -> gnb0` uplink:
+
+```bash
+export OCUDU_NATIVE_SIONNA_SCENARIO=/absolute/path/to/scenario.json
+./scripts/native/run-ocudu-sionna-rank1.sh
+```
+
+The renderer derives `nof_antennas_dl`, `nof_antennas_ul`, every ZMQ port,
+Broker radio-node ordering, and both control link ids from that scenario. It
+does not declare `fixed_mimo`; Sionna supplies a complete matrix profile for
+each direction before the gNB and srsUE start. Readiness is reported as
+`event=native_sionna_rank1_live_ready`, and run artifacts are stored under
+`results/{logs,reports}/ocudu-sionna-rank1/`.
+
 ## Common blockers
 
 - `unshare: ... Operation not permitted`: the containing host, VM, LXC, or

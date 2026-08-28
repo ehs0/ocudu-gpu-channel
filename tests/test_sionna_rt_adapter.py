@@ -14,12 +14,15 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "sionna_rt"))
 
 from channel_adapter import (  # noqa: E402
+    LaneProfile,
+    MatrixProfile,
     Ray,
     Tap,
     ZmqControlClient,
     channel_status,
     control_link_id,
     make_profile_swap,
+    make_matrix_profile_swap,
     rays_to_taps,
 )
 from run_bridge import (  # noqa: E402
@@ -39,9 +42,12 @@ from run_bridge import (  # noqa: E402
     ONE_GNB_ONE_UE_NODE_IDS,
     ONE_GNB_ONE_UE_UPLINK_LINKS,
     PEDESTRIAN_SPEED_MPS,
+    SionnaScenario,
     UPLINK_LINKS,
     configured_motion,
+    effective_scenario,
     link_layout,
+    load_scenario_config,
     parse_args,
     prepare_scene_with_simple_road,
     scenario_environment,
@@ -251,11 +257,55 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(message["fading"]["enabled"])
         self.assertNotIn("scene_geometry", message)
 
+    def test_matrix_profile_contract_covers_every_lane_in_row_major_order(self) -> None:
+        profile = MatrixProfile(
+            nt=2,
+            nr=2,
+            lanes=(
+                LaneProfile(1, 1, (Tap(0.0, -4.0, 0.4),)),
+                LaneProfile(0, 1, (Tap(0.0, -2.0, 0.2),)),
+                LaneProfile(1, 0, (Tap(0.0, -3.0, 0.3),)),
+                LaneProfile(0, 0, (Tap(0.0, -1.0, 0.1),)),
+            ),
+        )
+        message = make_matrix_profile_swap(
+            "gnb0>ue0:desired", profile, batch_id="sionna-9"
+        )
+        self.assertEqual(message["type"], "matrix_profile_swap")
+        self.assertEqual((message["nr"], message["nt"]), (2, 2))
+        self.assertEqual(
+            [(lane["rx_port"], lane["tx_port"]) for lane in message["lanes"]],
+            [(0, 0), (0, 1), (1, 0), (1, 1)],
+        )
+
+    def test_scenario_config_drives_nodes_links_and_array_dimensions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "scenario.json"
+            path.write_text(
+                """{
+  "name":"dynamic-miso",
+  "nodes":{
+    "gnb":{"start_m":[0,0,10],"tx_array":{"rows":2,"cols":2}},
+    "ue":{"start_m":[10,0,1.5],"rx_array":{"rows":1,"cols":2}}
+  },
+  "links":[{"from":"gnb","to":"ue","direction":"downlink","model":"h"}]
+}""",
+                encoding="utf-8",
+            )
+            definition = load_scenario_config(path)
+            self.assertEqual(definition.nodes["gnb"].tx_array.antenna_count, 4)
+            self.assertEqual(definition.nodes["ue"].rx_array.antenna_count, 2)
+            args = parse_args(["--scenario-config", str(path)])
+            self.assertEqual(effective_scenario(args).name, "dynamic-miso")
+            environment = scenario_environment(args)
+            self.assertEqual(environment["matrix_lane_count"], 8)
+            self.assertEqual(environment["nodes"]["gnb"]["tx_antennas"], 4)
+
     def test_channel_status_exposes_the_exact_ui_tap_values(self) -> None:
         taps = [Tap(2.5, -12.0, math.pi / 2.0)]
         status = channel_status(
             "gnb0>ue0:sionna_rt",
-            [Ray(2.5 / 20_000_000.0, 0.25 + 0.0j)],
+            [Ray(2.5 / 20_000_000.0, 0.25 + 0.0j, -37.5)],
             taps,
             sample_rate_hz=20_000_000.0,
         )
@@ -264,6 +314,82 @@ class AdapterTests(unittest.TestCase):
         self.assertAlmostEqual(status["taps"][0]["delay_ns"], 125.0)
         self.assertEqual(status["taps"][0]["gain_db"], -12.0)
         self.assertAlmostEqual(status["taps"][0]["phase_deg"], 90.0)
+        self.assertEqual(status["delay_doppler_point_count"], 1)
+        point = status["delay_doppler_points"][0]
+        self.assertAlmostEqual(point["delay_samples"], 2.5)
+        self.assertAlmostEqual(point["delay_ns"], 125.0)
+        self.assertAlmostEqual(point["doppler_hz"], -37.5)
+        self.assertAlmostEqual(point["power_db"], 20.0 * math.log10(0.25))
+
+    def test_miso_profiles_broadcast_sionna_path_doppler_to_each_lane(self) -> None:
+        class FakeTensor:
+            def __init__(self, ndim: int, values: object) -> None:
+                self.ndim = ndim
+                self.values = values
+
+            def __getitem__(self, key: tuple[object, ...]) -> object:
+                if self.ndim == 6:
+                    return self.values[key[3]]  # type: ignore[index]
+                return self.values
+
+        class FakeNumpy:
+            @staticmethod
+            def asarray(value: object) -> object:
+                return value
+
+        class FakePaths:
+            doppler = FakeTensor(3, [-25.0, 40.0])
+            valid = FakeTensor(3, [True, True])
+
+            @staticmethod
+            def cir(**_kwargs: object) -> tuple[FakeTensor, FakeTensor]:
+                return (
+                    FakeTensor(
+                        6,
+                        {
+                            0: [0.25 + 0.0j, 0.125 + 0.0j],
+                            1: [0.5 + 0.0j, 0.0625 + 0.0j],
+                        },
+                    ),
+                    FakeTensor(3, [1.0e-7, 2.0e-7]),
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "miso.json"
+            path.write_text(
+                """{
+  "name":"miso",
+  "nodes":{
+    "gnb":{"start_m":[0,0,10],"tx_array":{"rows":1,"cols":2}},
+    "ue":{"start_m":[10,0,1.5]}
+  },
+  "links":[{"from":"gnb","to":"ue","direction":"downlink","model":"h"}]
+}""",
+                encoding="utf-8",
+            )
+            args = parse_args(["--scenario-config", str(path)])
+            scenario = object.__new__(SionnaScenario)
+            scenario.args = args
+            scenario.np = FakeNumpy()
+            scenario.definition = effective_scenario(args)
+            scenario.tx_indices = {"gnb": 0}
+            scenario.rx_indices = {"ue": 0}
+            link = scenario.definition.links[0]
+            profiles, statuses = scenario.profiles(
+                FakePaths(),
+                [link],
+                direction="downlink",
+                carrier_frequency_hz=args.downlink_frequency_hz,
+            )
+
+        profile = profiles["gnb>ue:h"]
+        self.assertEqual((profile.nr, profile.nt), (1, 2))
+        self.assertEqual(len(statuses[0]["lanes"]), 2)
+        for lane in statuses[0]["lanes"]:
+            self.assertEqual(
+                [point["doppler_hz"] for point in lane["delay_doppler_points"]],
+                [-25.0, 40.0],
+            )
 
 
 if __name__ == "__main__":

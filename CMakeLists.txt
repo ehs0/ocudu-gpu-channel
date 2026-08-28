@@ -158,5 +158,11 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
       NAME sionna_web_ui
       COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sionna_web_ui.py
     )
+    add_test(
+      NAME native_sionna_rank1_renderer
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/native/render-sionna-rank1-configs.py
+              --self-test
+    )
   endif()
 endif()

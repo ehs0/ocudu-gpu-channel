@@ -4,6 +4,7 @@
 #include <zmq.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -910,6 +911,7 @@ std::string handle_profile_swap(
   BrokerLinkControl& ctl = *it_ctl->second;
   ctl.shadow_profile      = staged;
   ctl.profile_pending     = true;
+  ctl.matrix_profile_pending = false;
   ctl.take_effect_at_slot = static_cast<std::uint64_t>(tea);
   ctl.seqno.fetch_add(1, std::memory_order_release);
 
@@ -927,6 +929,194 @@ std::string handle_profile_swap(
     ctx.logger(o.str());
   }
   return make_profile_swap_reply(observed_seqno, ctl);
+}
+
+std::string handle_matrix_profile_swap(
+    HandlerContext& ctx,
+    const std::unordered_map<std::string, JsonValue>& fields)
+{
+  auto it_link = fields.find("link_id");
+  if (it_link == fields.end() || it_link->second.kind != JsonValue::Kind::String) {
+    return emit_rejection(ctx, "matrix_profile_swap: missing or non-string link_id");
+  }
+  const std::string& link_id = it_link->second.s;
+  auto it_ctl = ctx.link_map.find(link_id);
+  if (it_ctl == ctx.link_map.end() || it_ctl->second == nullptr) {
+    return emit_rejection(ctx, "unknown link_id: " + link_id);
+  }
+  BrokerLinkControl& ctl = *it_ctl->second;
+  if (ctl.fixed_mimo_declared) {
+    return emit_rejection(ctx,
+        "matrix_profile_swap: link " + link_id +
+        " declares fixed_mimo; dynamic matrices require every Nr x Nt lane to be preallocated");
+  }
+
+  double nt_value = 0.0;
+  double nr_value = 0.0;
+  try {
+    nt_value = get_number(fields, "nt", 0.0);
+    nr_value = get_number(fields, "nr", 0.0);
+  } catch (const std::exception& e) {
+    return emit_rejection(ctx, e.what());
+  }
+  const int nt = static_cast<int>(nt_value);
+  const int nr = static_cast<int>(nr_value);
+  if (nt_value != static_cast<double>(nt) || nr_value != static_cast<double>(nr) ||
+      nt <= 0 || nr <= 0) {
+    return emit_rejection(ctx, "matrix_profile_swap: nt and nr must be positive integers");
+  }
+  if (nt != ctl.nt_hint || nr != ctl.nr_hint) {
+    return emit_rejection(ctx,
+        "matrix_profile_swap: dimensions " + std::to_string(nr) + "x" +
+        std::to_string(nt) + " do not match prepared link " +
+        std::to_string(ctl.nr_hint) + "x" + std::to_string(ctl.nt_hint));
+  }
+  const int lane_count = nt * nr;
+  if (lane_count > kMaxCorrelatedLanes) {
+    return emit_rejection(ctx, "matrix_profile_swap: Nr x Nt exceeds kMaxCorrelatedLanes (" +
+                                std::to_string(kMaxCorrelatedLanes) + ")");
+  }
+
+  auto it_lanes = fields.find("lanes");
+  if (it_lanes == fields.end() || it_lanes->second.kind != JsonValue::Kind::Array) {
+    return emit_rejection(ctx, "matrix_profile_swap: missing or non-array 'lanes'");
+  }
+  if (it_lanes->second.arr.size() != static_cast<std::size_t>(lane_count)) {
+    return emit_rejection(ctx, "matrix_profile_swap: lanes must contain exactly Nr x Nt entries");
+  }
+
+  bool force = false;
+  double tea = 0.0;
+  try {
+    force = get_bool(fields, "force", false);
+    tea = get_number(fields, "take_effect_at_slot", 0.0);
+  } catch (const std::exception& e) {
+    return emit_rejection(ctx, e.what());
+  }
+  if (tea < 0.0) {
+    return emit_rejection(ctx, "matrix_profile_swap: take_effect_at_slot must be >= 0");
+  }
+
+  MatrixProfileShadow staged{};
+  staged.nt = nt;
+  staged.nr = nr;
+  staged.lane_count = lane_count;
+  bool seen[kMaxCorrelatedLanes] = {};
+  for (std::size_t entry_index = 0; entry_index < it_lanes->second.arr.size(); ++entry_index) {
+    const auto& lane_value = it_lanes->second.arr[entry_index];
+    if (lane_value.kind != JsonValue::Kind::Object) {
+      return emit_rejection(ctx, "matrix_profile_swap: lanes[" +
+                                  std::to_string(entry_index) + "] is not an object");
+    }
+    const auto& lane = lane_value.obj;
+    double rx_value = 0.0;
+    double tx_value = 0.0;
+    try {
+      rx_value = get_number(lane, "rx_port", -1.0);
+      tx_value = get_number(lane, "tx_port", -1.0);
+    } catch (const std::exception& e) {
+      return emit_rejection(ctx, e.what());
+    }
+    const int rx = static_cast<int>(rx_value);
+    const int tx = static_cast<int>(tx_value);
+    if (rx_value != static_cast<double>(rx) || tx_value != static_cast<double>(tx) ||
+        rx < 0 || rx >= nr || tx < 0 || tx >= nt) {
+      return emit_rejection(ctx, "matrix_profile_swap: lane rx_port/tx_port is outside Nr x Nt");
+    }
+    const int lane_index = rx * nt + tx;
+    if (seen[lane_index]) {
+      return emit_rejection(ctx, "matrix_profile_swap: duplicate lane (rx_port=" +
+                                  std::to_string(rx) + ", tx_port=" +
+                                  std::to_string(tx) + ")");
+    }
+    seen[lane_index] = true;
+
+    auto it_taps = lane.find("taps");
+    if (it_taps == lane.end() || it_taps->second.kind != JsonValue::Kind::Array ||
+        it_taps->second.arr.empty()) {
+      return emit_rejection(ctx, "matrix_profile_swap: every lane requires a non-empty taps array");
+    }
+    if (it_taps->second.arr.size() > static_cast<std::size_t>(kDeviceMaxTaps)) {
+      return emit_rejection(ctx, "matrix_profile_swap: lane taps exceed kDeviceMaxTaps (" +
+                                  std::to_string(kDeviceMaxTaps) + ")");
+    }
+    auto& profile = staged.lanes[lane_index];
+    profile.n_taps = static_cast<int>(it_taps->second.arr.size());
+    profile.force = force;
+    for (std::size_t tap_index = 0; tap_index < it_taps->second.arr.size(); ++tap_index) {
+      const auto& tap_value = it_taps->second.arr[tap_index];
+      if (tap_value.kind != JsonValue::Kind::Object) {
+        return emit_rejection(ctx, "matrix_profile_swap: lane tap is not an object");
+      }
+      try {
+        auto& tap = profile.taps[tap_index];
+        tap.delay_samples = get_number(tap_value.obj, "delay_samples", 0.0);
+        tap.gain_db = get_number(tap_value.obj, "gain_db", 0.0);
+        tap.phase_rad = get_number(tap_value.obj, "phase_rad", 0.0);
+        tap.is_los = get_bool(tap_value.obj, "is_los", false);
+        tap.los_k_db = get_number(tap_value.obj, "los_k_db", 0.0);
+        tap.los_angle_rad = get_number(tap_value.obj, "los_angle_rad", 0.0);
+        if (tap.delay_samples < 0.0 || tap.delay_samples > 1023.0) {
+          return emit_rejection(ctx, "matrix_profile_swap: tap delay_samples out of range [0, 1023]");
+        }
+        if (tap.gain_db < -100.0 || tap.gain_db > 20.0) {
+          return emit_rejection(ctx, "matrix_profile_swap: tap gain_db out of range [-100, 20]");
+        }
+      } catch (const std::exception& e) {
+        return emit_rejection(ctx, std::string("matrix_profile_swap: ") + e.what());
+      }
+    }
+  }
+
+  if (ctx.warmup_cap_slots > 0 && ctl.slot_count_hint > 0) {
+    int required_samples = 0;
+    for (int lane = 0; lane < staged.lane_count; ++lane) {
+      for (int tap = 0; tap < staged.lanes[lane].n_taps; ++tap) {
+        required_samples = std::max(
+            required_samples,
+            static_cast<int>(std::ceil(staged.lanes[lane].taps[tap].delay_samples)) +
+                kTdlFracFilterTaps);
+      }
+    }
+    const int warmup_span =
+        (required_samples + ctl.slot_count_hint - 1) / ctl.slot_count_hint;
+    if (warmup_span > ctx.warmup_cap_slots) {
+      return emit_rejection(ctx,
+          "matrix_profile_swap: warmup span " + std::to_string(warmup_span) +
+          " slots exceeds --control-warmup-cap-slots " +
+          std::to_string(ctx.warmup_cap_slots));
+    }
+  }
+
+  std::string maybe_reject;
+  ControlServer::StagedBatch* target = resolve_optional_batch(ctx, fields, &maybe_reject);
+  if (target == reinterpret_cast<ControlServer::StagedBatch*>(-1)) {
+    return maybe_reject;
+  }
+  if (target != nullptr) {
+    ControlServer::StagedOp op;
+    op.kind = ControlServer::StagedOp::Kind::MatrixProfileSwap;
+    op.link_id = link_id;
+    op.matrix_profile = staged;
+    target->ops.push_back(std::move(op));
+    ctx.updates_applied.fetch_add(1, std::memory_order_relaxed);
+    return "{\"ok\":true,\"staged\":true}";
+  }
+
+  ctl.shadow_matrix_profile = staged;
+  ctl.matrix_profile_pending = true;
+  ctl.profile_pending = false;
+  ctl.take_effect_at_slot = static_cast<std::uint64_t>(tea);
+  const std::uint32_t seqno = ctl.seqno.fetch_add(1, std::memory_order_release) + 1;
+  ctx.updates_applied.fetch_add(1, std::memory_order_relaxed);
+  if (ctx.logger) {
+    std::ostringstream o;
+    o << "event=control_update link_id=" << link_id
+      << " param=matrix_profile_swap nt=" << nt << " nr=" << nr
+      << " seqno=" << seqno;
+    ctx.logger(o.str());
+  }
+  return make_profile_swap_reply(seqno, ctl);
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -1011,9 +1201,10 @@ std::string handle_batch_commit(
       const ParamSpec* spec = find_param_spec(op.param);
       if (spec == nullptr) continue;   // shouldn't happen — validated at stage time
       apply_update(ctl, *spec, op.value);
-    } else {
+    } else if (op.kind == ControlServer::StagedOp::Kind::ProfileSwap) {
       ctl.shadow_profile = op.profile;
       ctl.profile_pending = true;
+      ctl.matrix_profile_pending = false;
       ctl.seqno.fetch_add(1, std::memory_order_release);
       const std::uint64_t current_slot =
           ctl.current_slot.load(std::memory_order_relaxed);
@@ -1022,6 +1213,16 @@ std::string handle_batch_commit(
       // Same conservative one-slot hint as the single profile_swap REP.
       // Runtime telemetry remains authoritative if a topology needs a
       // longer delay-line fill.
+      committed_warmup_until_slots[op.link_id] = effective_slot + 1;
+    } else {
+      ctl.shadow_matrix_profile = op.matrix_profile;
+      ctl.matrix_profile_pending = true;
+      ctl.profile_pending = false;
+      ctl.seqno.fetch_add(1, std::memory_order_release);
+      const std::uint64_t current_slot =
+          ctl.current_slot.load(std::memory_order_relaxed);
+      const std::uint64_t effective_slot =
+          apply_at > current_slot ? apply_at : current_slot + 1;
       committed_warmup_until_slots[op.link_id] = effective_slot + 1;
     }
     committed_seqnos[op.link_id] = ctl.seqno.load(std::memory_order_acquire);
@@ -1118,6 +1319,7 @@ std::string ControlServer::handle_message(const std::string& request_body)
 
   if (type_str == "scalar")       return handle_scalar_update(ctx, fields);
   if (type_str == "profile_swap") return handle_profile_swap (ctx, fields);
+  if (type_str == "matrix_profile_swap") return handle_matrix_profile_swap(ctx, fields);
   if (type_str == "correlation_swap") return handle_correlation_swap(ctx, fields);
   if (type_str == "batch_begin")  return handle_batch_begin  (ctx, fields);
   if (type_str == "batch_commit") return handle_batch_commit (ctx, fields);
@@ -1201,6 +1403,25 @@ void ControlServer::run_telemetry_loop()
           ? (static_cast<double>(ts.slot_deadline_miss_count) /
              static_cast<double>(ts.slot_process_count)) * 100.0
           : 0.0;
+      const double nominal_deadline_us = ts.sample_rate_hz > 0
+          ? (static_cast<double>(ts.nominal_slot_samples) * 1'000'000.0 /
+             static_cast<double>(ts.sample_rate_hz))
+          : 0.0;
+      const double nominal_usage_percent = nominal_deadline_us > 0.0
+          ? (ts.nominal_latest_estimated_us / nominal_deadline_us) * 100.0
+          : 0.0;
+      const double nominal_miss_percent = ts.nominal_slot_count > 0
+          ? (static_cast<double>(ts.nominal_deadline_miss_count) /
+             static_cast<double>(ts.nominal_slot_count)) * 100.0
+          : 0.0;
+      const double fragment_call_percent = ts.slot_process_count > 0
+          ? (static_cast<double>(ts.fragment_call_count) /
+             static_cast<double>(ts.slot_process_count)) * 100.0
+          : 0.0;
+      const double fragmented_slot_percent = ts.nominal_slot_count > 0
+          ? (static_cast<double>(ts.fragmented_nominal_slot_count) /
+             static_cast<double>(ts.nominal_slot_count)) * 100.0
+          : 0.0;
 
       // Build the JSON frame. link_id as topic prefix → subscribers
       // filter via setsockopt(ZMQ_SUBSCRIBE, "ue0-gnb0", …). Frame
@@ -1225,6 +1446,9 @@ void ControlServer::run_telemetry_loop()
         <<   "\"los_k_db\":"            << ts.live.los_k_db
         << "},"
         << "\"profile_active\":"   << (ts.profile_active ? "true" : "false") << ","
+        << "\"matrix_profile_active\":"
+        <<   (ts.matrix_profile_active ? "true" : "false") << ","
+        << "\"array\":{\"nt\":" << ts.nt << ",\"nr\":" << ts.nr << "},"
         << "\"warmup_until_slot\":" << ts.warmup_until_slot << ","
         << "\"warmup_event_seq\":" << ts.warmup_event_seq << ","
         << "\"warmup_profile_seqno\":" << ts.warmup_profile_seqno << ","
@@ -1243,6 +1467,7 @@ void ControlServer::run_telemetry_loop()
         <<     ((ts.slot_deadline_us > 0.0 && ts.channel_process_us <= ts.slot_deadline_us)
                   ? "true" : "false")
         <<   ",\"cumulative\":{"
+        <<     "\"unit\":\"processing_call\","
         <<     "\"processed_slots\":" << ts.slot_process_count << ","
         <<     "\"deadline_misses\":" << ts.slot_deadline_miss_count << ","
         <<     "\"deadline_miss_percent\":" << deadline_miss_percent << ","
@@ -1250,6 +1475,40 @@ void ControlServer::run_telemetry_loop()
         <<     "\"p95_elapsed_us\":" << ts.slot_process_p95_us << ","
         <<     "\"p99_elapsed_us\":" << ts.slot_process_p99_us << ","
         <<     "\"percentile_resolution_us\":1"
+        <<   "}"
+        <<   ",\"calls\":{"
+        <<     "\"processed_calls\":" << ts.slot_process_count << ","
+        <<     "\"deadline_misses\":" << ts.slot_deadline_miss_count << ","
+        <<     "\"deadline_miss_percent\":" << deadline_miss_percent
+        <<   "}"
+        <<   ",\"nominal\":{"
+        <<     "\"slot_samples\":" << ts.nominal_slot_samples << ","
+        <<     "\"pending_samples\":" << ts.nominal_pending_samples << ","
+        <<     "\"pending_estimated_us\":" << ts.nominal_pending_estimated_us << ","
+        <<     "\"completed_slots\":" << ts.nominal_slot_count << ","
+        <<     "\"latest_estimated_us\":" << ts.nominal_latest_estimated_us << ","
+        <<     "\"deadline_us\":" << nominal_deadline_us << ","
+        <<     "\"usage_percent\":" << nominal_usage_percent << ","
+        <<     "\"deadline_met\":"
+        <<       ((ts.nominal_slot_count > 0 &&
+                   ts.nominal_latest_estimated_us <= nominal_deadline_us)
+                    ? "true" : "false") << ","
+        <<     "\"deadline_misses\":" << ts.nominal_deadline_miss_count << ","
+        <<     "\"deadline_miss_percent\":" << nominal_miss_percent << ","
+        <<     "\"max_estimated_us\":" << ts.nominal_process_max_us << ","
+        <<     "\"p95_estimated_us\":" << ts.nominal_process_p95_us << ","
+        <<     "\"p99_estimated_us\":" << ts.nominal_process_p99_us << ","
+        <<     "\"estimation\":\"sample_proportional_call_time\","
+        <<     "\"percentile_resolution_us\":1"
+        <<   "}"
+        <<   ",\"fragments\":{"
+        <<     "\"calls\":" << ts.fragment_call_count << ","
+        <<     "\"call_percent\":" << fragment_call_percent << ","
+        <<     "\"samples\":" << ts.fragment_sample_count << ","
+        <<     "\"min_samples\":" << ts.fragment_min_samples << ","
+        <<     "\"max_samples\":" << ts.fragment_max_samples << ","
+        <<     "\"fragmented_nominal_slots\":" << ts.fragmented_nominal_slot_count << ","
+        <<     "\"fragmented_nominal_slot_percent\":" << fragmented_slot_percent
         <<   "}"
         << "}"
         << "}";

@@ -600,6 +600,20 @@ int main()
       s.slot_process_max_us = 1450.0;
       s.slot_process_p95_us = 180.0;
       s.slot_process_p99_us = 240.0;
+      s.nominal_slot_samples = 23040;
+      s.nominal_pending_samples = 10;
+      s.nominal_pending_estimated_us = 0.25;
+      s.nominal_latest_estimated_us = 125.0;
+      s.nominal_slot_count = 998;
+      s.nominal_deadline_miss_count = 1;
+      s.nominal_process_max_us = 1200.0;
+      s.nominal_process_p95_us = 175.0;
+      s.nominal_process_p99_us = 230.0;
+      s.fragment_call_count = 250;
+      s.fragment_sample_count = 30000;
+      s.fragment_min_samples = 1;
+      s.fragment_max_samples = 23039;
+      s.fragmented_nominal_slot_count = 200;
       ocg::publish_telemetry_snapshot(*t_b, s);
     }
 
@@ -686,6 +700,21 @@ int main()
                 "slot timing reports cumulative p95");
         require(frame.find("\"p99_elapsed_us\":240") != std::string::npos,
                 "slot timing reports cumulative p99");
+        require(frame.find("\"slot_samples\":23040") != std::string::npos,
+                "nominal timing reports configured samples per slot");
+        require(frame.find("\"pending_samples\":10") != std::string::npos,
+                "nominal timing reports the pending fragment remainder");
+        require(frame.find("\"completed_slots\":998") != std::string::npos,
+                "nominal timing reports reconstructed slot count");
+        require(frame.find("\"latest_estimated_us\":125") != std::string::npos,
+                "nominal timing reports the proportional elapsed estimate");
+        require(frame.find("\"estimation\":\"sample_proportional_call_time\"") !=
+                    std::string::npos,
+                "nominal timing identifies its estimation method");
+        require(frame.find("\"calls\":250") != std::string::npos,
+                "fragment telemetry reports fragment call count");
+        require(frame.find("\"fragmented_nominal_slots\":200") != std::string::npos,
+                "fragment telemetry reports affected nominal slots");
       } else if (frame.rfind("link-A ", 0) == 0) {
         got_a = true;
       }
@@ -737,6 +766,49 @@ int main()
         R"({"link_id":"ue1-gnb0","param":"path_loss_db","value":-6.0})");
     require(contains(scalar_reply, "\"ok\":true"),
             "a scalar param on a fixed_mimo link stays allowed");
+    ctl_b->fixed_mimo_declared = false;
+  }
+
+  // A Sionna-style matrix update is physical-link scoped: it must name the
+  // startup dimensions and cover every row-major lane exactly once.
+  {
+    ctl_a->nt_hint = 2;
+    ctl_a->nr_hint = 1;
+    const std::string ok = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "lanes":[
+        {"rx_port":0,"tx_port":1,"taps":[{"delay_samples":1.0,"gain_db":-6.0,"phase_rad":0.5}]},
+        {"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0.0,"gain_db":-3.0,"phase_rad":0.0}]}
+      ]
+    })");
+    require(contains(ok, "\"ok\":true"), "a complete 1x2 matrix profile is accepted");
+    require(ctl_a->matrix_profile_pending, "the complete matrix is staged as one update");
+    require(!ctl_a->profile_pending, "matrix profile supersedes a scalar profile marker");
+    require(ctl_a->shadow_matrix_profile.nt == 2 &&
+            ctl_a->shadow_matrix_profile.nr == 1,
+            "matrix dimensions are retained in the physical-link shadow");
+    require(nearly(static_cast<float>(
+                ctl_a->shadow_matrix_profile.lanes[1].taps[0].phase_rad), 0.5F),
+            "lane addressing is canonical rx * Nt + tx order");
+
+    const std::string missing = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(missing, "\"ok\":false"), "an incomplete matrix is rejected atomically");
+    const std::string resized = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(resized, "\"ok\":false"), "runtime array resizing is rejected");
+
+    ctl_b->fixed_mimo_declared = true;
+    const std::string fixed = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(fixed, "\"ok\":false") && contains(fixed, "fixed_mimo"),
+            "a pruned fixed_mimo link cannot accept a dynamic full matrix");
     ctl_b->fixed_mimo_declared = false;
   }
 

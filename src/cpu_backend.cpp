@@ -172,12 +172,18 @@ void CpuChannelProcessor::prepare(const TopologyConfig& config)
     }
     const std::size_t count =
         resolve_batch_samples(config.runtime, destination->second->sample_rate_hz);
-    ensure_link_state(lane.key, *model, count,
-                      LaneIdentity{.physical_link_key = lane.physical_link_key,
-                                   .rx_port = lane.rx_port,
-                                   .tx_port = lane.tx_port,
-                                   .nt = lane.nt,
-                                   .nr = lane.nr});
+    LinkState& prepared = ensure_link_state(
+        lane.key, *model, count,
+        LaneIdentity{.physical_link_key = lane.physical_link_key,
+                     .rx_port = lane.rx_port,
+                     .tx_port = lane.tx_port,
+                     .nt = lane.nt,
+                     .nr = lane.nr});
+    if (lane.link_index < config.links.size()) {
+      const auto* base_model = find_model(config, config.links[lane.link_index].model);
+      prepared.link->control.fixed_mimo_declared =
+          base_model != nullptr && base_model->fixed_mimo_declared;
+    }
   }
 
   // M3.4: one mixing matrix per physical link. Built here, from the resolver's
@@ -342,7 +348,22 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
         std::vector<ocg::TapSpec> effective_taps;
         std::vector<std::array<float, kTdlFracFilterTaps>> effective_polyphase;
 
-        if (state.link->live_profile_active) {
+        if (state.link->live_matrix_profile_active) {
+          const auto& matrix = state.link->live_matrix_profile;
+          if (state.lane_index < 0 || state.lane_index >= matrix.lane_count) {
+            throw std::runtime_error("matrix profile lane index is outside the active matrix");
+          }
+          const auto& lane_profile = matrix.lanes[state.lane_index];
+          const int n_taps = lane_profile.n_taps;
+          effective_taps.resize(static_cast<std::size_t>(n_taps));
+          effective_polyphase.resize(static_cast<std::size_t>(n_taps));
+          for (int k = 0; k < n_taps; ++k) {
+            effective_taps[k] = lane_profile.taps[k];
+            const double tau_int = std::floor(effective_taps[k].delay_samples);
+            const double frac    = effective_taps[k].delay_samples - tau_int;
+            compute_windowed_sinc_taps(frac, effective_polyphase[k]);
+          }
+        } else if (state.link->live_profile_active) {
           // v2.0-F3: ALL taps sourced from the live profile. Polyphase
           // recomputed per-tap from each tap's fractional delay so the
           // resulting kernel output matches a fresh prepare with the new
@@ -455,7 +476,8 @@ void CpuChannelProcessor::process_superposition(const std::string& dst_key,
       touched_links.push_back(state.link);
       state.link->fading.begin_slot();
       const LinkSnapOutcome outcome = snap_physical_link(*state.link, lane.link_key, count);
-      if (outcome.values_changed || outcome.profile_activated) {
+      if (outcome.values_changed || outcome.profile_activated ||
+          outcome.matrix_profile_activated) {
         // Everything the snap decided is applied to EVERY lane of this link, in
         // this slot. The values are per lane and the cross-slot rings are per
         // lane, but the decision was the link's, so the sweep is what turns
@@ -468,7 +490,21 @@ void CpuChannelProcessor::process_superposition(const std::string& dst_key,
           if (outcome.values_changed) {
             it->second.live = state.link->live;
           }
-          if (outcome.profile_activated) {
+          if (outcome.profile_activated || outcome.matrix_profile_activated) {
+            if (!it->second.steps.empty()) {
+              const ProfileShadow* profile = nullptr;
+              if (state.link->live_matrix_profile_active) {
+                profile = &state.link->live_matrix_profile.lanes[it->second.lane_index];
+              } else if (state.link->live_profile_active) {
+                profile = &state.link->live_profile;
+              }
+              if (profile != nullptr) {
+                std::vector<TapSpec> taps(
+                    profile->taps, profile->taps + profile->n_taps);
+                prepare_tdl_state(taps, it->second.steps.front().tdl_polyphase,
+                                  it->second.steps.front().delay_line);
+              }
+            }
             for (auto& step : it->second.steps) {
               std::fill(step.delay_line.begin(), step.delay_line.end(), IqSample{});
             }

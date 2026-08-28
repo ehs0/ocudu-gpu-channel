@@ -62,6 +62,8 @@ class WebUiTests(unittest.TestCase):
                 "event": "telemetry",
                 "link_id": "ue0>gnb0:sionna_rt",
                 "slot": 3,
+                "matrix_profile_active": True,
+                "array": {"nt": 2, "nr": 1},
                 "slot_processing": {
                     "deadline_us": 1000.0,
                     "elapsed_us": 750.0,
@@ -73,6 +75,26 @@ class WebUiTests(unittest.TestCase):
                         "max_elapsed_us": 1400.0,
                         "p95_elapsed_us": 800.0,
                         "p99_elapsed_us": 950.0,
+                    },
+                    "nominal": {
+                        "slot_samples": 23040,
+                        "pending_samples": 1,
+                        "pending_estimated_us": 0.01,
+                        "completed_slots": 1200,
+                        "latest_estimated_us": 830.0,
+                        "deadline_us": 1000.0,
+                        "usage_percent": 83.0,
+                        "deadline_met": True,
+                        "deadline_misses": 2,
+                        "deadline_miss_percent": 0.167,
+                    },
+                    "calls": {"processed_calls": 1234},
+                    "fragments": {
+                        "calls": 34,
+                        "call_percent": 2.755,
+                        "min_samples": 1,
+                        "max_samples": 23039,
+                        "fragmented_nominal_slots": 17,
                     },
                 },
             },
@@ -277,24 +299,41 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn('id="gpuComputeChart"', index)
         self.assertIn('id="slotLatencyChart"', index)
         self.assertIn('id="sionnaIterationChart"', index)
-        self.assertIn('id="channelPowerChart"', index)
+        self.assertNotIn('id="channelPowerChart"', index)
         self.assertIn('id="applicationCpuChart"', index)
         self.assertNotIn('id="memoryChart"', index)
         self.assertIn('id="pcieChart"', index)
         self.assertNotIn('id="computeChart"', index)
         self.assertNotIn("GPU Compute (%)", index)
-        self.assertIn("IQ slot processing time (µs) · 1 ms reference", index)
+        self.assertIn("Estimated nominal-slot processing time (µs) · 1 ms reference", index)
         self.assertIn("Sionna iteration time (ms) · stacked by stage", index)
-        self.assertIn("Total path power by link (dB)", index)
+        self.assertNotIn("Sionna channel power history", index)
+        self.assertNotIn("Total path power by link (dB)", index)
         self.assertIn("NVML sampled utilization", index)
-        self.assertIn("1 ms deadline", index)
+        self.assertIn("1 ms nominal deadline", index)
         self.assertIn("update budget", index)
-        self.assertIn("slot_processing?.elapsed_us", index)
-        self.assertIn("cumulative.deadline_misses", index)
-        self.assertIn("Cumulative p95", index)
+        self.assertIn("slot_processing?.nominal?.latest_estimated_us", index)
+        self.assertIn("nominal.deadline_misses", index)
+        self.assertIn("Estimated p95", index)
+        self.assertIn("Sample (샘플)", index)
+        self.assertIn("Fragment (조각)", index)
+        self.assertIn("sample_proportional", index)
+        self.assertIn("fixed CUDA launch/transfer overhead", index)
         self.assertIn("DL ray trace", index)
         self.assertIn("Broker control ACK", index)
         self.assertIn("Array.from({length:8}", index)
+        self.assertIn("overlaid matrix-lane tap impulse responses", index)
+        self.assertIn("tapPlot(lanes,laneColors)", index)
+        self.assertIn("function delayDopplerPlot(lane, color)", index)
+        self.assertIn("delay_doppler_points", index)
+        self.assertIn("3D delay–Doppler–power", index)
+        self.assertIn("Paths.doppler in Hz", index)
+        self.assertIn("10·log10(|a|²)", index)
+        self.assertIn("delay-doppler-stack", index)
+        self.assertIn("Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)})", index)
+        self.assertIn("lane-tap-block", index)
+        self.assertIn("rowIndex+1", index)
+        self.assertIn("display-only horizontal stem offset", index)
         self.assertNotIn("phaseHue(t.phase_rad)", index)
         self.assertIn("total_path_power_db", index)
         self.assertIn("Application CPU (logical cores)", index)
@@ -308,6 +347,8 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("renderMemorySummary(usage)", index)
         self.assertIn('id="nodeCards"', index)
         self.assertIn("function renderNodeCards(sionna)", index)
+        self.assertIn("matrix_profile_active", index)
+        self.assertIn("matrix total", index)
         self.assertIn("Position", index)
         self.assertIn("Antenna", index)
         self.assertIn("antenna.tx===antenna.rx", index)
@@ -695,6 +736,8 @@ class WebUiTests(unittest.TestCase):
                     "slot": 90,
                     "backend": "cuda",
                     "profile_active": True,
+                    "matrix_profile_active": True,
+                    "array": {"nt": 2, "nr": 1},
                 }
             },
         )
@@ -710,12 +753,16 @@ class WebUiTests(unittest.TestCase):
                     "slot": 91,
                     "backend": "cuda",
                     "profile_active": True,
+                    "matrix_profile_active": True,
+                    "array": {"nt": 2, "nr": 1},
                 }
             },
         )
         self.assertTrue(confirmed["backend_applied"])
         self.assertEqual(confirmed["backend_applied_links"], 1)
         self.assertEqual(confirmed["links"][0]["observed_slot"], 91)
+        self.assertTrue(confirmed["links"][0]["matrix_profile_active"])
+        self.assertEqual(confirmed["links"][0]["array"], {"nt": 2, "nr": 1})
 
     def test_delivery_does_not_call_dry_run_received(self) -> None:
         status = delivery_status(

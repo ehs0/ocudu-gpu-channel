@@ -17,10 +17,11 @@ from typing import Any, Iterable, Mapping, Sequence
 
 @dataclass(frozen=True)
 class Ray:
-    """One valid baseband-equivalent propagation path from ``Paths.cir``."""
+    """One valid baseband-equivalent Sionna propagation path."""
 
     delay_seconds: float
     coefficient: complex
+    doppler_hz: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +31,24 @@ class Tap:
     delay_samples: float
     gain_db: float
     phase_rad: float
+
+
+@dataclass(frozen=True)
+class LaneProfile:
+    """One row-major (rx_port, tx_port) entry of a MIMO channel matrix."""
+
+    rx_port: int
+    tx_port: int
+    taps: tuple[Tap, ...]
+
+
+@dataclass(frozen=True)
+class MatrixProfile:
+    """All Nr x Nt lane profiles for one physical directed link."""
+
+    nt: int
+    nr: int
+    lanes: tuple[LaneProfile, ...]
 
 
 def control_link_id(source: str, destination: str, model: str) -> str:
@@ -152,6 +171,54 @@ def make_profile_swap(
     return message
 
 
+def make_matrix_profile_swap(
+    link_id: str,
+    profile: MatrixProfile,
+    *,
+    batch_id: str | None = None,
+    take_effect_at_slot: int | None = None,
+) -> dict[str, Any]:
+    """Build one physical-link-atomic Nr x Nt profile replacement."""
+
+    if not link_id:
+        raise ValueError("link_id must not be empty")
+    if profile.nt <= 0 or profile.nr <= 0:
+        raise ValueError("matrix profile dimensions must be positive")
+    expected = profile.nt * profile.nr
+    if len(profile.lanes) != expected:
+        raise ValueError("matrix profile requires exactly Nr x Nt lanes")
+    positions = {(lane.rx_port, lane.tx_port) for lane in profile.lanes}
+    required = {
+        (rx_port, tx_port)
+        for rx_port in range(profile.nr)
+        for tx_port in range(profile.nt)
+    }
+    if positions != required or any(not lane.taps for lane in profile.lanes):
+        raise ValueError("matrix profile lanes must cover every port pair exactly once")
+
+    message: dict[str, Any] = {
+        "type": "matrix_profile_swap",
+        "link_id": link_id,
+        "nt": profile.nt,
+        "nr": profile.nr,
+        "lanes": [
+            {
+                "rx_port": lane.rx_port,
+                "tx_port": lane.tx_port,
+                "taps": [asdict(tap) for tap in lane.taps],
+            }
+            for lane in sorted(
+                profile.lanes, key=lambda item: item.rx_port * profile.nt + item.tx_port
+            )
+        ],
+    }
+    if batch_id is not None:
+        message["batch_id"] = batch_id
+    if take_effect_at_slot is not None:
+        message["take_effect_at_slot"] = int(take_effect_at_slot)
+    return message
+
+
 def channel_status(
     link_id: str,
     rays: Sequence[Ray],
@@ -163,6 +230,41 @@ def channel_status(
 
     ray_power = sum(abs(ray.coefficient) ** 2 for ray in rays)
     total_power_db = 10.0 * math.log10(ray_power) if ray_power > 0.0 else None
+    delay_doppler_points = []
+    for index, ray in enumerate(rays):
+        delay_seconds = float(ray.delay_seconds)
+        doppler_hz = float(ray.doppler_hz)
+        path_power = abs(complex(ray.coefficient)) ** 2
+        if not (
+            math.isfinite(delay_seconds)
+            and math.isfinite(doppler_hz)
+            and math.isfinite(path_power)
+            and path_power > 0.0
+        ):
+            continue
+        delay_doppler_points.append(
+            {
+                "path_index": index,
+                "delay_samples": (
+                    delay_seconds * sample_rate_hz
+                    if sample_rate_hz is not None and sample_rate_hz > 0.0
+                    else None
+                ),
+                "delay_ns": delay_seconds * 1.0e9,
+                "doppler_hz": doppler_hz,
+                # This is raw Sionna path power. The emulator gain offset is
+                # deliberately not applied to this diagnostic representation.
+                "power_db": 10.0 * math.log10(path_power),
+            }
+        )
+    point_count = len(delay_doppler_points)
+    # Keep status JSON bounded if a detailed scene produces many paths. Retain
+    # the strongest paths, then restore a stable delay/Doppler display order.
+    delay_doppler_points.sort(key=lambda item: item["power_db"], reverse=True)
+    delay_doppler_points = delay_doppler_points[:128]
+    delay_doppler_points.sort(
+        key=lambda item: (item["delay_samples"] or 0.0, item["doppler_hz"])
+    )
     delays = [tap.delay_samples for tap in taps]
     tap_rows = []
     for index, tap in enumerate(taps):
@@ -189,6 +291,8 @@ def channel_status(
         "strongest_tap_gain_db": max(tap.gain_db for tap in taps),
         "first_delay_samples": min(delays),
         "last_delay_samples": max(delays),
+        "delay_doppler_point_count": point_count,
+        "delay_doppler_points": delay_doppler_points,
         # UI/status evidence only. The same Tap objects are serialized into
         # profile_swap separately; scene geometry is never added there.
         "taps": tap_rows,
@@ -242,6 +346,23 @@ class ZmqControlClient:
             for link_id, taps in profiles.items():
                 self.request(
                     make_profile_swap(link_id, taps, batch_id=batch_id)
+                )
+            return self.request({"type": "batch_commit", "id": batch_id})
+        except Exception:
+            try:
+                self.request({"type": "batch_abort", "id": batch_id})
+            except Exception:
+                pass
+            raise
+
+    def send_matrix_profiles(
+        self, profiles: Mapping[str, MatrixProfile], *, batch_id: str
+    ) -> dict[str, Any]:
+        self.request({"type": "batch_begin", "id": batch_id})
+        try:
+            for link_id, profile in profiles.items():
+                self.request(
+                    make_matrix_profile_swap(link_id, profile, batch_id=batch_id)
                 )
             return self.request({"type": "batch_commit", "id": batch_id})
         except Exception:
