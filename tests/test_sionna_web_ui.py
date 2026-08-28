@@ -434,6 +434,52 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("Unmatched number of RE (212 != 106)", index)
         self.assertIn("--allow-silent-source", index)
 
+    def test_web_ui_documents_the_sionna_bridge_topology(self) -> None:
+        index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        # The bridge diagram follows the rank-1 brief and precedes the live panels.
+        self.assertLess(
+            index.index("Rank-1 multi-antenna channel emulation"),
+            index.index("Sionna RT bridge · how the live channel reaches the emulator"),
+        )
+        self.assertLess(
+            index.index("Sionna RT bridge · how the live channel reaches the emulator"),
+            index.index("Sionna environment · Near top-down 3D mobility"),
+        )
+        # Two inline figures, no raster, no marker dependency.
+        self.assertEqual(index.count('<svg class="arch-figure"'), 2)
+        # Every plane is named with its real socket type and default endpoint.
+        for token in (
+            "ZMQ REQ → REP",
+            "127.0.0.1:5559",
+            "ZMQ PUB → SUB",
+            "127.0.0.1:5560",
+            "topic = link_id",
+            "results/sionna-2gnb-2ue.jsonl",
+            "IQ data plane",
+        ):
+            self.assertIn(token, index)
+        # The bridge loop steps must match the functions that actually run.
+        for step in (
+            "update_positions()",
+            "trace_all_profiles()",
+            "rays_to_taps()",
+            "send_matrix_profiles()",
+            "append_status()",
+        ):
+            self.assertIn(step, index)
+        self.assertIn("batch_begin → 10 swaps → batch_commit", index)
+        self.assertIn("snap_physical_link() · slot boundary", index)
+        # The broker box hangs off the emulator box, so it must keep that box's
+        # x span and carry a name that states the containment.
+        self.assertIn("Broker — inside GPU Channel Emulator", index)
+        self.assertIn('<rect x="470" y="490" width="440"', index)
+        self.assertIn('<rect x="470" y="56" width="440"', index)
+        self.assertIn("never opens the control socket", index)
+        self.assertIn("gnb0&gt;ue0:sionna_rt", index)
+        self.assertIn("Sionna RT is never on this path", index)
+
     def test_store_tracks_iteration_boundaries_and_warmup_interval(self) -> None:
         store = StatusStore()
         store.update_sionna(

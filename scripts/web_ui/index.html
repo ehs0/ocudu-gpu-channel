@@ -66,6 +66,10 @@
     .mode-pill { flex:none; border-radius:99px; padding:3px 11px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.07em; }
     .mode-pill.dl { color:var(--cyan); border:1px solid #285c6e; background:#0c2431; }
     .mode-pill.ul { color:var(--amber); border:1px solid #6b5725; background:#2b2414; }
+    .mode-pill.tlm { color:var(--green); border:1px solid #276d48; background:#10251a; }
+    .mode-pill.sts { color:#b7a0ff; border:1px solid #4b3f6b; background:#191634; }
+    .plane-legend { display:flex; flex-wrap:wrap; gap:8px 20px; }
+    .plane-legend .brief-mode { flex:1 1 300px; }
     .brief-mode span { color:var(--muted); font-size:11.5px; }
     .arch-figure { display:block; width:100%; height:auto; border:1px solid #20323f; border-radius:10px; background:#07111a; }
     .brief-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; }
@@ -281,6 +285,139 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
             <p><b>The downlink caveat:</b> in the baseline configuration (CSI disabled) the srsRAN scheduler sees the cell as single-port and selects codebook [1,0,0,0], so transmit ports 1–3 carry exactly zero power. That is the stack's real behaviour, and the gate declares it explicitly via <span class="mono">--allow-silent-source</span> rather than hiding it — a recorded measurement, not a relaxed check. Multi-branch downlink was therefore proven separately, in the CSI-enabled configuration: 5.27e-08 with no waiver, off-diagonal share 0.081. In that run, however, attach does not complete, so the two conditions do not yet hold in the same run, and the verdict table says so.</p>
           </details>
           <div class="foot">Conditions to quote alongside any number: RTX 5090 · 23.04 MS/s · 1 ms slot (batch 23040) · CUDA backend · <span class="mono">fixed_mimo</span> (1 tap) + TDL chain · percentiles come from a full-slot histogram and are always quoted with n · ctest 8/8, standing GPU sequence 9/9.</div>
+        </div>
+      </section>
+      <section class="panel wide">
+        <h2>Sionna RT bridge · how the live channel reaches the emulator</h2>
+        <div class="brief">
+          <div class="brief-lede">
+            <div>
+              <h3>Sionna RT does not sit on the IQ path. It re-solves the radio geometry twice a second and hands the emulator a new set of taps; the emulator keeps shaping every sample in the 1 ms slot regardless.</h3>
+              <p>The bridge is a Python process that owns the scene, moves the nodes, ray-traces every link, converts paths to taps and pushes them over the existing JSON control plane. The emulator swaps them in at a slot boundary and publishes what it actually applied. This dashboard is a third, strictly read-only observer that cross-checks the two.</p>
+            </div>
+            <div class="brief-modes plane-legend">
+              <div class="brief-mode"><span class="mode-pill dl">Control</span><span>bridge → emulator · ZMQ REQ/REP · <span class="mono">:5559</span></span></div>
+              <div class="brief-mode"><span class="mode-pill tlm">Telemetry</span><span>emulator → dashboard · ZMQ PUB/SUB · <span class="mono">:5560</span></span></div>
+              <div class="brief-mode"><span class="mode-pill sts">Status</span><span>bridge → dashboard · JSONL append and tail</span></div>
+              <div class="brief-mode"><span class="mode-pill ul">IQ data</span><span>radio stacks ↔ broker · ZMQ REP/REQ per device port</span></div>
+            </div>
+          </div>
+          <svg class="arch-figure" viewBox="0 0 1400 620" role="img" aria-label="The Sionna RT bridge re-traces the scene at 2 Hz and sends one atomic batch of matrix profile swaps over ZMQ REQ/REP to the ocudu-gpu-channel binary, which applies them at a slot boundary, shapes the IQ passing between the radio stacks, and publishes telemetry that this read-only web UI subscribes to" font-family="ui-sans-serif,system-ui,sans-serif">
+            <rect x="530" y="12" width="340" height="58" rx="9" fill="#07111a" stroke="#4b3f6b"/>
+            <text x="700" y="36" text-anchor="middle" fill="#b7a0ff" font-size="13" font-weight="700" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">results/sionna-2gnb-2ue.jsonl</text>
+            <text x="700" y="55" text-anchor="middle" fill="#8ca4b5" font-size="10.5">iteration record · timings, positions, taps, geometry</text>
+            <polyline points="185,100 185,41 514,41" fill="none" stroke="#b7a0ff" stroke-width="1.6"/><path d="M514,34 L528,41 L514,48 z" fill="#b7a0ff"/>
+            <text x="350" y="33" text-anchor="middle" fill="#8ca4b5" font-size="9">append_status() · one line per iteration</text>
+            <polyline points="870,41 1205,41 1205,90" fill="none" stroke="#b7a0ff" stroke-width="1.6"/><path d="M1198,88 L1205,102 L1212,88 z" fill="#b7a0ff"/>
+            <text x="1035" y="33" text-anchor="middle" fill="#8ca4b5" font-size="9">tail 0.25 s · 4 MiB window</text>
+            <g transform="translate(0,44)">
+            <rect x="20" y="56" width="330" height="374" rx="14" fill="#09141d" stroke="#285c6e"/>
+            <text x="185" y="88" text-anchor="middle" fill="#42d3ff" font-size="20" font-weight="700">Sionna RT bridge</text>
+            <text x="185" y="107" text-anchor="middle" fill="#8ca4b5" font-size="11">scripts/sionna_rt/run_bridge.py</text>
+            <rect x="105" y="118" width="160" height="22" rx="11" fill="#0c2431" stroke="#285c6e"/>
+            <text x="185" y="133" text-anchor="middle" fill="#42d3ff" font-size="11" font-weight="700">2 Hz update loop</text>
+            <circle cx="42" cy="166" r="9" fill="#0c2431" stroke="#285c6e"/><text x="42" y="170" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">1</text>
+            <text x="60" y="170" fill="#e9f2f8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">update_positions()</text>
+            <text x="60" y="186" fill="#8ca4b5" font-size="10.5">UE0 car 13.9 m/s · UE1 walk 1.4 m/s</text>
+            <circle cx="42" cy="218" r="9" fill="#0c2431" stroke="#285c6e"/><text x="42" y="222" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">2</text>
+            <text x="60" y="222" fill="#e9f2f8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">trace_all_profiles()</text>
+            <text x="60" y="238" fill="#8ca4b5" font-size="10.5">PathSolver · depth 3 · 200k samples/src</text>
+            <circle cx="42" cy="270" r="9" fill="#0c2431" stroke="#285c6e"/><text x="42" y="274" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">3</text>
+            <text x="60" y="274" fill="#e9f2f8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">rays_to_taps()</text>
+            <text x="60" y="290" fill="#8ca4b5" font-size="10.5">≤ 32 taps · 1/16-sample delay quantum</text>
+            <circle cx="42" cy="322" r="9" fill="#0c2431" stroke="#285c6e"/><text x="42" y="326" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">4</text>
+            <text x="60" y="326" fill="#e9f2f8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">send_matrix_profiles()</text>
+            <text x="60" y="342" fill="#8ca4b5" font-size="10.5">batch_begin → 10 swaps → batch_commit</text>
+            <circle cx="42" cy="374" r="9" fill="#0c2431" stroke="#285c6e"/><text x="42" y="378" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">5</text>
+            <text x="60" y="378" fill="#e9f2f8" font-size="12" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">append_status()</text>
+            <text x="60" y="394" fill="#8ca4b5" font-size="10.5">one JSON line per iteration</text>
+            <line x1="352" y1="242" x2="456" y2="242" stroke="#42d3ff" stroke-width="3"/><path d="M454,234 L468,242 L454,250 z" fill="#42d3ff"/>
+            <text x="409" y="196" text-anchor="middle" fill="#42d3ff" font-size="10" font-weight="700">ZMQ REQ → REP</text>
+            <text x="409" y="210" text-anchor="middle" fill="#8ca4b5" font-size="8.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">127.0.0.1:5559</text>
+            <text x="409" y="224" text-anchor="middle" fill="#8ca4b5" font-size="9">10 × matrix_profile_swap</text>
+            <line x1="456" y1="276" x2="368" y2="276" stroke="#42d3ff" stroke-width="1.4"/><path d="M370,269 L354,276 L370,283 z" fill="#42d3ff"/>
+            <text x="409" y="296" text-anchor="middle" fill="#8ca4b5" font-size="9">ACK · seqno ·</text>
+            <text x="409" y="308" text-anchor="middle" fill="#8ca4b5" font-size="9">warmup_until_slot</text>
+            <rect x="470" y="56" width="440" height="374" rx="14" fill="#0b1a1f" stroke="#276d48"/>
+            <text x="690" y="88" text-anchor="middle" fill="#53e58b" font-size="20" font-weight="700">GPU Channel Emulator</text>
+            <text x="690" y="107" text-anchor="middle" fill="#8ca4b5" font-size="11">one binary · control server + broker + telemetry</text>
+            <rect x="492" y="120" width="396" height="80" rx="8" fill="#07111a" stroke="#285c6e"/>
+            <text x="506" y="139" fill="#42d3ff" font-size="11.5" font-weight="700">ControlServer · ZMQ REP :5559</text>
+            <text x="506" y="156" fill="#8ca4b5" font-size="10.5">validates link_id, Nt/Nr, delay ≤ 1023, gain −100…+20 dB</text>
+            <text x="506" y="171" fill="#8ca4b5" font-size="10.5">batch_begin stages every swap · batch_commit applies them together</text>
+            <text x="506" y="186" fill="#8ca4b5" font-size="10.5">reply carries seqno and warmup_until_slot per link</text>
+            <rect x="492" y="210" width="396" height="68" rx="8" fill="#07111a" stroke="#20323f"/>
+            <text x="506" y="229" fill="#e9f2f8" font-size="11.5" font-weight="700">snap_physical_link() · slot boundary</text>
+            <text x="506" y="246" fill="#8ca4b5" font-size="10.5">runs once per link per slot, before any lane is shaped</text>
+            <text x="506" y="261" fill="#8ca4b5" font-size="10.5">shadow → live when seqno changes, then a warm-up window opens</text>
+            <rect x="492" y="288" width="396" height="62" rx="8" fill="#07111a" stroke="#276d48"/>
+            <text x="506" y="307" fill="#53e58b" font-size="11.5" font-weight="700">Broker · CUDA backend</text>
+            <text x="506" y="324" fill="#8ca4b5" font-size="10.5">23.04 MS/s · 1 ms slot = 23,040 samples</text>
+            <text x="506" y="339" fill="#8ca4b5" font-size="10.5">CSR superposition per destination row · fading on-device</text>
+            <rect x="492" y="362" width="396" height="52" rx="8" fill="#07111a" stroke="#276d48"/>
+            <text x="506" y="381" fill="#53e58b" font-size="11.5" font-weight="700">Telemetry · ZMQ PUB :5560 · 20 Hz</text>
+            <text x="506" y="399" fill="#8ca4b5" font-size="10.5">topic = link_id · slot, seqno, profile_active, warm-up, timing</text>
+            <line x1="912" y1="242" x2="1016" y2="242" stroke="#53e58b" stroke-width="3"/><path d="M1014,234 L1028,242 L1014,250 z" fill="#53e58b"/>
+            <text x="970" y="196" text-anchor="middle" fill="#53e58b" font-size="10" font-weight="700">ZMQ PUB → SUB</text>
+            <text x="970" y="210" text-anchor="middle" fill="#8ca4b5" font-size="8.5" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">127.0.0.1:5560</text>
+            <text x="970" y="224" text-anchor="middle" fill="#8ca4b5" font-size="9">topic = link_id · 20 Hz</text>
+            <rect x="1030" y="56" width="350" height="374" rx="14" fill="#09141d" stroke="#26394a"/>
+            <text x="1205" y="88" text-anchor="middle" fill="#e9f2f8" font-size="20" font-weight="700">Web UI</text>
+            <text x="1205" y="107" text-anchor="middle" fill="#8ca4b5" font-size="11">scripts/web_ui/server.py · 127.0.0.1:8080</text>
+            <circle cx="1050" cy="136" r="5" fill="#53e58b"/>
+            <text x="1064" y="140" fill="#e9f2f8" font-size="11.5" font-weight="700">telemetry-sub thread</text>
+            <text x="1064" y="157" fill="#8ca4b5" font-size="10.5">SUB :5560, all topics, 200 ms poll</text>
+            <circle cx="1050" cy="190" r="5" fill="#b7a0ff"/>
+            <text x="1064" y="194" fill="#e9f2f8" font-size="11.5" font-weight="700">sionna-jsonl-tail thread</text>
+            <text x="1064" y="211" fill="#8ca4b5" font-size="10.5">0.25 s poll over a 4 MiB tail window</text>
+            <circle cx="1050" cy="244" r="5" fill="#42d3ff"/>
+            <text x="1064" y="248" fill="#e9f2f8" font-size="11.5" font-weight="700">delivery_status()</text>
+            <text x="1064" y="265" fill="#8ca4b5" font-size="10.5">applied = observed seqno ≥ ACK seqno,</text>
+            <text x="1064" y="280" fill="#8ca4b5" font-size="10.5">and profile_active, and backend match</text>
+            <circle cx="1050" cy="313" r="5" fill="#e9f2f8"/>
+            <text x="1064" y="317" fill="#e9f2f8" font-size="11.5" font-weight="700">/api/status</text>
+            <text x="1064" y="334" fill="#8ca4b5" font-size="10.5">this dashboard polls it every 500 ms</text>
+            <text x="1050" y="376" fill="#8ca4b5" font-size="10.5">It never opens the control socket —</text>
+            <text x="1050" y="391" fill="#8ca4b5" font-size="10.5">the bridge alone drives the emulator.</text>
+            </g>
+            <line x1="470" y1="474" x2="470" y2="490" stroke="#276d48" stroke-width="1.4" stroke-dasharray="3 3"/>
+            <line x1="910" y1="474" x2="910" y2="490" stroke="#276d48" stroke-width="1.4" stroke-dasharray="3 3"/>
+            <rect x="470" y="490" width="440" height="76" rx="12" fill="#0b1a1f" stroke="#276d48"/>
+            <text x="690" y="518" text-anchor="middle" fill="#53e58b" font-size="20" font-weight="700">Broker — inside GPU Channel Emulator</text>
+            <text x="690" y="540" text-anchor="middle" fill="#8ca4b5" font-size="10.5">tx REQ pulls · superposes every edge into the destination row</text>
+            <text x="690" y="556" text-anchor="middle" fill="#8ca4b5" font-size="10.5">rx REP serves the impaired samples back · 23,040 per slot</text>
+            <rect x="44" y="496" width="280" height="64" rx="8" fill="#07111a" stroke="#6b5725"/>
+            <text x="184" y="524" text-anchor="middle" fill="#e9f2f8" font-size="20" font-weight="700">OCUDU gNB TX</text>
+            <text x="184" y="546" text-anchor="middle" fill="#8ca4b5" font-size="10.5">ZMQ REP binds · cf32 @ 23.04 MS/s</text>
+            <line x1="324" y1="528" x2="456" y2="528" stroke="#ffc857" stroke-width="2.5"/><path d="M454,521 L468,528 L454,535 z" fill="#ffc857"/>
+            <text x="393" y="515" text-anchor="middle" fill="#8ca4b5" font-size="9">23,040 samples = 1 ms</text>
+            <line x1="910" y1="528" x2="1062" y2="528" stroke="#ffc857" stroke-width="2.5"/><path d="M1060,521 L1074,528 L1060,535 z" fill="#ffc857"/>
+            <text x="986" y="515" text-anchor="middle" fill="#8ca4b5" font-size="9">impaired IQ</text>
+            <rect x="1076" y="496" width="280" height="64" rx="8" fill="#07111a" stroke="#6b5725"/>
+            <text x="1216" y="524" text-anchor="middle" fill="#e9f2f8" font-size="20" font-weight="700">srsUE RX</text>
+            <text x="1216" y="546" text-anchor="middle" fill="#8ca4b5" font-size="10.5">ZMQ REQ connects · pulls impaired samples</text>
+            <text x="700" y="600" text-anchor="middle" fill="#ffc857" font-size="12" font-weight="700">IQ data plane — the channel is applied here, and Sionna RT is never on this path</text>
+          </svg>
+          <div>
+            <h3 class="brief-head">What holds the two processes together</h3>
+            <div class="brief-grid">
+              <div class="brief-card"><strong>One atomic batch per iteration</strong><p>Every swap in a batch is staged, not applied, until <span class="mono">batch_commit</span> walks them and gives all ten links the same numerical apply-slot while bumping each sequence number. A failure sends <span class="mono">batch_abort</span>, so a half-updated channel graph never reaches the air interface.</p><span class="mono">channel_adapter.py · send_matrix_profiles()</span></div>
+              <div class="brief-card"><strong>Applied at a slot boundary, not on arrival</strong><p>The snapshot runs once per link per slot before any lane is shaped, and copies shadow to live only when the sequence number changes. A warm-up window then opens while the delay line refills, and the emulator reports it rather than hiding it.</p><span class="mono">physical_link.h · snap_physical_link()</span></div>
+              <div class="brief-card"><strong>Fading is never modelled twice</strong><p>Sionna already supplies instantaneous complex path coefficients, so the bridge ships the taps with the emulator's own stochastic Jakes process switched off. What you see in the tap tables is Sionna's geometry, not a second fading model layered on top.</p><span class="mono">fading.enabled = false</span></div>
+              <div class="brief-card"><strong>The dashboard observes, it never drives</strong><p>This page holds no control socket. It matches the ACK's sequence number against live telemetry from the backend, so “applied” means the backend really swapped the profile — not that a message was merely accepted.</p><span class="mono">server.py · delivery_status()</span></div>
+            </div>
+          </div>
+          <div>
+            <h3 class="brief-head">Planes and defaults</h3>
+            <table class="brief-table"><thead><tr><th>Plane</th><th>Direction and socket</th><th>Default endpoint</th><th>Cadence</th></tr></thead><tbody>
+              <tr><td>Control</td><td>bridge REQ → emulator REP</td><td class="value">tcp://127.0.0.1:5559</td><td>2 Hz batch · 5 s request timeout</td></tr>
+              <tr><td>Telemetry</td><td>emulator PUB → Web UI SUB</td><td class="value">tcp://127.0.0.1:5560</td><td>20 Hz · one frame per link per slot</td></tr>
+              <tr><td>Status</td><td>bridge appends → Web UI tails</td><td class="value">results/sionna-2gnb-2ue.jsonl</td><td>0.25 s poll · 4 MiB initial window</td></tr>
+              <tr><td>IQ data</td><td>producer REP ↔ broker ↔ consumer REQ</td><td class="value">tcp://127.0.0.1:3000–3103</td><td>23.04 MS/s · 23,040 samples per slot</td></tr>
+              <tr><td>Dashboard</td><td>browser → Web UI HTTP</td><td class="value">127.0.0.1:8080/api/status</td><td>500 ms browser poll</td></tr>
+            </tbody></table>
+          </div>
+          <div class="foot">The default 2×2 layout carries 10 links: 4 downlink, 4 uplink and 2 UE↔UE crosstalk. Link ids follow <span class="mono">source&gt;destination:model</span>, for example <span class="mono">gnb0&gt;ue0:sionna_rt</span> — byte-identical to the emulator's internal link key, which is why the telemetry topic is the link id itself. The scene is <span class="mono">simple_street_canyon</span> with a 14 m synthetic road; downlink 1842.5 MHz and uplink 1747.5 MHz are traced separately because each carrier needs its own solve.</div>
         </div>
       </section>
       <section class="panel">
