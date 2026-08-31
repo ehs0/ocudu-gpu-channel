@@ -90,6 +90,17 @@
     .claim { border:1px solid #6b5725; border-radius:9px; background:#2b2414; color:#ffdd9e; padding:11px; font-size:11.5px; }
     .claim b { color:var(--amber); }
     .brief-repro { border:1px solid #20323f; border-radius:8px; background:#07111a; padding:10px; color:var(--cyan); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; overflow-x:auto; white-space:pre; }
+    .outlook-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+    .outlook-card { position:relative; min-width:0; padding:17px 18px; border:1px solid #20323f; border-radius:11px; background:#07111a; overflow:hidden; }
+    .outlook-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--cyan); }
+    .outlook-card.academia::before { background:#b7a0ff; }
+    .outlook-label { display:inline-block; margin-bottom:9px; padding:3px 9px; border:1px solid #285c6e; border-radius:99px; color:var(--cyan); background:#0c2431; font-size:10px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+    .outlook-card.academia .outlook-label { color:#b7a0ff; border-color:#4b3f6b; background:#191634; }
+    .outlook-card h3 { margin:0 0 11px; color:var(--text); font-size:16px; line-height:1.35; }
+    .outlook-card ul { margin:0; padding-left:18px; color:var(--muted); }
+    .outlook-card li { margin:7px 0; padding-left:3px; }
+    .outlook-card.industry li::marker { color:var(--cyan); }
+    .outlook-card.academia li::marker { color:#b7a0ff; }
     .tap-plot { width:100%; height:136px; display:block; border:1px solid #20323f; border-radius:8px; background:#07111a; margin-bottom:8px; }
     .ran-table-wrap { overflow-x:auto; border:1px solid #20323f; border-radius:9px; background:#07111a; }
     .ran-table { border-collapse:collapse; width:100%; min-width:900px; font-variant-numeric:tabular-nums; }
@@ -164,7 +175,7 @@
     .loop-flow i { color:var(--cyan); font-style:normal; }
     @media (max-width:1300px) { header { align-items:flex-start; flex-direction:column; } .pills { width:100%; grid-template-columns:repeat(4,minmax(145px,1fr)); } }
     @media (max-width:1100px) { .resource-charts { grid-template-columns:1fr; } .system-metrics { grid-template-columns:repeat(3,1fr); } }
-    @media (max-width:700px) { .pills { grid-template-columns:repeat(2,minmax(0,1fr)); } #updatedPill { grid-column:2; } .runtime-grid,.gpu-processes { grid-template-columns:1fr; } .system-metrics,.gpu-metrics { grid-template-columns:repeat(2,1fr); } .deadline-cumulative { grid-template-columns:repeat(2,1fr); } .memory-process-row { grid-template-columns:minmax(110px,1.2fr) repeat(2,minmax(76px,1fr)); } }
+    @media (max-width:700px) { .pills { grid-template-columns:repeat(2,minmax(0,1fr)); } #updatedPill { grid-column:2; } .runtime-grid,.gpu-processes,.outlook-grid { grid-template-columns:1fr; } .system-metrics,.gpu-metrics { grid-template-columns:repeat(2,1fr); } .deadline-cumulative { grid-template-columns:repeat(2,1fr); } .memory-process-row { grid-template-columns:minmax(110px,1.2fr) repeat(2,minmax(76px,1fr)); } }
     @media (max-width:950px) { .grid { grid-template-columns:1fr; } canvas { height:420px; } .brief-lede { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -433,6 +444,31 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
             </tbody></table>
           </div>
           <div class="foot">The default 2×2 layout carries 10 links: 4 downlink, 4 uplink and 2 UE↔UE crosstalk. Link ids follow <span class="mono">source&gt;destination:model</span>, for example <span class="mono">gnb0&gt;ue0:sionna_rt</span> — byte-identical to the emulator's internal link key, which is why the telemetry topic is the link id itself. The scene is <span class="mono">simple_street_canyon</span> with a 14 m synthetic road; downlink 1842.5 MHz and uplink 1747.5 MHz are traced separately because each carrier needs its own solve.</div>
+        </div>
+      </section>
+      <section class="panel wide">
+        <h2>Applications &amp; outlook</h2>
+        <div class="outlook-grid">
+          <article class="outlook-card industry">
+            <span class="outlook-label">Industry</span>
+            <h3>Real-time RAN software validation before RF and field testing</h3>
+            <ul>
+              <li>Insert diverse channel and interference conditions between live gNB and UE stacks.</li>
+              <li>Preserve real RAN timing by keeping the IQ data path within the 1 ms slot deadline.</li>
+              <li>Use the platform for regression, interference, mobility, and MIMO feature validation.</li>
+              <li>Extend it toward pre-deployment validation of Open RAN xApps/rApps and AI-RAN algorithms.</li>
+            </ul>
+          </article>
+          <article class="outlook-card academia">
+            <span class="outlook-label">Academia</span>
+            <h3>A research platform for validating simulation algorithms against a live 5G stack</h3>
+            <ul>
+              <li>Evaluate new PHY, MIMO, and beamforming algorithms.</li>
+              <li>Study wireless digital twins by coupling live stacks with Sionna RT.</li>
+              <li>Explore AI-for-RAN methods for handover, power control, and interference management.</li>
+              <li>Study the trade-off between GPU throughput and the 1 ms real-time constraint.</li>
+            </ul>
+          </article>
         </div>
       </section>
       <section class="panel">

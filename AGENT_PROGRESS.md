@@ -298,6 +298,7 @@ Progress entry template
 - [Native live demo validation] Ran the validator over 0, 0.2, .5, 1, 60 (all reach the later namespace check) and 0.1, 0.0, 61, "abc", "5s", -1 (all rejected with the interval message). Confirmed on the live run that `cu_cp.inactivity_timer: 7200` rendered and the keepalive is pinging (`ue-keepalive.log`, icmp_seq 12 at the 5 s interval).
 - [Native Sionna cadence] Reduced the native Sionna live-demo default update rate from 20 Hz to 10 Hz in both launcher layers and aligned the native runbook; `OCUDU_NATIVE_SIONNA_UPDATE_HZ` remains an explicit override.
 - [Web UI warm-up scope] Limited measured and timing-unavailable warm-up overlays and their legend entries to the Estimated nominal-slot processing time chart; iteration start/end markers remain available on the CPU and PCIe charts without warm-up shading.
+- [Web UI application outlook] Added an English-only, responsive two-column Industry/Academia application-outlook panel between the Sionna RT bridge explanation and the scene visual, covering pre-field RAN validation, Open RAN/AI-RAN extension, digital twins, algorithm evaluation, and real-time GPU trade-off research.
 
 ## Blockers and Risks
 

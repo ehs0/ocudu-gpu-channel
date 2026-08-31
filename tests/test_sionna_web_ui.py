@@ -877,6 +877,21 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("unknownWarmups.forEach", index)
         self.assertNotIn("ctx.fillRect(x0,top,Math.max(1,x1-x0),plotH)", index)
 
+    def test_application_outlook_sits_between_bridge_and_scene(self) -> None:
+        index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
+            encoding="utf-8"
+        )
+        bridge = index.index("Sionna RT bridge · how the live channel reaches the emulator")
+        outlook = index.index("Applications &amp; outlook")
+        scene = index.index("Sionna environment · Near top-down 3D mobility")
+        self.assertLess(bridge, outlook)
+        self.assertLess(outlook, scene)
+        self.assertIn('class="outlook-card industry"', index)
+        self.assertIn('class="outlook-card academia"', index)
+        self.assertIn("Real-time RAN software validation before RF and field testing", index)
+        self.assertIn("A research platform for validating simulation algorithms", index)
+        self.assertIn(".runtime-grid,.gpu-processes,.outlook-grid", index)
+
     def test_web_ui_leads_with_rank1_workstream_brief(self) -> None:
         index = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text(
             encoding="utf-8"
