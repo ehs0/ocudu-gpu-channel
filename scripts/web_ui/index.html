@@ -91,13 +91,22 @@
     .claim b { color:var(--amber); }
     .brief-repro { border:1px solid #20323f; border-radius:8px; background:#07111a; padding:10px; color:var(--cyan); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; overflow-x:auto; white-space:pre; }
     .tap-plot { width:100%; height:136px; display:block; border:1px solid #20323f; border-radius:8px; background:#07111a; margin-bottom:8px; }
+    .lane-picker { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 9px; }
+    .lane-picker .lane-picker-label { color:var(--muted); font-size:11px; margin-right:2px; }
+    .lane-picker button { font:inherit; font-size:11px; line-height:1; padding:5px 10px; border-radius:99px; cursor:pointer; background:#0c1a24; border:1px solid #20323f; color:var(--muted); }
+    .lane-picker button:hover { border-color:#31506a; }
+    .lane-picker button.active { font-weight:600; }
     .freq-block { border:1px solid #20323f; border-radius:8px; background:#07111a; overflow:hidden; margin:9px 0; }
     .freq-head { display:flex; justify-content:space-between; gap:10px; padding:7px 9px; border-bottom:1px solid #20323f; color:var(--muted); font-size:10px; }
     .freq-head b { color:var(--text); }
     .freq-plot { width:100%; height:170px; display:block; background:#07111a; }
-    .lane-tables { max-height:680px; overflow:auto; }
+    /* No scroll cap: every selected lane's tap table has to be readable
+       at once. Four stacked lanes are ~1090px, which the old 680px cap
+       hid lane 4 behind — it only ever fit while the gNB had two ports.
+       The grid puts two lanes side by side whenever the card is wide
+       enough, so All 4 stays about as tall as two stacked lanes. */
+    .lane-tables { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:9px; align-items:start; }
     .lane-tap-block { border:1px solid #20323f; border-radius:8px; background:#07111a; overflow:hidden; }
-    .lane-tap-block + .lane-tap-block { margin-top:9px; }
     .lane-tap-head { display:flex; justify-content:space-between; gap:10px; padding:7px; border-bottom:1px solid #20323f; color:var(--muted); font-size:10px; }
     .lane-tap-head b { color:var(--text); }
     .tap-table th,.tap-table td { padding:5px 6px; font-size:11px; }
@@ -498,7 +507,20 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     const fmtMib = value => finite(value) ? (Number(value)>=1024?`${fmt(Number(value)/1024,1)} GiB`:`${fmt(value,0)} MiB`) : '—';
     const fmtRate = value => finite(value) ? (Number(value)>=1000?`${fmt(Number(value)/1000,2)} GB/s`:`${fmt(value,0)} MB/s`) : '—';
     const esc = value => String(value??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    // Real-time chart cadence. The charts draw a CHART_WINDOW_MS-wide
+    // window, so the browser has to refresh well inside it or the window
+    // slides past every sample the server holds and the charts render
+    // empty. CHART_POLL_MS drives a light /api/realtime fetch that only
+    // redraws the canvases; STATUS_POLL_MS keeps the far heavier full
+    // status render (scene, channel tables, cards) at its own pace.
+    // CHART_HISTORY_MS is the slice both requests ask for: a few window
+    // widths, so a brief stall still leaves a full window of samples.
+    const CHART_WINDOW_MS = 100;
+    const CHART_POLL_MS = 20;
+    const STATUS_POLL_MS = 500;
+    const CHART_HISTORY_MS = CHART_WINDOW_MS * 4;
     let lastStatus = null;
+    let lastRealtime = null;
 
     function setPill(el, ok, text) { el.className = `pill ${ok?'ok':'bad'}`; el.textContent = text; }
     function linkMap(channels) { return Object.fromEntries((channels||[]).map(c => [c.link_id,c])); }
@@ -570,15 +592,56 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       return `<svg class="freq-plot" viewBox="0 0 ${W} ${H}" role="img" aria-label="overlaid matrix-lane frequency responses">${grid}${legend}<line x1="${left}" y1="${base}" x2="${W-right}" y2="${base}" stroke="#526573"/><line x1="${left}" y1="${top}" x2="${left}" y2="${base}" stroke="#526573"/>${traces}<text x="${left}" y="146" fill="#8ca4b5" font-size="9">−${edgeText}</text><text x="${fmt(x(0),2)}" y="146" text-anchor="middle" fill="#8ca4b5" font-size="9">0</text><text x="${W-right}" y="146" text-anchor="end" fill="#8ca4b5" font-size="9">+${edgeText}</text><text x="${left-6}" y="${top+4}" text-anchor="end" fill="#8ca4b5" font-size="9">${maxDb}</text><text x="${left-6}" y="${base}" text-anchor="end" fill="#8ca4b5" font-size="9">${minDb}</text><text x="${(left+W-right)/2}" y="163" text-anchor="middle" fill="#bed1de" font-size="10">${axisLabel}</text><text x="8" y="86" fill="#bed1de" font-size="10" transform="rotate(-90 8 86)">|H| dB</text></svg>`;
     }
 
+    // One button per antenna of the multi-port node. Which matrix axis
+    // that is depends on direction — a 4-port gNB receives on rx_port
+    // 0..3 in the uplink and transmits on tx_port 0..3 in the downlink,
+    // against a single-antenna UE either way — so the picker follows
+    // whichever axis actually varies and presents it as one antenna
+    // list. Labels are 1-based to read as physical antennas while the
+    // port indices underneath stay 0-based. A 1x1 edge has one lane and
+    // nothing to choose, so it gets no picker.
+    function laneOptions(lanes) {
+      const ports=key=>[...new Set(lanes.map(lane=>Number(lane[key])))].filter(Number.isFinite).sort((a,b)=>a-b);
+      const rxPorts=ports('rx_port'),txPorts=ports('tx_port');
+      const key=rxPorts.length>1?'rx_port':txPorts.length>1?'tx_port':null;
+      if(key===null)return null;
+      return (key==='rx_port'?rxPorts:txPorts).map((port,index)=>({
+        id:`ant${port}`,
+        label:`Antenna ${index+1}`,
+        match:lane=>Number(lane[key])===port,
+      }));
+    }
+
+    // Selected port per link_id. Uplink and downlink are separate links,
+    // so each direction keeps its own selection, and the choice survives
+    // the 500 ms status re-render that rebuilds these cards.
+    const laneSelection={};
+    let lastEdgeArgs=null;
+
     function renderEdgeCards(channels, sampleRateHz) {
+      lastEdgeArgs=[channels,sampleRateHz];
       const laneColors=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e','#ff6577'];
       const cards=(channels||[]).map(channel=>{
         const parts={...linkParts(channel.link_id),source:channel.source||linkParts(channel.link_id).source,destination:channel.destination||linkParts(channel.link_id).destination,model:channel.model||linkParts(channel.link_id).model},fallbackLane={rx_port:channel.rx_port||0,tx_port:channel.tx_port||0,taps:channel.taps||[],ray_count:channel.ray_count,tap_count:channel.tap_count,total_path_power_db:channel.total_path_power_db},lanes=(Array.isArray(channel.lanes)&&channel.lanes.length?channel.lanes:[fallbackLane]).slice().sort((a,b)=>Number(a.rx_port)-Number(b.rx_port)||Number(a.tx_port)-Number(b.tx_port));
-        const tapTotal=lanes.reduce((sum,lane)=>sum+(lane.taps||[]).length,0),bandwidthText=Number(sampleRateHz)>0?`${fmt(Number(sampleRateHz)/1e6,2)} MHz span`:'waiting for sample rate';
-        const frequencyBlock=`<section class="freq-block"><div class="freq-head"><b>Frequency response · |H(f)| over all ${lanes.length} lane(s)</b><span>${tapTotal} taps · ${bandwidthText}</span></div>${frequencyResponsePlot(lanes,laneColors,Number(sampleRateHz))}</section>`;
-        const laneTables=lanes.map((lane,laneIndex)=>{const color=laneColors[laneIndex%laneColors.length],taps=(lane.taps||[]).slice(0,8),tapRows=Array.from({length:8},(_,rowIndex)=>{const t=taps[rowIndex];return t?`<tr><td>${rowIndex+1}</td><td>${fmt(t.gain_db,2)}</td><td><i class="phase-dot" style="background:${color}"></i>${fmt(t.phase_rad,3)} / ${fmt(t.phase_deg,1)}°</td><td>${fmt(t.delay_samples,3)}</td><td>${fmt(t.delay_ns,2)}</td></tr>`:`<tr class="empty-tap-row"><td>${rowIndex+1}</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>`}).join('');return `<section class="lane-tap-block"><div class="lane-tap-head"><b><i class="phase-dot" style="background:${color}"></i>Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)})</b><span>${esc(lane.ray_count)} rays · ${esc(lane.tap_count)} taps · ${fmt(lane.total_path_power_db,2)} dB</span></div><table class="tap-table"><thead><tr><th>#</th><th>Gain dB</th><th>Phase rad / deg</th><th>Delay samples</th><th>Delay ns</th></tr></thead><tbody>${tapRows}</tbody></table></section>`}).join('');
+        // Colour is bound to the lane's position in the full matrix, not
+        // to its position in the filtered view, so a lane keeps the same
+        // colour whether it is shown alone or overlaid with the others.
+        const colorOf=lane=>laneColors[lanes.indexOf(lane)%laneColors.length];
+        const options=laneOptions(lanes),selection=laneSelection[channel.link_id]??'all';
+        const active=options?options.find(option=>option.id===selection)??null:null;
+        const shownLanes=active?lanes.filter(active.match):lanes;
+        // Both plot helpers drop tapless lanes internally and then index
+        // their colour array by position in that filtered set, so apply
+        // the same predicate here or the colours shift off their lanes.
+        const plotLanes=shownLanes.filter(lane=>Array.isArray(lane.taps)&&lane.taps.length),plotColors=plotLanes.map(colorOf);
+        const picker=options?`<div class="lane-picker" data-link="${esc(channel.link_id)}"><button type="button" data-port="all" class="${active?'':'active'}"${active?'':' style="background:#1b2d3b;border-color:#31506a;color:#e9f2f8"'}>All ${lanes.length}</button>${options.map(option=>{const matched=lanes.filter(option.match),color=matched.length?colorOf(matched[0]):laneColors[0],on=active?.id===option.id;return `<button type="button" data-port="${option.id}" class="${on?'active':''}" style="${on?`background:${color};border-color:${color};color:#07111a`:`color:${color}`}">${option.label}</button>`}).join('')}</div>`:'';
+        const shownTapTotal=shownLanes.reduce((sum,lane)=>sum+(lane.taps||[]).length,0),bandwidthText=Number(sampleRateHz)>0?`${fmt(Number(sampleRateHz)/1e6,2)} MHz span`:'waiting for sample rate';
+        const scopeText=active?`${active.label} · ${shownLanes.length} of ${lanes.length} lane(s)`:`all ${lanes.length} lane(s)`;
+        const frequencyBlock=`<section class="freq-block"><div class="freq-head"><b>Frequency response · |H(f)| over ${scopeText}</b><span>${shownTapTotal} taps · ${bandwidthText}</span></div>${frequencyResponsePlot(plotLanes,plotColors,Number(sampleRateHz))}</section>`;
+        const laneTables=shownLanes.map(lane=>{const color=colorOf(lane),taps=(lane.taps||[]).slice(0,8),tapRows=Array.from({length:8},(_,rowIndex)=>{const t=taps[rowIndex];return t?`<tr><td>${rowIndex+1}</td><td>${fmt(t.gain_db,2)}</td><td><i class="phase-dot" style="background:${color}"></i>${fmt(t.phase_rad,3)} / ${fmt(t.phase_deg,1)}°</td><td>${fmt(t.delay_samples,3)}</td><td>${fmt(t.delay_ns,2)}</td></tr>`:`<tr class="empty-tap-row"><td>${rowIndex+1}</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>`}).join('');return `<section class="lane-tap-block"><div class="lane-tap-head"><b><i class="phase-dot" style="background:${color}"></i>Lane (rx${esc(lane.rx_port)}, tx${esc(lane.tx_port)})</b><span>${esc(lane.ray_count)} rays · ${esc(lane.tap_count)} taps · ${fmt(lane.total_path_power_db,2)} dB</span></div><table class="tap-table"><thead><tr><th>#</th><th>Gain dB</th><th>Phase rad / deg</th><th>Delay samples</th><th>Delay ns</th></tr></thead><tbody>${tapRows}</tbody></table></section>`}).join('');
         const matrix=channel.matrix||{nt:1,nr:1},matrixText=`H ${matrix.nr||1}×${matrix.nt||1} · ${lanes.length} lane(s)`;
-        return `<article class="edge-card"><div class="card-head"><strong class="mono">${esc(parts.source)} → ${esc(parts.destination)}</strong><span>${esc(channel.direction)} · ${fmt(Number(channel.carrier_frequency_hz)/1e6,1)} MHz</span></div><div class="edge-meta">model ${esc(parts.model)} · ${matrixText} · overlaid lane responses · matrix total ${fmt(channel.total_path_power_db,1)} dB</div>${tapPlot(lanes,laneColors)}${frequencyBlock}<div class="lane-tables">${laneTables}</div></article>`;
+        const viewText=active?`showing ${active.label} only`:'overlaid lane responses';
+        return `<article class="edge-card"><div class="card-head"><strong class="mono">${esc(parts.source)} → ${esc(parts.destination)}</strong><span>${esc(channel.direction)} · ${fmt(Number(channel.carrier_frequency_hz)/1e6,1)} MHz</span></div><div class="edge-meta">model ${esc(parts.model)} · ${matrixText} · ${viewText} · matrix total ${fmt(channel.total_path_power_db,1)} dB</div>${picker}${tapPlot(plotLanes,plotColors)}${frequencyBlock}<div class="lane-tables">${laneTables}</div></article>`;
       }).join('');
       $('edgeCards').innerHTML=cards||'<div class="empty">Waiting for Sionna channel profiles</div>';
     }
@@ -624,13 +687,13 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       const canvas=$(canvasId); if(!canvas)return;
       const ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1,rect=canvas.getBoundingClientRect(),W=rect.width,H=rect.height;
       const pixelW=Math.max(1,Math.round(W*dpr)),pixelH=Math.max(1,Math.round(H*dpr));if(canvas.width!==pixelW||canvas.height!==pixelH){canvas.width=pixelW;canvas.height=pixelH}ctx.setTransform(dpr,0,0,dpr,0,0);
-      const left=52,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=config.windowMs||5000,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(now,Number(time))),timeKey=config.timeKey||'sampled_unix_ms';
+      const left=52,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=config.windowMs||CHART_WINDOW_MS,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(now,Number(time))),timeKey=config.timeKey||'sampled_unix_ms';
       const timeOf=item=>Number(item?.[timeKey]),samples=(source?.history||[]).filter(item=>timeOf(item)>=start&&timeOf(item)<=now),events=(config.showEvents===false?[]:(config.events||source?.iterations||[])).filter(item=>{const eventStart=Number(item.started_unix_ms??item.observed_unix_ms),eventEnd=Number(item.ended_unix_ms??now);return eventStart<=now&&eventEnd>=start});
       const numeric=value=>value===null||value===undefined||!Number.isFinite(Number(value))?null:Number(value),references=config.references||[],values=[...samples.flatMap(item=>config.series.map(series=>numeric(series.value(item))).filter(value=>value!==null)),...references.map(item=>numeric(item.value)).filter(value=>value!==null)],step=config.step||1,rawMin=values.length?Math.min(...values):0,rawMax=values.length?Math.max(...values):0,min=finite(config.fixedMin)?Number(config.fixedMin):(config.allowNegative?Math.floor(rawMin/step)*step:0),initialMax=finite(config.fixedMax)?Number(config.fixedMax):(config.allowNegative?(values.length?Math.ceil(rawMax/step)*step:step):Math.max(config.minMax||1,Math.ceil(rawMax/step)*step)),max=initialMax<=min?min+step:initialMax;
       const y=value=>top+plotH-(Math.max(min,Math.min(max,Number(value)||0))-min)/(max-min)*plotH,maxGapMs=config.maxGapMs||Math.max(600,Number(source?.sampling?.target_interval_ms||500)*3);
       ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);ctx.font='9px system-ui';
       ctx.fillStyle='#091720';ctx.fillRect(left,top,plotW,plotH);for(const ratio of [0,.5,1]){const py=top+plotH-ratio*plotH,value=min+(max-min)*ratio;ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(config.axis(value),left-4,py+3)}
-      const secondTicks=[5,4,3,2,1,0];secondTicks.forEach(secondsAgo=>{const px=x(now-secondsAgo*1000);ctx.strokeStyle='rgba(38,57,71,.72)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,top+plotH);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.font='8px system-ui';ctx.textAlign=secondsAgo===5?'left':secondsAgo===0?'right':'center';ctx.fillText(secondsAgo===0?'now':`${secondsAgo}s ago`,px,H-7)});
+      const tickDivisions=5,millisecondTicks=Array.from({length:tickDivisions+1},(_,index)=>windowMs-index*windowMs/tickDivisions);millisecondTicks.forEach((millisecondsAgo,index)=>{const px=x(now-millisecondsAgo);ctx.strokeStyle='rgba(38,57,71,.72)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,top+plotH);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.font='8px system-ui';ctx.textAlign=index===0?'left':millisecondsAgo===0?'right':'center';ctx.fillText(millisecondsAgo===0?'now':`${Math.round(millisecondsAgo)}ms ago`,px,H-7)});
       events.forEach((event,index)=>{const started=Number(event.started_unix_ms??event.observed_unix_ms),ended=Number(event.ended_unix_ms??now),x0=x(clipTime(started)),x1=x(clipTime(ended));ctx.strokeStyle='rgba(233,242,248,.82)';ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x0,top);ctx.lineTo(x0,top+plotH);ctx.stroke();ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(66,211,255,.88)';ctx.beginPath();ctx.moveTo(x1,top);ctx.lineTo(x1,top+plotH);ctx.stroke();ctx.restore();if(x1-x0>12){ctx.fillStyle='#c7eefa';ctx.textAlign='center';ctx.font='8px system-ui';ctx.fillText(`i${event.iteration}`,x0+(x1-x0)/2,top+10+(index%2)*10)}});
       const warmupMarkerWidth=6;events.forEach(event=>{if(!event.warmup_expected)return;const warmStart=Number(event.warmup_started_unix_ms),warmEnd=Number(event.warmup_ended_unix_ms??now);if(!Number.isFinite(warmStart)||warmStart>now||warmEnd<start)return;const x0=x(clipTime(warmStart)),x1=x(clipTime(warmEnd)),actualWidth=Math.max(0,x1-x0),visibleWidth=Math.max(warmupMarkerWidth,actualWidth),visibleX=Math.max(left,Math.min(W-right-visibleWidth,(x0+x1-visibleWidth)/2));ctx.fillStyle='rgba(255,101,119,.28)';ctx.fillRect(visibleX,top,visibleWidth,plotH);ctx.strokeStyle='rgba(255,101,119,.95)';ctx.strokeRect(visibleX+.5,top+.5,Math.max(1,visibleWidth-1),plotH-1);ctx.fillStyle='#ff9aaa';ctx.textAlign='center';ctx.font='bold 8px system-ui';ctx.fillText('W',visibleX+visibleWidth/2,top+plotH-4)});
       references.forEach(reference=>{const value=numeric(reference.value);if(value===null||value<min||value>max)return;const py=y(value);ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle=reference.color||'#ff6577';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.restore()});
@@ -660,7 +723,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
 
     function drawResourceHistory(usage, history, runtime, sionna) {
       const cpuCores=value=>finite(value)?Number(value)/100:null;
-      const iterations=history?.iterations||[],telemetryHistory=history?.telemetry||[],slotSource={history:telemetryHistory,iterations},palette=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e'],destinations=[...new Set(telemetryHistory.map(item=>linkParts(item.link_id).destination).filter(id=>id!=='—'))].sort(),updateHz=Number(runtime?.target_update_hz||sionna?.environment?.update_rate_hz||2),updateBudgetMs=updateHz>0?1000/updateHz:500;
+      const iterations=history?.iterations||[],telemetryHistory=history?.telemetry||[],slotSource={history:telemetryHistory,iterations},palette=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e'],destinations=[...new Set(telemetryHistory.map(item=>linkParts(item.link_id).destination).filter(id=>id!=='—'))].sort(),updateHz=Number(runtime?.target_update_hz||sionna?.environment?.update_rate_hz||500),updateBudgetMs=updateHz>0?1000/updateHz:2;
       drawResourceChart('slotLatencyChart',slotSource,{timeKey:'observed_unix_ms',minMax:1000,step:500,axis:value=>`${Math.round(value)}µs`,maxGapMs:500,references:[{value:1000,label:'1 ms nominal deadline',color:'#ff6577'}],series:destinations.map((destination,index)=>({label:`${destination} RX`,color:palette[index%palette.length],value:item=>linkParts(item.link_id).destination===destination?item.slot_processing?.nominal?.latest_estimated_us:null})),emptyText:'Waiting for completed nominal-slot estimates'});
       drawSionnaIterationChart('sionnaIterationChart',iterations,updateBudgetMs);
       drawResourceChart('applicationCpuChart',usage,{minMax:1,step:1,axis:value=>`${fmt(value,1)}c`,series:[{label:'Sionna RT',color:'#42d3ff',value:item=>cpuCores(item.roles?.sionna?.cpu_util_percent)},{label:'GPU Channel',color:'#ff9f43',value:item=>cpuCores(item.roles?.gpu_channel?.cpu_util_percent)},{label:'Web UI',color:'#53e58b',value:item=>cpuCores(item.roles?.web_ui?.cpu_util_percent)},{label:'Other / OS',color:'#b7a0ff',value:item=>item.system?.other_os_cpu_cores}]});
@@ -758,15 +821,51 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       $('envRates').textContent=env.sample_rate_hz?`${fmt(env.sample_rate_hz/1e6,2)} MS/s · ${fmt(env.update_rate_hz,2)} Hz updates`:'—';
       $('envTarget').textContent=env.dry_run?'dry run (no transmission)':`${env.control_endpoint||'—'} · ${backend}`;
       const sampleRateHz=Number(env.sample_rate_hz),sampleRateText=sampleRateHz>0?`${fmt(sampleRateHz/1e6,2)} MS/s`:'waiting',samplePeriodText=sampleRateHz>0?`${fmt(1e9/sampleRateHz,2)} ns`:'—';
-      $('impulseNote').textContent=`All matrix lanes for one physical link share one overlaid impulse-response plot and use distinct colors. A small display-only horizontal stem offset keeps equal-delay/equal-gain lanes visible; tooltips and tables retain the exact delay, gain, and phase. Below it, the same lanes share one frequency-response plot: |H(f)| in dB is evaluated directly from every tap of the profile as H(f) = Σ 10^(gain/20)·e^(j·phase)·e^(−j2πf·delay), so fractional tap delays are exact and no window or FFT bin rounding is involved. The horizontal axis is the baseband offset from the link carrier over one full sampling band, ±${sampleRateHz>0?fmt(sampleRateHz/2e6,2)+' MHz':'half the sample rate'}, and the vertical axis is clamped to 40 dB below the strongest lane peak so deep fades stay readable. Hovering a curve reports that lane's peak, deepest notch, and in-band ripple. The current sampling frequency (sample rate) is ${sampleRateText}; one sample is ${samplePeriodText}. Each lane has its own eight-row tap table, with unused rows marked —.`;
+      $('impulseNote').textContent=`All matrix lanes for one physical link share one overlaid impulse-response plot and use distinct colors. A small display-only horizontal stem offset keeps equal-delay/equal-gain lanes visible; tooltips and tables retain the exact delay, gain, and phase. Below it, the same lanes share one frequency-response plot: |H(f)| in dB is evaluated directly from every tap of the profile as H(f) = Σ 10^(gain/20)·e^(j·phase)·e^(−j2πf·delay), so fractional tap delays are exact and no window or FFT bin rounding is involved. The horizontal axis is the baseband offset from the link carrier over one full sampling band, ±${sampleRateHz>0?fmt(sampleRateHz/2e6,2)+' MHz':'half the sample rate'}, and the vertical axis is clamped to 40 dB below the strongest lane peak so deep fades stay readable. Hovering a curve reports that lane's peak, deepest notch, and in-band ripple. The current sampling frequency (sample rate) is ${sampleRateText}; one sample is ${samplePeriodText}. Each lane has its own eight-row tap table, with unused rows marked —. The port buttons above each edge filter both plots and the tap tables to one antenna port: the uplink card selects a gNB RX port and the downlink card a gNB TX port, since that is the side carrying the array. Each direction keeps its own selection, and All restores the overlay.`;
       renderDeadlineCards(telemetry);
       renderEdgeCards(s?.channels,sampleRateHz);
       renderNodeCards(s);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
       drawScene(s);
     }
-    async function poll(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw Error(r.status);render(await r.json())}catch(e){setPill($('telemetryPill'),false,'UI feed error')}}
-    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);drawResourceHistory(lastStatus?.gpu_usage,lastStatus?.history,lastStatus?.sionna_runtime,lastStatus?.sionna)}); poll(); setInterval(poll,500);
+    // Two loops with very different costs. render() rebuilds every card,
+    // table and canvas in the page, which is far too expensive to run at
+    // the chart cadence, so it keeps the slow interval and now asks for a
+    // bounded history slice — at 500 Hz telemetry the unbounded retained
+    // buffer would otherwise dominate the response.
+    let statusInFlight=false,chartsInFlight=false;
+    async function poll(){
+      if(statusInFlight)return; statusInFlight=true;
+      try{const r=await fetch(`/api/status?history_ms=${CHART_HISTORY_MS}`,{cache:'no-store'});if(!r.ok)throw Error(r.status);render(await r.json())}
+      catch(e){setPill($('telemetryPill'),false,'UI feed error')}
+      finally{statusInFlight=false}
+    }
+    // Chart-only refresh: /api/realtime carries just the series the
+    // canvases plot, so this can run inside the CHART_WINDOW_MS the
+    // charts draw without the DOM rebuild. Both loops guard against
+    // overlapping requests so a slow response cannot queue up behind
+    // itself at a 20 ms interval.
+    async function pollCharts(){
+      if(chartsInFlight)return; chartsInFlight=true;
+      try{const r=await fetch(`/api/realtime?history_ms=${CHART_HISTORY_MS}`,{cache:'no-store'});if(!r.ok)throw Error(r.status);lastRealtime=await r.json();redrawCharts()}
+      catch(e){/* keep the last drawn frame; poll() owns feed-error reporting */}
+      finally{chartsInFlight=false}
+    }
+    function redrawCharts(){
+      if(lastRealtime)drawResourceHistory({history:lastRealtime.gpu_history},lastRealtime.history,{target_update_hz:lastRealtime.target_update_hz},{environment:{update_rate_hz:lastRealtime.update_rate_hz}});
+      else if(lastStatus)drawResourceHistory(lastStatus.gpu_usage,lastStatus.history,lastStatus.sionna_runtime,lastStatus.sionna);
+    }
+    // Delegated so the handler survives the 500 ms rebuild of #edgeCards.
+    // Re-render immediately on click rather than waiting for the next
+    // status poll, so the selection feels instant.
+    $('edgeCards').addEventListener('click',event=>{
+      const button=event.target.closest('.lane-picker button');if(!button)return;
+      const linkId=button.closest('.lane-picker')?.dataset.link;if(!linkId)return;
+      laneSelection[linkId]=button.dataset.port;
+      if(lastEdgeArgs)renderEdgeCards(...lastEdgeArgs);
+    });
+    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);redrawCharts()});
+    poll(); pollCharts(); setInterval(poll,STATUS_POLL_MS); setInterval(pollCharts,CHART_POLL_MS);
   </script>
 </body>
 </html>

@@ -47,7 +47,7 @@ matrix_args="${OCUDU_MUE_MATRIX_ARGS:-}"
 gate_name="${OCUDU_MUE_GATE_NAME:-ocudu-multi-ue}"
 channel_mode="${OCUDU_MUE_CHANNEL_MODE:-static}"
 sionna_python="${OCUDU_MUE_SIONNA_PYTHON:-${REMOTE_WORKSPACE}/venvs/sionna/bin/python}"
-sionna_update_hz="${OCUDU_MUE_SIONNA_UPDATE_HZ:-2}"
+sionna_update_hz="${OCUDU_MUE_SIONNA_UPDATE_HZ:-500}"
 sionna_ready_seconds="${OCUDU_MUE_SIONNA_READY_SECONDS:-120}"
 sionna_web_port="${OCUDU_MUE_WEB_PORT:-8080}"
 [[ "${channel_mode}" == "static" || "${channel_mode}" == "sionna" ]] || {
@@ -481,7 +481,7 @@ broker_duration="${duration_seconds}s"
 broker_extra=()
 if [[ "${channel_mode}" == "sionna" ]]; then
   broker_duration="0s"
-  broker_extra=(--control-endpoint 'tcp://*:5559' --telemetry-endpoint 'tcp://*:5560' --telemetry-rate-hz 20)
+  broker_extra=(--control-endpoint 'tcp://*:5559' --telemetry-endpoint 'tcp://*:5560' --telemetry-rate-hz 500)
 fi
 if [[ -z "${broker_image}" ]]; then
   "${cuda_build}/ocudu-gpu-channel" \

@@ -497,7 +497,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
                         help="wall-clock seconds; 0 runs until interrupted")
     parser.add_argument("--iterations", type=int, default=0,
                         help="optional update-count cap; 0 means no cap")
-    parser.add_argument("--update-hz", type=float, default=2.0)
+    parser.add_argument("--update-hz", type=float, default=500.0)
     parser.add_argument("--sample-rate-hz", type=float, default=23_040_000.0)
     parser.add_argument(
         "--downlink-frequency-hz",

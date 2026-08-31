@@ -87,7 +87,7 @@ done
 
 "${build_dir}/ocudu-gpu-channel" --config "${topology}" \
   --control-endpoint 'tcp://*:5559' --telemetry-endpoint 'tcp://*:5560' \
-  --telemetry-rate-hz 20 --duration "${process_duration}s" \
+  --telemetry-rate-hz 500 --duration "${process_duration}s" \
   >"${log_dir}/broker.log" 2>&1 &
 broker_pid="$!"
 child_pids+=("${broker_pid}")

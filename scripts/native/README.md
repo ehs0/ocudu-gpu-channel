@@ -148,7 +148,7 @@ export OCUDU_NATIVE_SIONNA_DURATION_SECONDS=150
 ```
 
 Optional settings are `OCUDU_NATIVE_WEB_PORT` (default `8080`),
-`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `2`), and
+`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `500`), and
 `OCUDU_NATIVE_SIONNA_READY_SECONDS` (default `120`). The Web server is
 restricted to loopback. A remote browser can use SSH port forwarding:
 
@@ -172,7 +172,8 @@ port or requiring host networking privileges.
 
 The rank-1 launcher reads the gNB transmit and receive port counts from the
 Sionna scenario instead of carrying a separate 2x1 or 4x1 shell setting. The
-default scenario resolves to 2 gNB TX ports, 2 gNB RX ports, and a one-port UE:
+default scenario resolves to 4 gNB TX ports, 4 gNB RX ports, and a one-port UE
+(4x1 DL MISO and 1x4 UL SIMO):
 
 ```bash
 export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace

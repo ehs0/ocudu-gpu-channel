@@ -8,6 +8,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -15,8 +16,14 @@ PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "web_ui"))
 
 from server import (  # noqa: E402
+    DEFAULT_HISTORY_WINDOW_MS,
+    GPU_HISTORY_RETAIN_MS,
     HARDWARE_REFRESH_INTERVAL_SECONDS,
+    NvmlResourceSampler,
+    PCIE_REFRESH_INTERVAL_SECONDS,
+    PROCESS_UTILIZATION_INTERVAL_SECONDS,
     RESOURCE_SAMPLE_INTERVAL_SECONDS,
+    TELEMETRY_HISTORY_RETAIN_MS,
     SionnaJsonlTail,
     StatusStore,
     _NvmlProcessInfo,
@@ -36,6 +43,8 @@ from server import (  # noqa: E402
     parse_proc_status_rss,
     parse_telemetry_frame,
     sample_gpu_usage,
+    slice_history,
+    trim_history,
 )
 
 
@@ -151,6 +160,210 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(iteration["timing_ms"]["total_update"], 121.0)
         self.assertEqual(iteration["channels"][0]["total_path_power_db"], -72.0)
         self.assertNotIn("taps", iteration["channels"][0])
+
+    def test_history_is_retained_by_age_not_by_frame_count(self) -> None:
+        """500 Hz telemetry must not push the drawn window out of the buffer.
+
+        The old fixed 256-frame cap held a different amount of *time*
+        for every topology: ~256 ms for two links, ~32 ms for sixteen,
+        which is shorter than the 50 ms window the chart draws once poll
+        jitter is included.
+        """
+
+        entries = [
+            {"observed_unix_ms": stamp, "link_id": "ue0>gnb0"}
+            for stamp in range(0, 4_000, 2)  # 500 Hz for four seconds
+        ]
+        trim_history(entries, "observed_unix_ms", 3_998, 2_000, 16_384)
+        self.assertEqual(entries[0]["observed_unix_ms"], 1_998)
+        self.assertEqual(entries[-1]["observed_unix_ms"], 3_998)
+
+        capped = [{"observed_unix_ms": stamp} for stamp in range(1_000)]
+        trim_history(capped, "observed_unix_ms", 999, 10_000, 100)
+        self.assertEqual(len(capped), 100)
+        self.assertEqual(capped[0]["observed_unix_ms"], 900)
+
+    def test_trim_keeps_entries_without_a_usable_timestamp(self) -> None:
+        """A producer that omits the stamp degrades to count-capping."""
+
+        entries = [{"link_id": "ue0>gnb0"} for _ in range(5)]
+        trim_history(entries, "observed_unix_ms", 10_000, 10, 100)
+        self.assertEqual(len(entries), 5)
+
+    def test_history_slice_is_measured_from_the_newest_sample(self) -> None:
+        """A brief producer stall must not empty the returned window."""
+
+        entries = [{"observed_unix_ms": stamp} for stamp in range(0, 200, 2)]
+        window = slice_history(entries, "observed_unix_ms", 50)
+        self.assertEqual(window[0]["observed_unix_ms"], 148)
+        self.assertEqual(window[-1]["observed_unix_ms"], 198)
+        self.assertEqual(
+            len(slice_history(entries, "observed_unix_ms", None)), len(entries)
+        )
+        self.assertEqual(slice_history([], "observed_unix_ms", 50), [])
+
+    def test_status_snapshot_slices_history_to_the_requested_window(
+        self,
+    ) -> None:
+        store = StatusStore()
+        for slot in range(50):
+            store.update_telemetry(
+                "ue0>gnb0:sionna_rt",
+                {
+                    "event": "telemetry",
+                    "slot": slot,
+                    "slot_processing": {
+                        "nominal": {"latest_estimated_us": 640.0 + slot}
+                    },
+                },
+            )
+        full = store.snapshot()["history"]["telemetry"]
+        self.assertEqual(len(full), 50)
+        # Every frame lands inside the same millisecond in a tight loop,
+        # so a zero-width window still keeps the newest sample rather
+        # than returning nothing for the chart to draw.
+        narrow = store.snapshot(history_ms=0)["history"]["telemetry"]
+        self.assertGreaterEqual(len(narrow), 1)
+        self.assertLessEqual(len(narrow), len(full))
+        self.assertEqual(narrow[-1]["slot"], 49)
+
+    def test_realtime_snapshot_carries_only_the_charted_series(self) -> None:
+        """The 20 ms loop must not pay for the full status document."""
+
+        store = StatusStore()
+        store.update_telemetry(
+            "ue0>gnb0:sionna_rt",
+            {
+                "event": "telemetry",
+                "slot": 7,
+                "live": {"path_loss_db": -80.0, "awgn_snr_db": 21.0},
+                "slot_processing": {
+                    "elapsed_us": 750.0,
+                    "cumulative": {"processed_slots": 1234},
+                    "nominal": {
+                        "latest_estimated_us": 812.5,
+                        "p99_estimated_us": 950.0,
+                    },
+                },
+            },
+        )
+        store.update_sionna(
+            {
+                "event": "sionna_rt_runtime",
+                "process_id": os.getpid(),
+                "target_update_hz": 500.0,
+                "phase": "tracing_channels",
+            }
+        )
+        store.update_gpu_usage(
+            {
+                "sampled_unix_ms": 1_700_000_000_000,
+                "system": {"cpu_util_percent": 33.0, "other_os_cpu_cores": 2.1},
+                "gpu_compute": {"total_sm_util_percent": 60.0},
+                "pcie": {"h2d_mb_s": 1200.0, "d2h_mb_s": 400.0},
+                "processes": {"sionna": {"running": True, "cpu_util_percent": 140.0}},
+            }
+        )
+
+        realtime = store.realtime_snapshot(history_ms=DEFAULT_HISTORY_WINDOW_MS)
+        telemetry_row = realtime["history"]["telemetry"][-1]
+        self.assertEqual(
+            telemetry_row["slot_processing"]["nominal"]["latest_estimated_us"],
+            812.5,
+        )
+        # The projection keeps the shape the chart reads and drops the
+        # ~1.3 kB of per-frame detail the chart never touches.
+        self.assertNotIn("live", telemetry_row)
+        self.assertNotIn("elapsed_us", telemetry_row["slot_processing"])
+        self.assertNotIn(
+            "p99_estimated_us", telemetry_row["slot_processing"]["nominal"]
+        )
+        resource_row = realtime["gpu_history"][-1]
+        self.assertEqual(
+            resource_row["roles"]["sionna"]["cpu_util_percent"], 140.0
+        )
+        self.assertEqual(resource_row["pcie"]["h2d_mb_s"], 1200.0)
+        self.assertEqual(resource_row["system"]["other_os_cpu_cores"], 2.1)
+        self.assertNotIn("gpu_compute", resource_row)
+        self.assertEqual(realtime["target_update_hz"], 500.0)
+        # None of the heavy status sections belong in the fast payload.
+        for key in ("sionna", "telemetry", "delivery", "gpu_usage"):
+            self.assertNotIn(key, realtime)
+
+    def test_retention_spans_cover_the_drawn_chart_window(self) -> None:
+        """Guard the invariant the empty-chart bug came from."""
+
+        chart_window_ms = 100
+        self.assertGreater(TELEMETRY_HISTORY_RETAIN_MS, chart_window_ms)
+        self.assertGreater(GPU_HISTORY_RETAIN_MS, chart_window_ms)
+        self.assertGreaterEqual(DEFAULT_HISTORY_WINDOW_MS, chart_window_ms)
+
+    def test_slow_nvml_queries_stay_off_the_fast_sampling_path(self) -> None:
+        """The 10 ms cadence only works if the ~21 ms calls are gated.
+
+        nvmlDeviceGetPcieThroughput integrates over a fixed ~20 ms driver
+        window and blocks for it, and nvmlDeviceGetProcessUtilization
+        costs ~1.5 ms per GPU for a value this sampler already holds for
+        1.2 s. Calling either once per sample makes a 10 ms period
+        physically unreachable, so both keep their own cadence and the
+        last reading is carried forward.
+        """
+
+        calls = {"pcie": 0, "utilization": 0}
+
+        class FakeNvml:
+            NVML_SUCCESS = 0
+
+            def nvmlDeviceGetUtilizationRates(self, handle, out):  # noqa: N802
+                out._obj.gpu = 55
+                return 0
+
+            def nvmlDeviceGetPcieThroughput(self, handle, kind, out):  # noqa: N802
+                calls["pcie"] += 1
+                out._obj.value = 2048 if kind else 1024
+                return 0
+
+        sampler = NvmlResourceSampler.__new__(NvmlResourceSampler)
+        sampler._nvml = FakeNvml()
+        sampler._closed = False
+        sampler._handles = [object()]
+        sampler._inventory = [{"gpu_index": 0, "gpu_uuid": "GPU-test"}]
+        sampler._inventory_updated = time.monotonic()
+        sampler._sm_by_process = {}
+        sampler._sm_seen_monotonic = {}
+        sampler._sm_warning = None
+        sampler._pcie_updated = 0.0
+        sampler._pcie_cache = {}
+        sampler._process_utilization_updated = 0.0
+
+        def fake_process_utilization(index, handle):
+            calls["utilization"] += 1
+
+        sampler._process_utilization = fake_process_utilization
+        sampler._process_memory = lambda handle: {4242: 512.0}
+
+        targets = {"sionna": {4242}, "gpu_channel": set(), "web_ui": set()}
+        # First sample primes both caches, the rest run inside both
+        # refresh intervals and must not repeat either query.
+        for _ in range(20):
+            _, _, pcie, _ = sampler.sample(targets)
+
+        self.assertEqual(calls["pcie"], 2, "one RX + one TX query for 20 samples")
+        self.assertEqual(calls["utilization"], 1)
+        # The carried-forward reading still reaches the chart.
+        self.assertEqual(pcie[0]["h2d_mb_s"], 2.0)
+        self.assertEqual(pcie[0]["d2h_mb_s"], 1.0)
+        # Device-wide utilization is cheap, so it stays per-sample.
+        self.assertEqual(pcie[0]["gpu_util_percent"], 55.0)
+
+        # Past the interval, the queries run again.
+        sampler._pcie_updated -= PCIE_REFRESH_INTERVAL_SECONDS
+        sampler._process_utilization_updated -= (
+            PROCESS_UTILIZATION_INTERVAL_SECONDS
+        )
+        sampler.sample(targets)
+        self.assertEqual(calls["pcie"], 4)
+        self.assertEqual(calls["utilization"], 2)
 
     def test_store_exposes_runtime_phase_and_process_targets(self) -> None:
         store = StatusStore()
@@ -323,7 +536,7 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("Broker control ACK", index)
         self.assertIn("Array.from({length:8}", index)
         self.assertIn("overlaid matrix-lane tap impulse responses", index)
-        self.assertIn("tapPlot(lanes,laneColors)", index)
+        self.assertIn("tapPlot(plotLanes,plotColors)", index)
         self.assertNotIn("delayDopplerPlot", index)
         self.assertNotIn("delay_doppler_points", index)
         self.assertNotIn("delay–Doppler–power", index)
@@ -331,10 +544,15 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("delay-doppler-stack", index)
         self.assertIn("function laneFrequencyResponse(lane, ratios)", index)
         self.assertIn("function frequencyResponsePlot(lanes, colors, sampleRateHz)", index)
-        self.assertIn("frequencyResponsePlot(lanes,laneColors,Number(sampleRateHz))", index)
+        self.assertIn(
+            "frequencyResponsePlot(plotLanes,plotColors,Number(sampleRateHz))",
+            index,
+        )
         self.assertIn("renderEdgeCards(s?.channels,sampleRateHz)", index)
         self.assertIn("overlaid matrix-lane frequency responses", index)
-        self.assertIn("Frequency response · |H(f)| over all ${lanes.length} lane(s)", index)
+        # The heading now names the filtered scope, not always "all".
+        self.assertIn("Frequency response · |H(f)| over ${scopeText}", index)
+        self.assertIn("`all ${lanes.length} lane(s)`", index)
         self.assertIn("Impulse and frequency response by edge link", index)
         self.assertIn("in-band ripple", index)
         self.assertIn("Baseband offset from carrier", index)
@@ -387,9 +605,41 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("label:'Web UI'", index)
         self.assertIn("label:'Other / OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
-        self.assertIn("windowMs=config.windowMs||5000", index)
-        self.assertIn("secondTicks=[5,4,3,2,1,0]", index)
-        self.assertIn("`${secondsAgo}s ago`", index)
+        self.assertIn("const CHART_WINDOW_MS = 100;", index)
+        self.assertIn("windowMs=config.windowMs||CHART_WINDOW_MS", index)
+        self.assertIn("tickDivisions=5", index)
+        self.assertIn("`${Math.round(millisecondsAgo)}ms ago`", index)
+        # Per-port lane picker on the impulse/frequency responses.
+        self.assertIn("function laneOptions(lanes)", index)
+        # One antenna row per edge, 1-based labels over 0-based ports,
+        # following whichever matrix axis carries the multi-port node.
+        self.assertIn("label:`Antenna ${index+1}`", index)
+        self.assertIn(">All ${lanes.length}</button>", index)
+        self.assertNotIn("label:`RX ${port}`", index)
+        self.assertNotIn("label:`TX ${port}`", index)
+        # All selected lanes must be readable without a scroll box: the
+        # old 680px cap fit two lanes and hid lane 4 once the gNB had
+        # four ports.
+        self.assertNotIn("max-height:680px", index)
+        self.assertIn(
+            ".lane-tables { display:grid; "
+            "grid-template-columns:repeat(auto-fit,minmax(300px,1fr));",
+            index,
+        )
+        self.assertIn("const laneSelection={}", index)
+        self.assertIn('class="lane-picker" data-link=', index)
+        self.assertIn("laneSelection[channel.link_id]??'all'", index)
+        self.assertIn("tapPlot(plotLanes,plotColors)", index)
+        self.assertIn(
+            "frequencyResponsePlot(plotLanes,plotColors,Number(sampleRateHz))",
+            index,
+        )
+        self.assertIn("$('edgeCards').addEventListener('click'", index)
+        self.assertIn("laneSelection[linkId]=button.dataset.port", index)
+        # The plots must not fall back to the whole lane set once the
+        # picker exists, or a selection would silently do nothing.
+        self.assertNotIn("tapPlot(lanes,laneColors)", index)
+        self.assertNotIn("frequencyResponsePlot(lanes,laneColors", index)
         self.assertIn("hardware-card.active", index)
         self.assertIn("started_unix_ms", index)
         self.assertIn("warmup_started_unix_ms", index)
@@ -699,10 +949,10 @@ class WebUiTests(unittest.TestCase):
             },
             backend="nvml",
         )
-        self.assertEqual(RESOURCE_SAMPLE_INTERVAL_SECONDS, 0.1)
+        self.assertEqual(RESOURCE_SAMPLE_INTERVAL_SECONDS, 0.01)
         self.assertEqual(HARDWARE_REFRESH_INTERVAL_SECONDS, 1.0)
         self.assertEqual(payload["sampling"]["backend"], "nvml")
-        self.assertEqual(payload["sampling"]["target_interval_ms"], 100)
+        self.assertEqual(payload["sampling"]["target_interval_ms"], 10)
         self.assertEqual(payload["sampling"]["hardware_interval_ms"], 1000)
         self.assertEqual(payload["processes"]["sionna"]["sm_util_percent"], 35.0)
         self.assertEqual(payload["processes"]["web_ui"]["cpu_util_percent"], 10.0)

@@ -20,6 +20,7 @@ import signal
 import subprocess
 import threading
 import time
+import urllib.parse
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Sequence
@@ -27,10 +28,143 @@ from typing import Any, Sequence
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_INDEX = pathlib.Path(__file__).with_name("index.html")
-RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.1
+# The resource charts plot a 100 ms window, so the sampler has to land
+# several points inside it: 10 ms gives ~10. NVML per-process and PCIe
+# queries are not free at this cadence — see `--resource-interval-ms` to
+# dial it back when the monitor thread starts perturbing the run it is
+# measuring.
+RESOURCE_SAMPLE_INTERVAL_SECONDS = 0.01
 HARDWARE_REFRESH_INTERVAL_SECONDS = 1.0
+# Two NVML queries are averages the driver computes over its own window,
+# so re-reading them at the fast cadence buys no resolution and costs a
+# great deal: nvmlDeviceGetPcieThroughput blocks ~21 ms per call (it
+# integrates over a fixed ~20 ms window) and nvmlDeviceGetProcessUtilization
+# costs ~1.5 ms per GPU for a figure this file already holds for 1.2 s.
+# Leaving them in the hot path made a 10 ms period unreachable — one
+# sample took ~15 ms with no PCIe-resident process and ~55 ms with one.
+# They keep their own cadence and the last reading is carried forward.
+PCIE_REFRESH_INTERVAL_SECONDS = 0.25
+PROCESS_UTILIZATION_INTERVAL_SECONDS = 0.1
+# History is retained by wall-clock age rather than by frame count: at
+# 500 Hz telemetry the old 256-frame cap held only ~256 ms for two links
+# and ~32 ms for sixteen, which is less than the window the UI draws.
+# The entry caps only bound memory if a producer runs far faster than
+# these rates.
+TELEMETRY_HISTORY_RETAIN_MS = 2_000
+TELEMETRY_HISTORY_MAX_ENTRIES = 16_384
+GPU_HISTORY_RETAIN_MS = 4_000
+GPU_HISTORY_MAX_ENTRIES = 2_048
+# Default slice returned to a caller that does not ask for a window.
+DEFAULT_HISTORY_WINDOW_MS = 1_000
 INITIAL_JSONL_TAIL_BYTES = 4 * 1024 * 1024
 RESOURCE_ROLES = ("sionna", "gpu_channel", "web_ui")
+
+
+def chart_telemetry_row(entry: dict[str, Any]) -> dict[str, Any]:
+    """Project one telemetry frame down to what the latency chart plots.
+
+    A retained frame carries the whole `slot_processing` tree plus the
+    live parameter block — roughly 1.3 kB. The chart reads exactly one
+    number out of it, so the fast loop ships the same nested shape with
+    only that number in it and the drawing code needs no special case.
+    """
+
+    nominal = (entry.get("slot_processing") or {}).get("nominal") or {}
+    return {
+        "observed_unix_ms": entry.get("observed_unix_ms"),
+        "link_id": entry.get("link_id"),
+        "slot_processing": {
+            "nominal": {
+                "latest_estimated_us": nominal.get("latest_estimated_us")
+            }
+        },
+    }
+
+
+def chart_resource_row(entry: dict[str, Any]) -> dict[str, Any]:
+    """Project one resource sample down to the CPU and PCIe chart series."""
+
+    roles = entry.get("roles") or {}
+    pcie = entry.get("pcie") or {}
+    return {
+        "sampled_unix_ms": entry.get("sampled_unix_ms"),
+        "roles": {
+            role: {
+                "cpu_util_percent": (roles.get(role) or {}).get(
+                    "cpu_util_percent"
+                )
+            }
+            for role in RESOURCE_ROLES
+        },
+        "system": {
+            "other_os_cpu_cores": (entry.get("system") or {}).get(
+                "other_os_cpu_cores"
+            )
+        },
+        "pcie": {
+            "h2d_mb_s": pcie.get("h2d_mb_s"),
+            "d2h_mb_s": pcie.get("d2h_mb_s"),
+        },
+    }
+
+
+def trim_history(
+    entries: list[dict[str, Any]],
+    time_key: str,
+    now_unix_ms: int,
+    retain_ms: int,
+    max_entries: int,
+) -> None:
+    """Drop history older than `retain_ms`, then cap the retained count.
+
+    Entries are appended in observation order, so expiry only ever has to
+    walk the stale prefix. An entry with a missing or non-numeric stamp
+    stops the walk instead of being dropped, so a producer that omits the
+    timestamp degrades to count-capped retention rather than losing the
+    whole buffer.
+    """
+
+    cutoff = now_unix_ms - retain_ms
+    expired = 0
+    for entry in entries:
+        stamp = entry.get(time_key)
+        if not isinstance(stamp, (int, float)) or stamp >= cutoff:
+            break
+        expired += 1
+    if expired:
+        del entries[:expired]
+    if len(entries) > max_entries:
+        del entries[: len(entries) - max_entries]
+
+
+def slice_history(
+    entries: list[dict[str, Any]], time_key: str, window_ms: int | None
+) -> list[dict[str, Any]]:
+    """Return the entries observed within `window_ms` of the newest one.
+
+    The window is measured from the newest retained entry rather than
+    from `now` so a caller polling every 20 ms still receives the frames
+    it needs when the producer has briefly stalled.
+    """
+
+    if window_ms is None or not entries:
+        return list(entries)
+    newest = None
+    for entry in reversed(entries):
+        stamp = entry.get(time_key)
+        if isinstance(stamp, (int, float)):
+            newest = stamp
+            break
+    if newest is None:
+        return list(entries)
+    cutoff = newest - window_ms
+    kept = 0
+    for entry in reversed(entries):
+        stamp = entry.get(time_key)
+        if isinstance(stamp, (int, float)) and stamp < cutoff:
+            break
+        kept += 1
+    return list(entries[len(entries) - kept :]) if kept else []
 
 
 def read_text(path: pathlib.Path) -> str:
@@ -316,6 +450,9 @@ class NvmlResourceSampler:
         self._last_process_timestamps: dict[int, int] = {}
         self._sm_by_process: dict[tuple[int, int], float] = {}
         self._sm_seen_monotonic: dict[tuple[int, int], float] = {}
+        self._pcie_updated = 0.0
+        self._pcie_cache: dict[int, dict[str, float | None]] = {}
+        self._process_utilization_updated = 0.0
         self._sm_counts, self._sm_warning = probe_cuda_sm_counts()
         self._refresh_handles()
 
@@ -510,8 +647,21 @@ class NvmlResourceSampler:
         active_keys: set[tuple[int, int]] = set()
         target_pids = set().union(*targets.values()) if targets else set()
         now = time.monotonic()
+        # Both gates are decided once per sample so every GPU in a
+        # multi-GPU host refreshes on the same tick rather than smearing
+        # the cost across consecutive samples.
+        refresh_utilization = (
+            now - self._process_utilization_updated
+            >= PROCESS_UTILIZATION_INTERVAL_SECONDS
+        )
+        refresh_pcie = now - self._pcie_updated >= PCIE_REFRESH_INTERVAL_SECONDS
+        if refresh_utilization:
+            self._process_utilization_updated = now
+        if refresh_pcie:
+            self._pcie_updated = now
         for index, handle in enumerate(self._handles):
-            self._process_utilization(index, handle)
+            if refresh_utilization:
+                self._process_utilization(index, handle)
             process_memory = self._process_memory(handle)
             for pid, memory_mib in process_memory.items():
                 key = (index, pid)
@@ -537,32 +687,40 @@ class NvmlResourceSampler:
             utilization_status = self._nvml.nvmlDeviceGetUtilizationRates(
                 handle, ctypes.byref(utilization)
             )
-            rx_value, tx_value = ctypes.c_uint(), ctypes.c_uint()
-            if target_pids.intersection(process_memory):
-                rx_status = self._nvml.nvmlDeviceGetPcieThroughput(
-                    handle, self.NVML_PCIE_UTIL_RX_BYTES, ctypes.byref(rx_value)
-                )
-                tx_status = self._nvml.nvmlDeviceGetPcieThroughput(
-                    handle, self.NVML_PCIE_UTIL_TX_BYTES, ctypes.byref(tx_value)
-                )
-            else:
-                rx_status = tx_status = self.NVML_ERROR_INSUFFICIENT_SIZE
+            if refresh_pcie:
+                rx_value, tx_value = ctypes.c_uint(), ctypes.c_uint()
+                if target_pids.intersection(process_memory):
+                    rx_status = self._nvml.nvmlDeviceGetPcieThroughput(
+                        handle, self.NVML_PCIE_UTIL_RX_BYTES,
+                        ctypes.byref(rx_value),
+                    )
+                    tx_status = self._nvml.nvmlDeviceGetPcieThroughput(
+                        handle, self.NVML_PCIE_UTIL_TX_BYTES,
+                        ctypes.byref(tx_value),
+                    )
+                else:
+                    rx_status = tx_status = self.NVML_ERROR_INSUFFICIENT_SIZE
+                self._pcie_cache[index] = {
+                    "h2d_mb_s": (
+                        rx_value.value / 1024.0
+                        if rx_status == self.NVML_SUCCESS
+                        else None
+                    ),
+                    "d2h_mb_s": (
+                        tx_value.value / 1024.0
+                        if tx_status == self.NVML_SUCCESS
+                        else None
+                    ),
+                }
+            cached_pcie = self._pcie_cache.get(index, {})
             pcie[index] = {
                 "gpu_util_percent": (
                     float(utilization.gpu)
                     if utilization_status == self.NVML_SUCCESS
                     else None
                 ),
-                "h2d_mb_s": (
-                    rx_value.value / 1024.0
-                    if rx_status == self.NVML_SUCCESS
-                    else None
-                ),
-                "d2h_mb_s": (
-                    tx_value.value / 1024.0
-                    if tx_status == self.NVML_SUCCESS
-                    else None
-                ),
+                "h2d_mb_s": cached_pcie.get("h2d_mb_s"),
+                "d2h_mb_s": cached_pcie.get("d2h_mb_s"),
             }
         self._sm_by_process = {
             key: value
@@ -893,6 +1051,7 @@ def sample_nvml_gpu_usage(
     targets: dict[str, set[int]],
     host_sampler: HostResourceSampler,
     nvml_sampler: NvmlResourceSampler,
+    target_interval_seconds: float = RESOURCE_SAMPLE_INTERVAL_SECONDS,
 ) -> dict[str, Any]:
     inventory, processes, pcie, warnings = nvml_sampler.sample(targets)
     return build_resource_payload(
@@ -902,6 +1061,7 @@ def sample_nvml_gpu_usage(
         inventory,
         pcie,
         backend="nvml",
+        target_interval_seconds=target_interval_seconds,
         warnings=warnings,
     )
 
@@ -1267,10 +1427,19 @@ class StatusStore:
                     "live": dict(live) if isinstance(live, dict) else {},
                 }
             )
-            # The UI plots a five-second window. At 20 Hz and two live links,
-            # 256 frames retain a little over six seconds without making each
-            # /api/status response carry an unbounded telemetry log.
-            del self._telemetry_history[:-256]
+            # Retained by age, not by frame count: 500 Hz telemetry across
+            # N links produces 500·N frames per second, so any fixed count
+            # holds a different amount of time per topology. Callers slice
+            # this down to the window they draw (see `slice_history`), so
+            # the retained span only has to cover the widest chart plus
+            # poll jitter.
+            trim_history(
+                self._telemetry_history,
+                "observed_unix_ms",
+                observed_unix_ms,
+                TELEMETRY_HISTORY_RETAIN_MS,
+                TELEMETRY_HISTORY_MAX_ENTRIES,
+            )
             self._close_completed_warmups(observed_unix_ms)
 
     def note_bad_telemetry(self) -> None:
@@ -1457,9 +1626,26 @@ class StatusStore:
                     "roles": roles,
                 }
             )
-            del self._gpu_history[:-240]
+            sampled_unix_ms = payload.get("sampled_unix_ms")
+            trim_history(
+                self._gpu_history,
+                "sampled_unix_ms",
+                (
+                    int(sampled_unix_ms)
+                    if isinstance(sampled_unix_ms, (int, float))
+                    else time.time_ns() // 1_000_000
+                ),
+                GPU_HISTORY_RETAIN_MS,
+                GPU_HISTORY_MAX_ENTRIES,
+            )
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, history_ms: int | None = None) -> dict[str, Any]:
+        """Full status document.
+
+        `history_ms` slices the retained telemetry/resource history down
+        to that window; `None` returns everything still retained.
+        """
+
         now = time.monotonic()
         with self._lock:
             telemetry = dict(self._telemetry)
@@ -1480,9 +1666,17 @@ class StatusStore:
                 else round(now - self._sionna_runtime_seen, 3)
             )
             gpu_usage = dict(self._gpu_usage) if self._gpu_usage else None
-            gpu_history = list(self._gpu_history)
-            telemetry_history = list(self._telemetry_history)
-            iteration_history = list(self._iteration_history)
+            gpu_history = slice_history(
+                self._gpu_history, "sampled_unix_ms", history_ms
+            )
+            telemetry_history = slice_history(
+                self._telemetry_history, "observed_unix_ms", history_ms
+            )
+            # Shallow-copy each event: _close_completed_warmups back-fills
+            # warmup keys on these dicts under the lock, and handing the
+            # live objects to json.dumps on an HTTP thread lets a key
+            # appear mid-serialization.
+            iteration_history = [dict(event) for event in self._iteration_history]
             bad_frames = self._bad_telemetry_frames
         if sionna_runtime is not None:
             sionna_runtime["process_alive"] = process_is_alive(
@@ -1515,6 +1709,53 @@ class StatusStore:
                 "iterations": iteration_history[-32:],
             },
             "delivery": delivery_status(sionna, telemetry),
+        }
+
+    def realtime_snapshot(
+        self, *, history_ms: int | None = DEFAULT_HISTORY_WINDOW_MS
+    ) -> dict[str, Any]:
+        """Chart-only slice of the status document.
+
+        The full snapshot carries the scene geometry, per-tap channel
+        tables and every live telemetry body, which is far too much to
+        move at the 20 ms cadence the 100 ms charts need. This returns
+        only what `drawResourceHistory` reads, so the fast loop stays
+        cheap on both sides while the heavy DOM render keeps polling
+        /api/status at its own slower rate.
+        """
+
+        with self._lock:
+            gpu_history = slice_history(
+                self._gpu_history, "sampled_unix_ms", history_ms
+            )
+            telemetry_history = slice_history(
+                self._telemetry_history, "observed_unix_ms", history_ms
+            )
+            iteration_history = [
+                dict(event) for event in self._iteration_history[-32:]
+            ]
+            target_update_hz = (
+                self._sionna_runtime.get("target_update_hz")
+                if self._sionna_runtime
+                else None
+            )
+            update_rate_hz = (
+                (self._sionna.get("environment") or {}).get("update_rate_hz")
+                if self._sionna
+                else None
+            )
+        return {
+            "event": "web_realtime",
+            "sampled_unix_ms": time.time_ns() // 1_000_000,
+            "gpu_history": [chart_resource_row(row) for row in gpu_history],
+            "history": {
+                "telemetry": [
+                    chart_telemetry_row(row) for row in telemetry_history
+                ],
+                "iterations": iteration_history,
+            },
+            "target_update_hz": target_update_hz,
+            "update_rate_hz": update_rate_hz,
         }
 
 
@@ -1581,17 +1822,29 @@ def telemetry_loop(endpoint: str, store: StatusStore, stop: threading.Event) -> 
             events = dict(poller.poll(200))
             if events.get(socket) != zmq.POLLIN:
                 continue
-            try:
-                topic, payload = parse_telemetry_frame(socket.recv_string())
-            except (ValueError, UnicodeDecodeError):
-                store.note_bad_telemetry()
-                continue
-            store.update_telemetry(topic, payload)
+            # Drain everything already queued before polling again. At
+            # 500 Hz per link the socket routinely has several frames
+            # waiting, and one poll syscall per frame is pure overhead.
+            while not stop.is_set():
+                try:
+                    frame = socket.recv_string(zmq.NOBLOCK)
+                except zmq.Again:
+                    break
+                try:
+                    topic, payload = parse_telemetry_frame(frame)
+                except (ValueError, UnicodeDecodeError):
+                    store.note_bad_telemetry()
+                    continue
+                store.update_telemetry(topic, payload)
     finally:
         socket.close(linger=0)
 
 
-def gpu_usage_loop(store: StatusStore, stop: threading.Event) -> None:
+def gpu_usage_loop(
+    store: StatusStore,
+    stop: threading.Event,
+    interval_seconds: float = RESOURCE_SAMPLE_INTERVAL_SECONDS,
+) -> None:
     """Refresh host/GPU resource metrics without blocking HTTP polls."""
 
     host_sampler = HostResourceSampler()
@@ -1609,7 +1862,7 @@ def gpu_usage_loop(store: StatusStore, stop: threading.Event) -> None:
             if nvml_sampler is not None:
                 try:
                     payload = sample_nvml_gpu_usage(
-                        targets, host_sampler, nvml_sampler
+                        targets, host_sampler, nvml_sampler, interval_seconds
                     )
                 except Exception as exc:
                     nvml_sampler.close()
@@ -1625,11 +1878,9 @@ def gpu_usage_loop(store: StatusStore, stop: threading.Event) -> None:
                 )
             store.update_gpu_usage(payload)
 
-            interval = (
-                RESOURCE_SAMPLE_INTERVAL_SECONDS
-                if nvml_sampler is not None
-                else 0.5
-            )
+            # The nvidia-smi fallback shells out per sample, so it keeps
+            # its own slow cadence no matter what the operator asked for.
+            interval = interval_seconds if nvml_sampler is not None else 0.5
             next_sample += interval
             next_sample = max(next_sample, time.monotonic())
             if stop.wait(max(0.0, next_sample - time.monotonic())):
@@ -1651,13 +1902,46 @@ def make_handler(store: StatusStore, index_html: bytes) -> type[BaseHTTPRequestH
             self.end_headers()
             self.wfile.write(body)
 
+        def history_window_ms(self, query: str) -> int | None:
+            """Read `history_ms` from the query string.
+
+            Absent means "everything retained", which keeps the endpoint
+            behaving as it did before the fast chart loop existed. A
+            malformed or negative value falls back to the same default
+            rather than erroring a status poll.
+            """
+
+            raw = urllib.parse.parse_qs(query).get("history_ms")
+            if not raw:
+                return None
+            try:
+                value = int(raw[0])
+            except (TypeError, ValueError):
+                return DEFAULT_HISTORY_WINDOW_MS
+            return value if value >= 0 else DEFAULT_HISTORY_WINDOW_MS
+
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            path = self.path.split("?", 1)[0]
+            path, _, query = self.path.partition("?")
             if path in ("/", "/index.html"):
                 self.send_bytes(HTTPStatus.OK, index_html, "text/html; charset=utf-8")
                 return
+            if path == "/api/realtime":
+                window = self.history_window_ms(query)
+                payload = store.realtime_snapshot(
+                    history_ms=(
+                        DEFAULT_HISTORY_WINDOW_MS if window is None else window
+                    )
+                )
+                body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                self.send_bytes(HTTPStatus.OK, body, "application/json")
+                return
             if path in ("/api/status", "/healthz"):
-                snapshot = store.snapshot()
+                # /healthz reports feed liveness only, so it asks for the
+                # narrowest history it can: building the full retained
+                # buffer just to discard it costs a few megabytes of
+                # copying per probe once telemetry runs at 500 Hz.
+                window = 0 if path == "/healthz" else self.history_window_ms(query)
+                snapshot = store.snapshot(history_ms=window)
                 if path == "/healthz":
                     snapshot = {"ok": True, "feeds": snapshot["feeds"]}
                 body = json.dumps(snapshot, separators=(",", ":")).encode("utf-8")
@@ -1682,9 +1966,22 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=PROJECT_ROOT / "results" / "sionna-2gnb-2ue.jsonl",
     )
     parser.add_argument("--index", type=pathlib.Path, default=DEFAULT_INDEX)
+    parser.add_argument(
+        "--resource-interval-ms",
+        type=float,
+        default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
+        help=(
+            "CPU/GPU resource sampling period in milliseconds. The default "
+            "puts several points inside the 100 ms resource charts; raise it "
+            "if the NVML queries start costing the measured run more than "
+            "the extra resolution is worth."
+        ),
+    )
     args = parser.parse_args(argv)
     if not (1 <= args.port <= 65535):
         parser.error("port must be in [1, 65535]")
+    if args.resource_interval_ms <= 0:
+        parser.error("resource-interval-ms must be positive")
     return args
 
 
@@ -1716,7 +2013,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     gpu_thread = threading.Thread(
         target=gpu_usage_loop,
-        args=(store, stop),
+        args=(store, stop, args.resource_interval_ms / 1000.0),
         name="nvidia-process-monitor",
         daemon=True,
     )
@@ -1739,6 +2036,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "listen": f"http://{args.bind}:{args.port}",
                 "telemetry_endpoint": args.telemetry_endpoint,
                 "status_jsonl": str(args.status_jsonl),
+                "resource_interval_ms": args.resource_interval_ms,
                 "read_only": True,
             },
             separators=(",", ":"),

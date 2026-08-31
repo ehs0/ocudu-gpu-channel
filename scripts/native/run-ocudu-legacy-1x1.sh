@@ -24,7 +24,7 @@ sionna_bridge="${repo_root}/scripts/sionna_rt/run_bridge.py"
 sionna_scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-${repo_root}/examples/sionna/ocudu-docker.json}"
 web_server="${repo_root}/scripts/web_ui/server.py"
 web_index="${repo_root}/scripts/web_ui/index.html"
-sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-2}"
+sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-500}"
 sionna_ready_seconds="${OCUDU_NATIVE_SIONNA_READY_SECONDS:-120}"
 web_bind="${OCUDU_NATIVE_WEB_BIND:-127.0.0.1}"
 web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
@@ -464,7 +464,7 @@ while [[ "${SECONDS}" -lt "${ready_deadline}" ]]; do
     break
   fi
   if [[ -f "${live_ready_path}" ]] && \
-    /usr/bin/python3 - "${web_url}/api/status" "${web_status_path}" <<'PY' >/dev/null 2>&1
+    /usr/bin/python3 - "${web_url}/api/status?history_ms=1000" "${web_status_path}" <<'PY' >/dev/null 2>&1
 import json
 import pathlib
 import sys

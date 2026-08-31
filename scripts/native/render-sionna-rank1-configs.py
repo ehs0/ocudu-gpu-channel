@@ -150,14 +150,21 @@ def render_gnb(source: str, log_dir: Path, shape: LiveShape) -> str:
         "  device_args: " + ",".join((*tx_args, *rx_args, "base_srate=23.04e6")) + "\n",
         1,
     )
-    rendered = legacy.replace_exact(
-        rendered, "  nof_antennas_dl: 4\n", f"  nof_antennas_dl: {shape.gnb_tx}\n", 1,
-        "gNB DL antenna count",
-    )
-    rendered = legacy.replace_exact(
-        rendered, "  nof_antennas_ul: 4\n", f"  nof_antennas_ul: {shape.gnb_rx}\n", 1,
-        "gNB UL antenna count",
-    )
+    # The fixture is the 4T4R template, so a 4-port scenario asks for a
+    # replacement that changes nothing. legacy.replace_exact rejects that:
+    # its "token survived replacement" guard cannot tell a deliberate
+    # no-op from a substitution that silently failed. That made 4 ports
+    # unreachable even though SUPPORTED_GNB_PORTS advertises them, so the
+    # no-op is skipped here instead of weakening the shared guard. The
+    # `required` check above already proved each token appears once.
+    for key, count, label in (
+        ("nof_antennas_dl", shape.gnb_tx, "gNB DL antenna count"),
+        ("nof_antennas_ul", shape.gnb_rx, "gNB UL antenna count"),
+    ):
+        if count != 4:
+            rendered = legacy.replace_exact(
+                rendered, f"  {key}: 4\n", f"  {key}: {count}\n", 1, label,
+            )
     for placeholder, filename, label in (
         ("@GNB_LOG@", "gnb-internal.log", "gNB log path"),
         ("@GNB_MAC_PCAP@", "gnb_mac.pcap", "gNB MAC pcap path"),
@@ -240,6 +247,20 @@ def self_test() -> None:
     assert "      - gnb0_p3\n" in topology
     assert "fixed_mimo" not in topology
     assert "model: dl_dynamic" in topology and "model: ul_dynamic" in topology
+    # Every advertised port count must actually render. 4 is the fixture's
+    # own value, so it exercises the no-op replacement path.
+    gnb_source = (
+        Path(__file__).resolve().parents[2]
+        / "examples/native/ocudu/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml"
+    ).read_text(encoding="utf-8")
+    for ports in sorted(SUPPORTED_GNB_PORTS):
+        rendered = render_gnb(
+            gnb_source, Path("/tmp"), LiveShape(ports, ports, 1, 1, "dl", "ul")
+        )
+        assert f"  nof_antennas_dl: {ports}\n" in rendered
+        assert f"  nof_antennas_ul: {ports}\n" in rendered
+        assert f"tx_port{ports - 1}=" in rendered
+        assert f"tx_port{ports}=" not in rendered
     assert _array_count({"tx_array": {"rows": 2, "cols": 2}}, "tx_array", "node") == 4
     try:
         _array_count({"rx_array": {"rows": 0, "cols": 1}}, "rx_array", "node")

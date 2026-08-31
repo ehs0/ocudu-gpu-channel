@@ -45,7 +45,7 @@ broker_image="${OCUDU_MGNB_BROKER_IMAGE:-}"
 # untouched.
 channel_mode="${OCUDU_MGNB_CHANNEL_MODE:-static}"
 sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
-sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-2}"
+sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-500}"
 sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
 sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
@@ -514,7 +514,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   broker_extra=(
     --control-endpoint 'tcp://*:5559'
     --telemetry-endpoint 'tcp://*:5560'
-    --telemetry-rate-hz 20
+    --telemetry-rate-hz 500
   )
 fi
 

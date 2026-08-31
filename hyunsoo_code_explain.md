@@ -156,7 +156,7 @@ The Broker publishes telemetry containing each IQ slot's processing time, deadli
 
 The Sionna RT bridge calculates the scene, transmitter and receiver positions, and propagation paths. It converts the calculated rays into tap-based channel profiles understood by the Broker, then atomically updates those profiles through the control endpoint.
 
-The default update rate is 2 Hz. It can be changed with `OCUDU_NATIVE_SIONNA_UPDATE_HZ`.
+The default update rate is 500 Hz. It can be changed with `OCUDU_NATIVE_SIONNA_UPDATE_HZ`.
 
 ### Web UI
 

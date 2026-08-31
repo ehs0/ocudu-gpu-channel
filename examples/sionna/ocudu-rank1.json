@@ -5,8 +5,8 @@
     "gnb0": {
       "start_m": [32.5, 10.5, 60.0],
       "mobility": "fixed",
-      "tx_array": {"rows": 1, "cols": 2, "pattern": "iso", "polarization": "V"},
-      "rx_array": {"rows": 1, "cols": 2, "pattern": "iso", "polarization": "V"}
+      "tx_array": {"rows": 1, "cols": 4, "pattern": "iso", "polarization": "V"},
+      "rx_array": {"rows": 1, "cols": 4, "pattern": "iso", "polarization": "V"}
     },
     "ue0": {
       "start_m": [-70.0, 0.0, 1.5],

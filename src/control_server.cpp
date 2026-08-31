@@ -1376,9 +1376,12 @@ void ControlServer::run_telemetry_loop()
   void* sock = zmq_socket(ctx, ZMQ_PUB);
   if (sock == nullptr) { zmq_ctx_term(ctx); return; }
 
-  // Default send HWM is 1000 messages — adequate for 20 Hz × 16 links
-  // (~3 seconds of buffered frames before drops). Operator can dial
-  // the rate down for thicker buffers.
+  // Default send HWM is 1000 messages. At the 500 Hz × 2 links the web
+  // UI runs on that is ~1 second of buffered frames before drops; at
+  // 500 Hz × 16 links it is ~125 ms. Frames are sent ZMQ_DONTWAIT, so a
+  // stalled subscriber costs dropped samples (counted in
+  // telemetry_drops_) rather than backpressure on this loop. Operator
+  // can dial the rate down for thicker buffers.
   if (zmq_bind(sock, config_.telemetry_endpoint.c_str()) != 0) {
     zmq_close(sock);
     zmq_ctx_term(ctx);
@@ -1523,11 +1526,20 @@ void ControlServer::run_telemetry_loop()
     }
 
     // Sleep until the next tick. Subdivide so stop() latency stays
-    // bounded by ~100 ms instead of by the telemetry period (which at
-    // 1 Hz would otherwise mean a 1-second stop delay).
-    while (std::chrono::steady_clock::now() < wake) {
+    // bounded by ~10 ms instead of by the telemetry period (which at
+    // 1 Hz would otherwise mean a 1-second stop delay), but clamp each
+    // slice to the time actually left before `wake`. A fixed 10 ms slice
+    // overshoots every period shorter than that, which silently capped
+    // the publisher near 100 Hz no matter how high telemetry_rate_hz was
+    // set (500 Hz asks for a 2 ms period).
+    constexpr auto kMaxSleepSlice = std::chrono::microseconds(10'000);
+    for (;;) {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= wake) break;
       if (stop_requested_.load(std::memory_order_relaxed)) break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::microseconds>(wake - now);
+      std::this_thread::sleep_for(std::min(remaining, kMaxSleepSlice));
     }
   }
 

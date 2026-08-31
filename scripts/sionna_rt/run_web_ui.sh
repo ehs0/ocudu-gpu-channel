@@ -13,7 +13,7 @@ telemetry_endpoint="tcp://127.0.0.1:5560"
 bind_address="127.0.0.1"
 port="8080"
 duration="0"
-update_hz="2"
+update_hz="500"
 ready_seconds="120"
 
 usage()

@@ -27,7 +27,7 @@ sionna_python=""
 sionna_bridge=""
 sionna_scenario_config=""
 sionna_status_jsonl=""
-sionna_update_hz="2"
+sionna_update_hz="500"
 sionna_ready_seconds="120"
 live_ready_path=""
 live_ready_event="native_sionna_1x1_live_ready"
@@ -461,7 +461,7 @@ PY
     broker_args+=(
       --control-endpoint "${control_endpoint}"
       --telemetry-endpoint "${telemetry_endpoint}"
-      --telemetry-rate-hz 20
+      --telemetry-rate-hz 500
     )
   fi
   start_group broker "${log_dir}/broker.log" env CUDA_VISIBLE_DEVICES="${physical_gpu}" \
