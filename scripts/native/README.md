@@ -148,7 +148,7 @@ export OCUDU_NATIVE_SIONNA_DURATION_SECONDS=150
 ```
 
 Optional settings are `OCUDU_NATIVE_WEB_PORT` (default `8080`),
-`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `20`), and
+`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `10`), and
 `OCUDU_NATIVE_SIONNA_READY_SECONDS` (default `120`). The Web server is
 restricted to loopback. A remote browser can use SSH port forwarding:
 

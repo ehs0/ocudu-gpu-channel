@@ -24,6 +24,7 @@ from server import (  # noqa: E402
     PCIE_REFRESH_INTERVAL_SECONDS,
     PROCESS_UTILIZATION_INTERVAL_SECONDS,
     RESOURCE_SAMPLE_INTERVAL_SECONDS,
+    SIONNA_JSONL_POLL_SECONDS,
     TELEMETRY_HISTORY_RETAIN_MS,
     SionnaJsonlTail,
     StatusStore,
@@ -232,7 +233,7 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(narrow[-1]["slot"], 49)
 
     def test_realtime_snapshot_carries_only_the_charted_series(self) -> None:
-        """The 100 ms chart loop must not pay for the full status document."""
+        """The 1,000 ms chart loop must not pay for the full status document."""
 
         store = StatusStore()
         store.update_telemetry(
@@ -294,13 +295,34 @@ class WebUiTests(unittest.TestCase):
         for key in ("sionna", "telemetry", "delivery", "gpu_usage"):
             self.assertNotIn(key, realtime)
 
+    def test_realtime_snapshot_keeps_every_channel_arrival_in_window(self) -> None:
+        store = StatusStore()
+        for iteration in range(40):
+            started = 1_000 + iteration * 10
+            store.update_sionna(
+                {
+                    "event": "sionna_rt_update",
+                    "session_id": "arrival-session",
+                    "iteration": iteration,
+                    "update_started_unix_ms": started,
+                    "control_ack_unix_ms": started + 5,
+                    "timing_ms": {"total_update": 6.0},
+                }
+            )
+
+        events = store.realtime_snapshot(history_ms=1_000)["history"]["iterations"]
+        self.assertEqual(len(events), 40)
+        self.assertEqual(events[0]["channel_arrived_unix_ms"], 1_005)
+        self.assertEqual(events[-1]["channel_arrived_unix_ms"], 1_395)
+
     def test_retention_spans_cover_the_drawn_chart_window(self) -> None:
         """Guard the invariant the empty-chart bug came from."""
 
-        chart_window_ms = 100
+        chart_window_ms = 1_000
         self.assertGreater(TELEMETRY_HISTORY_RETAIN_MS, chart_window_ms)
         self.assertGreater(GPU_HISTORY_RETAIN_MS, chart_window_ms)
         self.assertGreaterEqual(DEFAULT_HISTORY_WINDOW_MS, chart_window_ms)
+        self.assertEqual(SIONNA_JSONL_POLL_SECONDS, 0.02)
 
     def test_slow_nvml_queries_stay_off_the_fast_sampling_path(self) -> None:
         """The 10 ms cadence only works if the ~21 ms calls are gated.
@@ -781,8 +803,9 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("label:'Web UI'", index)
         self.assertIn("label:'Other / OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
-        self.assertIn("const CHART_WINDOW_MS = 100;", index)
+        self.assertIn("const CHART_WINDOW_MS = 1000;", index)
         self.assertIn("const CHART_POLL_MS = CHART_WINDOW_MS;", index)
+        self.assertIn("const CHART_HISTORY_MS = CHART_WINDOW_MS * 2;", index)
         self.assertIn("windowMs=config.windowMs||CHART_WINDOW_MS", index)
         self.assertIn("end=Math.floor(now/windowMs)*windowMs", index)
         self.assertIn("tickDivisions=5", index)
@@ -792,6 +815,10 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("ctx.fillText(fmtClock(time)", index)
         self.assertNotIn("millisecondsAgo", index)
         self.assertNotIn("ms ago", index)
+        self.assertIn("item.channel_arrived_unix_ms", index)
+        self.assertIn("label:'Sionna channel'", index)
+        self.assertIn("color:'#53e58b'", index)
+        self.assertIn("markers.forEach(marker=>", index)
         # Per-port lane picker on the impulse/frequency responses.
         self.assertIn("function laneOptions(lanes)", index)
         # One antenna row per edge, 1-based labels over 0-based ports,
@@ -841,7 +868,13 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("warmup_started_unix_ms", index)
         self.assertIn("maxGapMs", index)
         self.assertIn("warmupMarkerWidth=6", index)
-        self.assertIn("■ W warm-up", index)
+        self.assertIn("const warmupEvents=config.showWarmups===true?events:[]", index)
+        self.assertIn("timeKey:'observed_unix_ms',showWarmups:true", index)
+        self.assertEqual(index.count("showWarmups:true"), 1)
+        self.assertIn("event.warmup_boundary_source==='backend'", index)
+        self.assertIn("■ W measured warm-up", index)
+        self.assertIn("? timing unavailable", index)
+        self.assertIn("unknownWarmups.forEach", index)
         self.assertNotIn("ctx.fillRect(x0,top,Math.max(1,x1-x0),plotH)", index)
 
     def test_web_ui_leads_with_rank1_workstream_brief(self) -> None:
@@ -965,6 +998,7 @@ class WebUiTests(unittest.TestCase):
         event = store.snapshot()["gpu_usage"]["iterations"][-1]
         self.assertEqual(event["started_unix_ms"], 1_000)
         self.assertEqual(event["ended_unix_ms"], 1_250)
+        self.assertEqual(event["channel_arrived_unix_ms"], 1_200)
         self.assertEqual(event["warmup_started_unix_ms"], 1_200)
         self.assertIsNone(event["warmup_ended_unix_ms"])
 

@@ -33,8 +33,8 @@ from typing import Any, Sequence
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 DEFAULT_INDEX = pathlib.Path(__file__).with_name("index.html")
-# The resource charts plot a 100 ms window, so the sampler has to land
-# several points inside it: 10 ms gives ~10. NVML per-process and PCIe
+# The resource charts plot a 1,000 ms window, so the sampler has to land
+# several points inside it: 10 ms gives ~100. NVML per-process and PCIe
 # queries are not free at this cadence — see `--resource-interval-ms` to
 # dial it back when the monitor thread starts perturbing the run it is
 # measuring.
@@ -62,6 +62,7 @@ GPU_HISTORY_MAX_ENTRIES = 2_048
 # Default slice returned to a caller that does not ask for a window.
 DEFAULT_HISTORY_WINDOW_MS = 1_000
 INITIAL_JSONL_TAIL_BYTES = 4 * 1024 * 1024
+SIONNA_JSONL_POLL_SECONDS = 0.02
 RESOURCE_ROLES = ("sionna", "gpu_channel", "web_ui")
 
 
@@ -1825,6 +1826,14 @@ class StatusStore:
                         "observed_unix_ms": ended_unix_ms,
                         "started_unix_ms": started_unix_ms,
                         "ended_unix_ms": ended_unix_ms,
+                        # The ACK is when the Broker accepted this profile
+                        # batch. Preserve it separately from iteration end so
+                        # the UI can mark each channel arrival precisely.
+                        "channel_arrived_unix_ms": (
+                            control_ack_unix_ms
+                            if isinstance(control_ack_unix_ms, int)
+                            else ended_unix_ms
+                        ),
                         "warmup_expected": bool(warmup_targets),
                         "warmup_started_unix_ms": (
                             control_ack_unix_ms
@@ -1996,7 +2005,14 @@ class StatusStore:
             # warmup keys on these dicts under the lock, and handing the
             # live objects to json.dumps on an HTTP thread lets a key
             # appear mid-serialization.
-            iteration_history = [dict(event) for event in self._iteration_history]
+            iteration_source = (
+                slice_history(
+                    self._iteration_history, "observed_unix_ms", history_ms
+                )
+                if history_ms is not None
+                else self._iteration_history[-32:]
+            )
+            iteration_history = [dict(event) for event in iteration_source]
             bad_frames = self._bad_telemetry_frames
             gnb_metrics = self._gnb_metrics
             # Two clocks, because they answer two questions: how long
@@ -2052,7 +2068,7 @@ class StatusStore:
             "gpu_usage": gpu_usage,
             "history": {
                 "telemetry": telemetry_history,
-                "iterations": iteration_history[-32:],
+                "iterations": iteration_history,
             },
             "delivery": delivery_status(sionna, telemetry),
             "ran": {
@@ -2074,7 +2090,7 @@ class StatusStore:
 
         The full snapshot carries the scene geometry, per-tap channel
         tables and every live telemetry body, which is far too much to
-        move at the 20 ms cadence the 100 ms charts need. This returns
+        move at the 1,000 ms cadence the 1,000 ms charts need. This returns
         only what `drawResourceHistory` reads, so the fast loop stays
         cheap on both sides while the heavy DOM render keeps polling
         /api/status at its own slower rate.
@@ -2088,7 +2104,10 @@ class StatusStore:
                 self._telemetry_history, "observed_unix_ms", history_ms
             )
             iteration_history = [
-                dict(event) for event in self._iteration_history[-32:]
+                dict(event)
+                for event in slice_history(
+                    self._iteration_history, "observed_unix_ms", history_ms
+                )
             ]
             target_update_hz = (
                 self._sionna_runtime.get("target_update_hz")
@@ -2154,7 +2173,11 @@ class SionnaJsonlTail:
             self._offset = handle.tell()
 
     def run(self, stop: threading.Event) -> None:
-        while not stop.wait(0.25):
+        # Keep this below the Sionna update interval so the iteration target
+        # exists before the Broker's latched warm-up event is replaced by the
+        # next profile. A 250 ms poll merged several 60-100 ms iterations and
+        # forced the UI to use a much later observation-time fallback.
+        while not stop.wait(SIONNA_JSONL_POLL_SECONDS):
             self.poll_once()
 
 
@@ -2405,7 +2428,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
         help=(
             "CPU/GPU resource sampling period in milliseconds. The default "
-            "puts several points inside the 100 ms resource charts; raise it "
+            "puts about 100 points inside the 1,000 ms resource charts; raise it "
             "if the NVML queries start costing the measured run more than "
             "the extra resolution is worth."
         ),

@@ -24,7 +24,7 @@ sionna_bridge="${repo_root}/scripts/sionna_rt/run_bridge.py"
 sionna_scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-${repo_root}/examples/sionna/ocudu-docker.json}"
 web_server="${repo_root}/scripts/web_ui/server.py"
 web_index="${repo_root}/scripts/web_ui/index.html"
-sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-20}"
+sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-10}"
 sionna_ready_seconds="${OCUDU_NATIVE_SIONNA_READY_SECONDS:-120}"
 # The same switch that makes the renderer emit the gNB metrics block also
 # points the Web UI at the gNB's remote-control WebSocket, so one variable
