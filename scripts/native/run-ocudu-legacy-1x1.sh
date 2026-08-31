@@ -31,6 +31,14 @@ sionna_ready_seconds="${OCUDU_NATIVE_SIONNA_READY_SECONDS:-120}"
 # turns the whole RAN KPI path on. Unset, neither side is touched.
 gnb_metrics_enabled="${OCUDU_NATIVE_GNB_METRICS:-}"
 gnb_metrics_port="${OCUDU_NATIVE_GNB_METRICS_PORT:-8001}"
+# Keepalive ping interval for the unbounded live demo, in seconds; 0 disables
+# it. Fractional values are accepted and are what you want: the scheduler sums
+# its KPIs per report period (1 s as rendered), so an interval at or above that
+# period leaves most rows a truthful but useless zero. 0.2 puts five packets in
+# every report. Pair it with OCUDU_NATIVE_UE_INACTIVITY_SECONDS, which the
+# config renderer reads: the keepalive keeps the KPI table populated, and the
+# timer decides how long a genuinely idle UE survives.
+ue_keepalive_seconds="${OCUDU_NATIVE_UE_KEEPALIVE_SECONDS:-0}"
 web_bind="${OCUDU_NATIVE_WEB_BIND:-127.0.0.1}"
 web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
 sionna_result_family="${OCUDU_NATIVE_SIONNA_RESULT_FAMILY:-ocudu-sionna-1x1}"
@@ -435,6 +443,7 @@ unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagat
   --sionna-status-jsonl "${sionna_status_jsonl}" --sionna-update-hz "${sionna_update_hz}" \
   --sionna-ready-seconds "${sionna_ready_seconds}" --live-ready-path "${live_ready_path}" \
   --live-ready-event "${sionna_event_family}_live_ready" \
+  --ue-keepalive-seconds "${ue_keepalive_seconds}" \
   >"${log_dir}/native-runtime-console.log" 2>&1 9<&- &
 runtime_pid="$!"
 runtime_child_deadline=$((SECONDS + 5))

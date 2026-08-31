@@ -199,6 +199,51 @@ def _port_lines(count: int) -> str:
 # makes the gNB exit with "INI was not able to parse". One enable_json covers
 # both, which was confirmed against the deployed binary, not just the source.
 # The dashboard reads them over the same WebSocket the official GUI uses.
+# The UE/PDU-session/DRB inactivity timer is opt-in for the same reason the
+# metrics block is: unset, the rendered gnb.yaml stays byte-identical to the
+# pre-existing output, so the 1x1 attach gate and the 2x1/4x1 matrix gates are
+# provably untouched. It exists for the unbounded live demo, where the gNB's
+# 120 s default (ocudu apps/units/o_cu_cp/cu_cp/cu_cp_unit_config.h) releases
+# the UE a couple of minutes after the acceptance ping and leaves the RAN KPI
+# panel with nothing to show. The bound is the one the gNB itself enforces
+# (apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_cli11_schema.cpp: range(1, 7200)).
+UE_INACTIVITY_ENV = "OCUDU_NATIVE_UE_INACTIVITY_SECONDS"
+UE_INACTIVITY_RANGE = (1, 7200)
+
+
+def inactivity_timer_seconds(environ: dict[str, str] | None = None) -> int | None:
+    """The configured inactivity timer, or None to leave the fixture alone."""
+
+    raw = (environ if environ is not None else os.environ).get(UE_INACTIVITY_ENV, "").strip()
+    if not raw:
+        return None
+    low, high = UE_INACTIVITY_RANGE
+    if not raw.isdigit() or not low <= int(raw) <= high:
+        legacy.fail(f"{UE_INACTIVITY_ENV} must be an integer in [{low}, {high}]")
+    return int(raw)
+
+
+def render_gnb_inactivity(source: str, seconds: int) -> str:
+    """Set cu_cp.inactivity_timer inside the fixture's existing cu_cp block.
+
+    Inserted rather than appended: a second top-level `cu_cp:` mapping is a
+    duplicate key, not an override. The anchor carries the following line
+    because `legacy.replace_exact` rejects a replacement the search token
+    survives -- its guard cannot tell that from a substitution that failed.
+    """
+
+    low, high = UE_INACTIVITY_RANGE
+    if not low <= seconds <= high:
+        raise ValueError(f"inactivity timer must be in [{low}, {high}]")
+    anchor = "cu_cp:\n  amf:\n"
+    if source.count(anchor) != 1:
+        legacy.fail("rank-1 gNB fixture cu_cp block is missing or ambiguous")
+    return legacy.replace_exact(
+        source, anchor, f"cu_cp:\n  inactivity_timer: {seconds}\n  amf:\n", 1,
+        "gNB cu_cp inactivity timer",
+    )
+
+
 GNB_METRICS_ENV = "OCUDU_NATIVE_GNB_METRICS"
 DEFAULT_METRICS_PORT = 8001
 DEFAULT_DU_REPORT_PERIOD_MS = 1000
@@ -301,6 +346,14 @@ def render_topology(shape: LiveShape) -> str:
     )
 
 
+def _render_gnb_document(source: str, log_dir: Path, shape: LiveShape) -> str:
+    rendered = render_gnb(source, log_dir, shape)
+    seconds = inactivity_timer_seconds()
+    if seconds is not None:
+        rendered = render_gnb_inactivity(rendered, seconds)
+    return rendered + (render_gnb_metrics() if metrics_enabled() else "")
+
+
 def self_test() -> None:
     shape = LiveShape(2, 4, 1, 1, "dl_dynamic", "ul_dynamic")
     topology = render_topology(shape)
@@ -341,6 +394,24 @@ def self_test() -> None:
     # Not a YAML key -- the gNB refuses to start if it appears.
     assert "enable_metrics_subscription" not in metrics_block
     assert "enable_rlc" not in metrics_block, "only scheduler layers are enabled"
+    # The inactivity timer is opt-in on the same terms as the metrics block:
+    # with the variable unset the document must be byte-identical.
+    assert inactivity_timer_seconds({}) is None
+    assert inactivity_timer_seconds({"OCUDU_NATIVE_UE_INACTIVITY_SECONDS": "7200"}) == 7200
+    assert inactivity_timer_seconds({"OCUDU_NATIVE_UE_INACTIVITY_SECONDS": " "}) is None
+    plain = render_gnb(gnb_source, Path("/tmp"), shape)
+    assert "inactivity_timer" not in plain
+    timed = render_gnb_inactivity(plain, 7200)
+    assert timed.count("cu_cp:\n  inactivity_timer: 7200\n") == 1
+    # One cu_cp block, not two: a duplicate mapping key is not an override.
+    assert timed.count("\ncu_cp:") == plain.count("\ncu_cp:") == 1
+    assert timed.replace("  inactivity_timer: 7200\n", "") == plain
+    for bad in ("0", "7201", "-1", "600s"):
+        try:
+            inactivity_timer_seconds({"OCUDU_NATIVE_UE_INACTIVITY_SECONDS": bad})
+        except ValueError:
+            continue
+        raise AssertionError(f"accepted out-of-range inactivity timer: {bad}")
     print("event=native_sionna_rank1_config_renderer_self_test result=pass")
 
 
@@ -387,8 +458,7 @@ def main() -> int:
         "native subscriber template",
     )
     rendered = {
-        "gnb.yaml": render_gnb(gnb_source, log_dir, shape)
-        + (render_gnb_metrics() if metrics_enabled() else ""),
+        "gnb.yaml": _render_gnb_document(gnb_source, log_dir, shape),
         "topology.yaml": render_topology(shape),
         "open5gs.yaml": legacy.render_open5gs(open5gs_source, native_root),
         "srsue.conf": legacy.render_srsue(srsue_source, log_dir),

@@ -148,13 +148,42 @@ export OCUDU_NATIVE_SIONNA_DURATION_SECONDS=150
 ```
 
 Optional settings are `OCUDU_NATIVE_WEB_PORT` (default `8080`),
-`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `500`), and
+`OCUDU_NATIVE_SIONNA_UPDATE_HZ` (default `20`), and
 `OCUDU_NATIVE_SIONNA_READY_SECONDS` (default `120`). The Web server is
 restricted to loopback. A remote browser can use SSH port forwarding:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 ubuntu@GPU_HOST
 ```
+
+### Keeping the RAN KPI panel populated
+
+`OCUDU_NATIVE_GNB_METRICS=1` turns on the per-UE scheduler KPI panel. Two
+further switches decide whether that panel has anything to show, and both are
+off by default so every gate renders and runs exactly as before:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `OCUDU_NATIVE_UE_INACTIVITY_SECONDS` | unset (gNB default, 120 s) | Renders `cu_cp.inactivity_timer`, accepted range 1-7200. Without it the gNB releases an idle UE about two minutes after the acceptance ping and the panel correctly reports no connected UEs. |
+| `OCUDU_NATIVE_UE_KEEPALIVE_SECONDS` | `0` (off) | Ping interval in the UE namespace, accepted range 0.2-60 s, fractional. Started only on an unbounded run and only after the acceptance verdict is written, logging to `ue-keepalive.log`. |
+
+Set the keepalive interval well under the scheduler's report period
+(`metrics.periodicity.du_report_period`, 1 s as rendered). The KPIs are sums
+over one report period, so an interval at or above that period leaves the
+periods in between reporting zero throughput, zero HARQ counts and no SINR --
+truthfully, since nothing was transmitted in them. `0.2` puts five packets in
+every report and keeps the row continuously populated:
+
+```bash
+OCUDU_NATIVE_GNB_METRICS=1 \
+OCUDU_NATIVE_UE_INACTIVITY_SECONDS=7200 \
+OCUDU_NATIVE_UE_KEEPALIVE_SECONDS=0.2 \
+./scripts/native/run-ocudu-sionna-rank1.sh
+```
+
+The CQI and DL RI columns stay empty regardless: this configuration runs with
+`csi_rs_enabled: false`, so the scheduler reports `cqi = -1` ("no CSI report")
+for the whole run.
 
 Sionna mode stores logs and reports separately from the legacy gate:
 

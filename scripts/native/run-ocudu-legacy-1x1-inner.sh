@@ -37,6 +37,22 @@ sionna_update_hz="20"
 sionna_ready_seconds="120"
 live_ready_path=""
 live_ready_event="native_sionna_1x1_live_ready"
+# Keepalive traffic for the unbounded live demo only; 0 leaves the run exactly
+# as it was. It exists because a UE that has nothing to send stops appearing in
+# any KPI the scheduler derives per report period, and eventually trips the
+# gNB's inactivity release. The interval is fractional on purpose: the KPIs are
+# per-report-period sums, so an interval at or above the scheduler's report
+# period (metrics.periodicity.du_report_period, 1000 ms as rendered) leaves the
+# periods in between with a truthful but useless row of zeros. Keep it well
+# under that period -- 0.2 s puts five packets in every report.
+ue_keepalive_seconds="0"
+
+usage_error()
+{
+  printf 'error: %s\n' "$1" >&2
+  exit 2
+}
+
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --mode) mode="${2:-}"; shift 2 ;;
@@ -70,6 +86,7 @@ while [[ "$#" -gt 0 ]]; do
     --sionna-ready-seconds) sionna_ready_seconds="${2:-}"; shift 2 ;;
     --live-ready-path) live_ready_path="${2:-}"; shift 2 ;;
     --live-ready-event) live_ready_event="${2:-}"; shift 2 ;;
+    --ue-keepalive-seconds) ue_keepalive_seconds="${2:-}"; shift 2 ;;
     *) usage_error "unknown argument: $1" ;;
   esac
 done
@@ -78,6 +95,14 @@ done
 [[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
   usage_error "--channel-mode must be legacy or sionna"
 [[ "${run_duration_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid run duration"
+[[ "${ue_keepalive_seconds}" =~ ^(0|0?\.[0-9]+|[1-9][0-9]*(\.[0-9]+)?)$ ]] || \
+  usage_error "invalid keepalive interval"
+if [[ "${ue_keepalive_seconds}" != "0" ]]; then
+  # ping refuses intervals under 0.2 s without real privilege, and a
+  # namespace-scoped capability would not help here.
+  awk -v value="${ue_keepalive_seconds}" 'BEGIN { exit !(value >= 0.2 && value <= 60) }' || \
+    usage_error "keepalive interval must be 0 or within [0.2, 60] seconds"
+fi
 if [[ "${mode}" == "run" ]]; then
   [[ "${run_family}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || usage_error "invalid --run-family"
 fi
@@ -159,9 +184,11 @@ cleanup()
   set +e
   trap - EXIT INT TERM HUP
   local index wanted cleanup_failed=0
-  # Stop Broker admission first while both radio requesters are still alive.
-  # Then stop the radio peers and finally their core/database dependencies.
-  for wanted in sionna broker srsue gnb open5gs mongod; do
+  # Stop the keepalive first: no reason to keep injecting user-plane traffic
+  # into a stack that is being torn down. Then Broker admission, while both
+  # radio requesters are still alive, then the radio peers, and finally their
+  # core/database dependencies.
+  for wanted in ue-keepalive sionna broker srsue gnb open5gs mongod; do
     for ((index=0; index<${#process_pids[@]}; index++)); do
       if [[ "${process_names[index]}" == "${wanted}" ]]; then
         if stop_group "${index}"; then
@@ -522,7 +549,16 @@ PY
   fi
   if [[ "${rrc}" -eq 1 && "${pdu}" -eq 1 && "${ping_ok}" -eq 1 ]]; then
     write_live_ready "${rrc}" "${pdu}" "${ping_ok}"
-    elif [[ "${run_duration_seconds}" -eq 0 ]] && process_running "${broker_pid}"; then
+    # Started only after the verdict is written, and only for the unbounded
+    # live demo: the bounded gate keeps the exact traffic profile it was
+    # proven with, and ue-ping.log -- which the acceptance check reads --
+    # stays the acceptance ping alone.
+    if [[ "${ue_keepalive_seconds}" != "0" && "${run_duration_seconds}" -eq 0 ]]; then
+      start_group ue-keepalive "${log_dir}/ue-keepalive.log" \
+        nsenter --net=/run/netns/ue1 -- \
+        ping -I tun_srsue -i "${ue_keepalive_seconds}" 10.45.1.1
+    fi
+  elif [[ "${run_duration_seconds}" -eq 0 ]] && process_running "${broker_pid}"; then
     # An unbounded live demo must still return a useful failure if attach did
     # not complete; otherwise the outer launcher would wait forever.
     stop_group "${broker_index}" || true
