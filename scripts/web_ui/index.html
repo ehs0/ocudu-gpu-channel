@@ -91,6 +91,14 @@
     .claim b { color:var(--amber); }
     .brief-repro { border:1px solid #20323f; border-radius:8px; background:#07111a; padding:10px; color:var(--cyan); font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:11px; overflow-x:auto; white-space:pre; }
     .tap-plot { width:100%; height:136px; display:block; border:1px solid #20323f; border-radius:8px; background:#07111a; margin-bottom:8px; }
+    .ran-table-wrap { overflow-x:auto; border:1px solid #20323f; border-radius:9px; background:#07111a; }
+    .ran-table { border-collapse:collapse; width:100%; min-width:900px; font-variant-numeric:tabular-nums; }
+    .ran-table th,.ran-table td { padding:7px 9px; font-size:11px; text-align:right; white-space:nowrap; border-bottom:1px solid #16242f; }
+    .ran-table th { position:sticky; top:0; background:#0c1822; color:var(--muted); font-size:9px; text-transform:uppercase; text-align:right; }
+    .ran-table th:first-child,.ran-table td:first-child { text-align:left; }
+    .ran-table tbody tr:last-child td { border-bottom:0; }
+    .ran-group { color:var(--cyan); font-size:10px; padding:7px 9px; background:#0a1620; border-bottom:1px solid #20323f; }
+    .ran-stale { color:var(--amber); font-size:11px; padding:6px 9px; margin-bottom:6px; border:1px solid #4a3a15; border-radius:9px; background:#1a1408; }
     .lane-picker { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin:0 0 9px; }
     .lane-picker .lane-picker-label { color:var(--muted); font-size:11px; margin-right:2px; }
     .lane-picker button { font:inherit; font-size:11px; line-height:1; padding:5px 10px; border-radius:99px; cursor:pointer; background:#0c1a24; border:1px solid #20323f; color:var(--muted); }
@@ -138,8 +146,6 @@
     .resource-chart-card { border:1px solid #20323f; border-radius:9px; background:#07111a; padding:9px; min-width:0; }
     .resource-chart-card strong { display:block; color:#bed1de; font-size:12px; margin-bottom:6px; }
     canvas.resource-history { width:100%; height:220px; border:0; border-radius:6px; }
-    canvas.sionna-iteration { height:270px; }
-    .chart-summary { color:var(--muted); font-size:10px; margin-top:5px; min-height:15px; font-variant-numeric:tabular-nums; }
     .memory-process-table { border:1px solid #20323f; border-radius:8px; overflow:hidden; background:#091720; }
     .memory-process-row { display:grid; grid-template-columns:minmax(130px,1.25fr) repeat(2,minmax(90px,1fr)); align-items:center; }
     .memory-process-row + .memory-process-row { border-top:1px solid #20323f; }
@@ -498,6 +504,12 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         <div id="edgeCards" class="edge-grid"></div>
         <div id="impulseNote" class="foot">The horizontal axis automatically frames the earliest and latest taps with a small margin. Waiting for the current sampling frequency. In delay ns, ns means nanoseconds.</div>
       </section>
+      <section class="panel wide">
+        <h2>RAN KPIs by UE · gNB scheduler metrics</h2>
+        <div id="ranState" class="foot"></div>
+        <div id="ranCards"></div>
+        <div class="foot">Served by the gNB's own remote-control WebSocket — the same feed the official GUI subscribes to. Enable it by rendering the run with <span class="mono">OCUDU_NATIVE_GNB_METRICS=1</span> and starting the Web UI with <span class="mono">--gnb-metrics-endpoint ws://127.0.0.1:8001</span>. <b>BLER</b> is derived here as nok / (ok + nok) from the HARQ counters; every other value is reported by the scheduler as-is. An em dash means the scheduler reported nothing for that field in the period, including the values it signals as sentinels rather than omissions: <span class="mono">cqi = -1</span> for "no CSI report", and a SINR or RSRP mean sitting on the <span class="mono">-99.9 dB</span> clamp floor, which is where an unreported RSRP (-inf) and a DTX-pulled PUCCH SINR both land. Two sentinels cannot be told apart from readings and are shown as-is: <b>RI</b> falls back to 1 when no rank was reported, and <b>TA</b> and <b>PHR</b> report 0 when unobserved. This panel is read-only like the rest of the dashboard.</div>
+      </section>
     </div>
   </main>
   <script>
@@ -507,16 +519,13 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     const fmtMib = value => finite(value) ? (Number(value)>=1024?`${fmt(Number(value)/1024,1)} GiB`:`${fmt(value,0)} MiB`) : '—';
     const fmtRate = value => finite(value) ? (Number(value)>=1000?`${fmt(Number(value)/1000,2)} GB/s`:`${fmt(value,0)} MB/s`) : '—';
     const esc = value => String(value??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    // Real-time chart cadence. The charts draw a CHART_WINDOW_MS-wide
-    // window, so the browser has to refresh well inside it or the window
-    // slides past every sample the server holds and the charts render
-    // empty. CHART_POLL_MS drives a light /api/realtime fetch that only
-    // redraws the canvases; STATUS_POLL_MS keeps the far heavier full
-    // status render (scene, channel tables, cards) at its own pace.
-    // CHART_HISTORY_MS is the slice both requests ask for: a few window
-    // widths, so a brief stall still leaves a full window of samples.
+    const fmtClock = value => {const date=new Date(Number(value)),pad=(number,width=2)=>String(number).padStart(width,'0');return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(),3)}`};
+    // Every chart shows the same completed, wall-clock-aligned 100 ms
+    // interval. It advances as one block every 100 ms instead of sliding on
+    // every redraw; keeping several intervals in the response tolerates a
+    // delayed poll without leaving the new block empty.
     const CHART_WINDOW_MS = 100;
-    const CHART_POLL_MS = 20;
+    const CHART_POLL_MS = CHART_WINDOW_MS;
     const STATUS_POLL_MS = 500;
     const CHART_HISTORY_MS = CHART_WINDOW_MS * 4;
     let lastStatus = null;
@@ -646,6 +655,96 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       $('edgeCards').innerHTML=cards||'<div class="empty">Waiting for Sionna channel profiles</div>';
     }
 
+    // Per-UE RAN KPIs from the gNB scheduler feed. Every column below is a
+    // field the scheduler actually emits (see json_generators/du_high/
+    // scheduler.cpp); BLER is the only derived value, computed from the HARQ
+    // ok/nok counters. A UE row that omits a field renders as em dash rather
+    // than zero, so "not reported" never reads as "measured zero".
+    const RAN_COLUMNS=[
+      ['Identity',[
+        ['RNTI',r=>finite(r.rnti)?`0x${Number(r.rnti).toString(16)}`:'—'],
+        ['PCI',r=>fmt(r.pci,0)],
+      ]],
+      ['Link adaptation',[
+        ['CQI',r=>finite(r.cqi)&&Number(r.cqi)>=0?fmt(r.cqi,1):'—'],
+        ['DL RI',r=>fmt(r.dl_ri,2)],['UL RI',r=>fmt(r.ul_ri,2)],
+        ['DL MCS',r=>fmt(r.dl_mcs,1)],['UL MCS',r=>fmt(r.ul_mcs,1)],
+      ]],
+      ['Throughput',[
+        ['DL rate',r=>fmtBitrate(r.dl_brate)],['UL rate',r=>fmtBitrate(r.ul_brate)],
+      ]],
+      ['HARQ · BLER',[
+        ['DL ok/nok',r=>`${fmt(r.dl_nof_ok,0)} / ${fmt(r.dl_nof_nok,0)}`],
+        ['DL BLER',r=>fmtBler(r.dl_nof_ok,r.dl_nof_nok)],
+        ['UL ok/nok',r=>`${fmt(r.ul_nof_ok,0)} / ${fmt(r.ul_nof_nok,0)}`],
+        ['UL BLER',r=>fmtBler(r.ul_nof_ok,r.ul_nof_nok)],
+      ]],
+      ['Radio quality',[
+        ['PUSCH SINR',r=>fmtDb(r.pusch_snr_db)],
+        ['PUCCH SINR',r=>fmtDb(r.pucch_snr_db)],
+        ['PUSCH RSRP',r=>fmtDb(r.pusch_rsrp_db)],
+      ]],
+      ['Buffer · TA · PHR',[
+        ['BSR',r=>fmtBytes(r.bsr)],['DL buffer',r=>fmtBytes(r.dl_bs)],
+        ['TA',r=>fmtTa(r.ta_ns)],['PUSCH TA',r=>fmtTa(r.pusch_ta_ns)],
+        ['PHR',r=>finite(r.last_phr)?`${fmt(r.last_phr,0)} dB`:'—'],
+      ]],
+    ];
+    const fmtBitrate=value=>{const n=Number(value);if(!finite(value))return '—';
+      if(n>=1e9)return `${fmt(n/1e9,2)} Gb/s`;if(n>=1e6)return `${fmt(n/1e6,2)} Mb/s`;
+      if(n>=1e3)return `${fmt(n/1e3,1)} kb/s`;return `${fmt(n,0)} b/s`};
+    const fmtBytes=value=>{const n=Number(value);if(!finite(value))return '—';
+      if(n>=1048576)return `${fmt(n/1048576,2)} MiB`;if(n>=1024)return `${fmt(n/1024,1)} KiB`;
+      return `${fmt(n,0)} B`};
+    // The scheduler clamps its SINR and RSRP means into [-99.9, 99.9] and
+    // [-99.9, 0] before serialising them, so a value sitting on a clamp bound
+    // is the bound, not a measurement. An unreported RSRP arrives as -inf
+    // (cell_metrics_handler.cpp: no PUSCH RSRP report in the period) and lands
+    // on the floor; so does a PUCCH SINR mean that any DTX occasion pulled to
+    // -inf. Rendering -99.9 dB as a reading would report silence as the worst
+    // link ever measured, so the floor reads as "not reported" and the ceiling
+    // is marked as the bound it is. Float round-trips land a hair either side
+    // of the bound, hence the tolerance.
+    const RAN_DB_FLOOR=-99.9,RAN_DB_CEIL=99.9,RAN_DB_EPS=0.05;
+    const fmtDb=value=>{if(!finite(value))return '—';const n=Number(value);
+      if(n<=RAN_DB_FLOOR+RAN_DB_EPS)return '—';
+      if(n>=RAN_DB_CEIL-RAN_DB_EPS)return `≥ ${fmt(RAN_DB_CEIL,1)} dB`;
+      return `${fmt(n,1)} dB`};
+    const fmtTa=value=>finite(value)?`${fmt(Number(value)/1000,2)} µs`:'—';
+    const fmtBler=(ok,nok)=>{const good=Number(ok),bad=Number(nok);
+      if(!finite(ok)||!finite(nok)||good+bad<=0)return '—';
+      return `${fmt(bad/(good+bad)*100,2)}%`};
+
+    // The remote-control socket carries every metrics consumer of the gNB,
+    // not just the scheduler, so notifications and scheduler reports are
+    // counted apart: only the second kind says anything about UEs, and only
+    // its age tells the reader whether the table below is current.
+    function renderRanCards(ran) {
+      const state=ran?.state||'disabled',rows=ran?.ue_list||[];
+      const age=finite(ran?.age_seconds)?`${fmt(ran.age_seconds,1)}s ago`:'never';
+      const ueReports=Number(ran?.ue_reports||0);
+      const ueAge=finite(ran?.ue_list_age_seconds)?`${fmt(ran.ue_list_age_seconds,1)}s ago`:'never';
+      const detail={disabled:'Feed disabled — start the Web UI with --gnb-metrics-endpoint.',
+        connecting:'Opening the gNB remote-control WebSocket…',
+        subscribed:'Subscribed — waiting for the first metrics notification.',
+        connected:`Live · ${Number(ran?.messages||0).toLocaleString()} notifications · ${ueReports.toLocaleString()} scheduler reports · last ${age}`,
+        disconnected:`Disconnected${ran?.error?` · ${ran.error}`:''} — retrying with backoff.`}[state]||state;
+      $('ranState').innerHTML=`<span class="${state==='connected'?'tag-ok':'tag-wait'}">${esc(state)}</span> · ${esc(detail)}`;
+      if(!rows.length){
+        const empty=state!=='connected'?'Waiting for gNB scheduler metrics.'
+          :ueReports?'gNB scheduler is reporting no connected UEs.'
+          :'Connected — no scheduler report on this feed yet; the other metrics consumers sharing the socket do not carry UE state.';
+        $('ranCards').innerHTML=`<div class="empty">${esc(empty)}</div>`;
+        return;
+      }
+      const stale=ran?.ue_list_stale===true
+        ?`<div class="ran-stale">Last scheduler report ${esc(ueAge)} — the rows below are the last reported values, not current ones.</div>`:'';
+      const header=RAN_COLUMNS.flatMap(([,cols])=>cols).map(([label])=>`<th>${esc(label)}</th>`).join('');
+      const groups=RAN_COLUMNS.map(([name,cols])=>`<th colspan="${cols.length}" style="text-align:center">${esc(name)}</th>`).join('');
+      const body=rows.map(row=>`<tr>${RAN_COLUMNS.flatMap(([,cols])=>cols).map(([,read])=>`<td>${esc(read(row))}</td>`).join('')}</tr>`).join('');
+      $('ranCards').innerHTML=`${stale}<div class="ran-table-wrap"><table class="ran-table"><thead><tr>${groups}</tr><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
     function renderNodeCards(sionna) {
       const env=sionna?.environment||{},configured=env.nodes||{},positions=sionna?.positions||{},velocities=sionna?.velocities_mps||{},antenna=env.antenna||{};
       const ids=[...new Set([...Object.keys(configured),...Object.keys(positions)])].sort();
@@ -687,45 +786,26 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       const canvas=$(canvasId); if(!canvas)return;
       const ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1,rect=canvas.getBoundingClientRect(),W=rect.width,H=rect.height;
       const pixelW=Math.max(1,Math.round(W*dpr)),pixelH=Math.max(1,Math.round(H*dpr));if(canvas.width!==pixelW||canvas.height!==pixelH){canvas.width=pixelW;canvas.height=pixelH}ctx.setTransform(dpr,0,0,dpr,0,0);
-      const left=52,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=config.windowMs||CHART_WINDOW_MS,start=now-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(now,Number(time))),timeKey=config.timeKey||'sampled_unix_ms';
-      const timeOf=item=>Number(item?.[timeKey]),samples=(source?.history||[]).filter(item=>timeOf(item)>=start&&timeOf(item)<=now),events=(config.showEvents===false?[]:(config.events||source?.iterations||[])).filter(item=>{const eventStart=Number(item.started_unix_ms??item.observed_unix_ms),eventEnd=Number(item.ended_unix_ms??now);return eventStart<=now&&eventEnd>=start});
+      const left=52,right=10,top=43,bottom=23,plotW=W-left-right,plotH=H-top-bottom,now=Date.now(),windowMs=config.windowMs||CHART_WINDOW_MS,end=Math.floor(now/windowMs)*windowMs,start=end-windowMs,x=time=>left+(Number(time)-start)/windowMs*plotW,clipTime=time=>Math.max(start,Math.min(end,Number(time))),timeKey=config.timeKey||'sampled_unix_ms';
+      const timeOf=item=>Number(item?.[timeKey]),samples=(source?.history||[]).filter(item=>timeOf(item)>=start&&timeOf(item)<=end),events=(config.showEvents===false?[]:(config.events||source?.iterations||[])).filter(item=>{const eventStart=Number(item.started_unix_ms??item.observed_unix_ms),eventEnd=Number(item.ended_unix_ms??end);return eventStart<=end&&eventEnd>=start});
       const numeric=value=>value===null||value===undefined||!Number.isFinite(Number(value))?null:Number(value),references=config.references||[],values=[...samples.flatMap(item=>config.series.map(series=>numeric(series.value(item))).filter(value=>value!==null)),...references.map(item=>numeric(item.value)).filter(value=>value!==null)],step=config.step||1,rawMin=values.length?Math.min(...values):0,rawMax=values.length?Math.max(...values):0,min=finite(config.fixedMin)?Number(config.fixedMin):(config.allowNegative?Math.floor(rawMin/step)*step:0),initialMax=finite(config.fixedMax)?Number(config.fixedMax):(config.allowNegative?(values.length?Math.ceil(rawMax/step)*step:step):Math.max(config.minMax||1,Math.ceil(rawMax/step)*step)),max=initialMax<=min?min+step:initialMax;
       const y=value=>top+plotH-(Math.max(min,Math.min(max,Number(value)||0))-min)/(max-min)*plotH,maxGapMs=config.maxGapMs||Math.max(600,Number(source?.sampling?.target_interval_ms||500)*3);
       ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);ctx.font='9px system-ui';
       ctx.fillStyle='#091720';ctx.fillRect(left,top,plotW,plotH);for(const ratio of [0,.5,1]){const py=top+plotH-ratio*plotH,value=min+(max-min)*ratio;ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(config.axis(value),left-4,py+3)}
-      const tickDivisions=5,millisecondTicks=Array.from({length:tickDivisions+1},(_,index)=>windowMs-index*windowMs/tickDivisions);millisecondTicks.forEach((millisecondsAgo,index)=>{const px=x(now-millisecondsAgo);ctx.strokeStyle='rgba(38,57,71,.72)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,top+plotH);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.font='8px system-ui';ctx.textAlign=index===0?'left':millisecondsAgo===0?'right':'center';ctx.fillText(millisecondsAgo===0?'now':`${Math.round(millisecondsAgo)}ms ago`,px,H-7)});
-      events.forEach((event,index)=>{const started=Number(event.started_unix_ms??event.observed_unix_ms),ended=Number(event.ended_unix_ms??now),x0=x(clipTime(started)),x1=x(clipTime(ended));ctx.strokeStyle='rgba(233,242,248,.82)';ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x0,top);ctx.lineTo(x0,top+plotH);ctx.stroke();ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(66,211,255,.88)';ctx.beginPath();ctx.moveTo(x1,top);ctx.lineTo(x1,top+plotH);ctx.stroke();ctx.restore();if(x1-x0>12){ctx.fillStyle='#c7eefa';ctx.textAlign='center';ctx.font='8px system-ui';ctx.fillText(`i${event.iteration}`,x0+(x1-x0)/2,top+10+(index%2)*10)}});
-      const warmupMarkerWidth=6;events.forEach(event=>{if(!event.warmup_expected)return;const warmStart=Number(event.warmup_started_unix_ms),warmEnd=Number(event.warmup_ended_unix_ms??now);if(!Number.isFinite(warmStart)||warmStart>now||warmEnd<start)return;const x0=x(clipTime(warmStart)),x1=x(clipTime(warmEnd)),actualWidth=Math.max(0,x1-x0),visibleWidth=Math.max(warmupMarkerWidth,actualWidth),visibleX=Math.max(left,Math.min(W-right-visibleWidth,(x0+x1-visibleWidth)/2));ctx.fillStyle='rgba(255,101,119,.28)';ctx.fillRect(visibleX,top,visibleWidth,plotH);ctx.strokeStyle='rgba(255,101,119,.95)';ctx.strokeRect(visibleX+.5,top+.5,Math.max(1,visibleWidth-1),plotH-1);ctx.fillStyle='#ff9aaa';ctx.textAlign='center';ctx.font='bold 8px system-ui';ctx.fillText('W',visibleX+visibleWidth/2,top+plotH-4)});
+      const tickDivisions=5,timeTicks=Array.from({length:tickDivisions+1},(_,index)=>start+index*windowMs/tickDivisions);timeTicks.forEach((time,index)=>{const px=x(time);ctx.strokeStyle='rgba(38,57,71,.72)';ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(px,top);ctx.lineTo(px,top+plotH);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.font='8px system-ui';ctx.textAlign=index===0?'left':index===tickDivisions?'right':'center';ctx.fillText(fmtClock(time),px,H-7)});
+      events.forEach((event,index)=>{const started=Number(event.started_unix_ms??event.observed_unix_ms),ended=Number(event.ended_unix_ms??end),x0=x(clipTime(started)),x1=x(clipTime(ended));ctx.strokeStyle='rgba(233,242,248,.82)';ctx.setLineDash([]);ctx.beginPath();ctx.moveTo(x0,top);ctx.lineTo(x0,top+plotH);ctx.stroke();ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='rgba(66,211,255,.88)';ctx.beginPath();ctx.moveTo(x1,top);ctx.lineTo(x1,top+plotH);ctx.stroke();ctx.restore();if(x1-x0>12){ctx.fillStyle='#c7eefa';ctx.textAlign='center';ctx.font='8px system-ui';ctx.fillText(`i${event.iteration}`,x0+(x1-x0)/2,top+10+(index%2)*10)}});
+      const warmupMarkerWidth=6;events.forEach(event=>{if(!event.warmup_expected)return;const warmStart=Number(event.warmup_started_unix_ms),warmEnd=Number(event.warmup_ended_unix_ms??end);if(!Number.isFinite(warmStart)||warmStart>end||warmEnd<start)return;const x0=x(clipTime(warmStart)),x1=x(clipTime(warmEnd)),actualWidth=Math.max(0,x1-x0),visibleWidth=Math.max(warmupMarkerWidth,actualWidth),visibleX=Math.max(left,Math.min(W-right-visibleWidth,(x0+x1-visibleWidth)/2));ctx.fillStyle='rgba(255,101,119,.28)';ctx.fillRect(visibleX,top,visibleWidth,plotH);ctx.strokeStyle='rgba(255,101,119,.95)';ctx.strokeRect(visibleX+.5,top+.5,Math.max(1,visibleWidth-1),plotH-1);ctx.fillStyle='#ff9aaa';ctx.textAlign='center';ctx.font='bold 8px system-ui';ctx.fillText('W',visibleX+visibleWidth/2,top+plotH-4)});
       references.forEach(reference=>{const value=numeric(reference.value);if(value===null||value<min||value>max)return;const py=y(value);ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle=reference.color||'#ff6577';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.restore()});
-      config.series.forEach(series=>{ctx.strokeStyle=series.color;ctx.lineWidth=1.8;ctx.beginPath();let drawing=false,lastTime=null,lastY=null;samples.forEach(item=>{const value=numeric(series.value(item));if(value===null)return;const sampleTime=timeOf(item),px=x(sampleTime),py=y(value);if(drawing&&sampleTime-lastTime<=maxGapMs)ctx.lineTo(px,py);else{ctx.moveTo(sampleTime-start<=maxGapMs?left:px,py);if(px>left&&sampleTime-start<=maxGapMs)ctx.lineTo(px,py);drawing=true}lastTime=sampleTime;lastY=py});if(drawing&&now-lastTime<=maxGapMs)ctx.lineTo(x(now),lastY);ctx.stroke()});
+      config.series.forEach(series=>{ctx.strokeStyle=series.color;ctx.lineWidth=1.8;ctx.beginPath();let drawing=false,lastTime=null,lastY=null;samples.forEach(item=>{const value=numeric(series.value(item));if(value===null)return;const sampleTime=timeOf(item),px=x(sampleTime),py=y(value);if(drawing&&sampleTime-lastTime<=maxGapMs)ctx.lineTo(px,py);else{ctx.moveTo(sampleTime-start<=maxGapMs?left:px,py);if(px>left&&sampleTime-start<=maxGapMs)ctx.lineTo(px,py);drawing=true}lastTime=sampleTime;lastY=py});if(drawing&&end-lastTime<=maxGapMs)ctx.lineTo(x(end),lastY);ctx.stroke()});
       let legendX=left;config.series.forEach(series=>{ctx.fillStyle=series.color;ctx.textAlign='left';ctx.font='9px system-ui';ctx.fillText(`■ ${series.label}`,legendX,12);legendX+=ctx.measureText(`■ ${series.label}`).width+10});if(config.showEvents!==false){ctx.fillStyle='#e9f2f8';ctx.fillText('│ start',left,27);ctx.fillStyle='#42d3ff';ctx.fillText('┆ end',left+50,27);ctx.fillStyle='#ff6577';ctx.fillText('■ W warm-up',left+92,27)}
       references.forEach(reference=>{ctx.fillStyle=reference.color||'#ff6577';ctx.fillText(`┄ ${reference.label}`,legendX,12);legendX+=ctx.measureText(`┄ ${reference.label}`).width+10});
       if(!samples.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText(config.emptyText||'Waiting for samples',left+plotW/2,top+plotH/2)}
     }
 
-    function drawSionnaIterationChart(canvasId, iterations, budgetMs) {
-      const canvas=$(canvasId);if(!canvas)return;
-      const ctx=canvas.getContext('2d'),dpr=window.devicePixelRatio||1,rect=canvas.getBoundingClientRect(),W=rect.width,H=rect.height,pixelW=Math.max(1,Math.round(W*dpr)),pixelH=Math.max(1,Math.round(H*dpr));
-      if(canvas.width!==pixelW||canvas.height!==pixelH){canvas.width=pixelW;canvas.height=pixelH}ctx.setTransform(dpr,0,0,dpr,0,0);
-      const completed=(iterations||[]).filter(item=>finite(item?.timing_ms?.total_update)).slice(-8),left=52,right=12,top=55,bottom=30,plotW=W-left-right,plotH=H-top-bottom;
-      const definitions=[['downlink','DL ray trace','#42d3ff'],['uplink','UL ray trace','#ff9f43'],['bidirectional','Bidirectional ray trace','#42d3ff'],['crosstalk','Crosstalk ray trace','#b7a0ff'],['generation_overhead','Other channel generation','#f4d35e'],['control','Broker control ACK','#53e58b'],['update_overhead','Other update work','#8ca4b5']];
-      const stacks=completed.map(item=>{const timing=item.timing_ms||{},directions=timing.directions||{},directionTotal=Object.values(directions).reduce((sum,value)=>sum+(finite(value)?Number(value):0),0),generation=Number(timing.channel_generation)||0,control=Number(timing.control_transaction)||0,total=Number(timing.total_update)||0;return {item,total,values:{downlink:Number(directions.downlink)||0,uplink:Number(directions.uplink)||0,bidirectional:Number(directions.bidirectional)||0,crosstalk:Number(directions.crosstalk)||0,generation_overhead:Math.max(0,generation-directionTotal),control:Math.max(0,control),update_overhead:Math.max(0,total-generation-control)}}});
-      const highest=Math.max(Number(budgetMs)||500,...stacks.map(stack=>stack.total),1),max=Math.max(100,Math.ceil(highest/100)*100),y=value=>top+plotH-Math.max(0,Math.min(max,Number(value)||0))/max*plotH;
-      ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);ctx.fillStyle='#091720';ctx.fillRect(left,top,plotW,plotH);ctx.font='9px system-ui';
-      for(const ratio of [0,.25,.5,.75,1]){const value=max*ratio,py=y(value);ctx.strokeStyle='#263947';ctx.beginPath();ctx.moveTo(left,py);ctx.lineTo(W-right,py);ctx.stroke();ctx.fillStyle='#8ca4b5';ctx.textAlign='right';ctx.fillText(`${Math.round(value)}ms`,left-4,py+3)}
-      const budget=Number(budgetMs)||500,budgetY=y(budget);ctx.save();ctx.setLineDash([5,4]);ctx.strokeStyle='#ff6577';ctx.beginPath();ctx.moveTo(left,budgetY);ctx.lineTo(W-right,budgetY);ctx.stroke();ctx.restore();ctx.fillStyle='#ff6577';ctx.textAlign='right';ctx.fillText(`update budget · ${fmt(budget,0)} ms`,W-right,budgetY-4);
-      if(!stacks.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText('Waiting for Sionna iteration measurements',left+plotW/2,top+plotH/2);$('sionnaIterationSummary').textContent='Waiting for a completed iteration.';return}
-      const gap=Math.max(5,Math.min(14,plotW/(stacks.length*5))),barW=Math.max(12,Math.min(54,(plotW-gap*(stacks.length+1))/stacks.length));
-      stacks.forEach((stack,index)=>{const groupW=plotW/stacks.length,x0=left+groupW*index+(groupW-barW)/2;let cumulative=0;definitions.forEach(([key,,color])=>{const value=stack.values[key];if(!(value>0))return;const next=cumulative+value,y0=y(cumulative),y1=y(next);ctx.fillStyle=color;ctx.fillRect(x0,y1,barW,Math.max(1,y0-y1));if(y0-y1>=13&&barW>=28){ctx.fillStyle='#061018';ctx.textAlign='center';ctx.font='bold 8px system-ui';ctx.fillText(fmt(value,0),x0+barW/2,y1+(y0-y1)/2+3)}cumulative=next});ctx.fillStyle=stack.total>budget?'#ff6577':'#e9f2f8';ctx.textAlign='center';ctx.font='bold 9px system-ui';ctx.fillText(fmt(stack.total,1),x0+barW/2,Math.max(top+9,y(stack.total)-4));ctx.fillStyle='#8ca4b5';ctx.font='9px system-ui';ctx.fillText(`i${stack.item.iteration??'—'}`,x0+barW/2,H-9)});
-      let legendX=left,legendY=12;definitions.filter(([key])=>stacks.some(stack=>stack.values[key]>0)).forEach(([,label,color])=>{const textValue=`■ ${label}`,width=ctx.measureText(textValue).width+11;if(legendX+width>W-right){legendX=left;legendY+=15}ctx.fillStyle=color;ctx.textAlign='left';ctx.fillText(textValue,legendX,legendY);legendX+=width});
-      const latest=stacks[stacks.length-1],t=latest.item.timing_ms||{},d=t.directions||{};$('sionnaIterationSummary').textContent=`Latest i${latest.item.iteration??'—'} · DL ${fmt(d.downlink,2)} ms · UL ${fmt(d.uplink,2)} ms${finite(d.bidirectional)?` · bidirectional ${fmt(d.bidirectional,2)} ms`:''}${finite(d.crosstalk)?` · crosstalk ${fmt(d.crosstalk,2)} ms`:''} · channel generation ${fmt(t.channel_generation,2)} ms · ACK ${fmt(t.control_transaction,2)} ms · total update ${fmt(t.total_update,2)} ms`;
-    }
-
     function drawResourceHistory(usage, history, runtime, sionna) {
       const cpuCores=value=>finite(value)?Number(value)/100:null;
-      const iterations=history?.iterations||[],telemetryHistory=history?.telemetry||[],slotSource={history:telemetryHistory,iterations},palette=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e'],destinations=[...new Set(telemetryHistory.map(item=>linkParts(item.link_id).destination).filter(id=>id!=='—'))].sort(),updateHz=Number(runtime?.target_update_hz||sionna?.environment?.update_rate_hz||500),updateBudgetMs=updateHz>0?1000/updateHz:2;
+      const iterations=history?.iterations||[],telemetryHistory=history?.telemetry||[],slotSource={history:telemetryHistory,iterations},palette=['#42d3ff','#ff9f43','#53e58b','#b7a0ff','#f4d35e'],destinations=[...new Set(telemetryHistory.map(item=>linkParts(item.link_id).destination).filter(id=>id!=='—'))].sort();
       drawResourceChart('slotLatencyChart',slotSource,{timeKey:'observed_unix_ms',minMax:1000,step:500,axis:value=>`${Math.round(value)}µs`,maxGapMs:500,references:[{value:1000,label:'1 ms nominal deadline',color:'#ff6577'}],series:destinations.map((destination,index)=>({label:`${destination} RX`,color:palette[index%palette.length],value:item=>linkParts(item.link_id).destination===destination?item.slot_processing?.nominal?.latest_estimated_us:null})),emptyText:'Waiting for completed nominal-slot estimates'});
-      drawSionnaIterationChart('sionnaIterationChart',iterations,updateBudgetMs);
       drawResourceChart('applicationCpuChart',usage,{minMax:1,step:1,axis:value=>`${fmt(value,1)}c`,series:[{label:'Sionna RT',color:'#42d3ff',value:item=>cpuCores(item.roles?.sionna?.cpu_util_percent)},{label:'GPU Channel',color:'#ff9f43',value:item=>cpuCores(item.roles?.gpu_channel?.cpu_util_percent)},{label:'Web UI',color:'#53e58b',value:item=>cpuCores(item.roles?.web_ui?.cpu_util_percent)},{label:'Other / OS',color:'#b7a0ff',value:item=>item.system?.other_os_cpu_cores}]});
       drawResourceChart('pcieChart',usage,{minMax:250,step:250,axis:value=>value>=1000?`${fmt(value/1000,1)}G`:`${Math.round(value)}M`,series:[{label:'H2D',color:'#42d3ff',value:item=>item.pcie?.h2d_mb_s},{label:'D2H',color:'#ff9f43',value:item=>item.pcie?.d2h_mb_s}]});
     }
@@ -733,7 +813,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     function renderRuntime(runtime, usage, telemetry, delivery, history, sionna) {
       const deliveryWarmup=(delivery?.links||[]).filter(item=>item.warming_up),warming=deliveryWarmup.length?deliveryWarmup:activeWarmupLinks(telemetry),warmupUntil=warming.reduce((value,item)=>Math.max(value,Number(item.warmup_until_slot)||0),0);
       const system=usage?.system||{},gpus=usage?.hardware?.gpus||[],gpuUsed=gpus.length?gpus.reduce((sum,gpu)=>sum+(Number(gpu.memory_used_mib)||0),0):null,gpuTotal=gpus.length?gpus.reduce((sum,gpu)=>sum+(Number(gpu.memory_total_mib)||0),0):null,pcie=usage?.pcie||{};
-      $('combinedGpuCard').innerHTML=`${renderHardware(usage)}<div class="system-metrics"><div class="gpu-metric"><b>${fmt(system.cpu_util_percent,0)}%</b><span>Host CPU</span></div><div class="gpu-metric"><b>${fmtMib(system.used_mib)} / ${fmtMib(system.total_mib)}</b><span>Host RAM</span></div><div class="gpu-metric"><b>${fmtMib(gpuUsed)} / ${fmtMib(gpuTotal)}</b><span>GPU VRAM</span></div><div class="gpu-metric"><b>${fmtRate(pcie.h2d_mb_s)}</b><span>PCIe H2D</span></div><div class="gpu-metric"><b>${fmtRate(pcie.d2h_mb_s)}</b><span>PCIe D2H</span></div></div><div class="gpu-processes">${renderGpuProcess('sionna','Sionna RT',usage)}${renderGpuProcess('gpu_channel','GPU Channel',usage)}</div><div class="warmup-banner ${warming.length?'':'ok'}">${warming.length?`⚠ ${warming.length} links warming up · output unavailable before slot ${warmupUntil}`:'No links warming up · backend output is usable'}</div><div class="resource-charts"><div class="resource-chart-card"><strong>Estimated nominal-slot processing time (µs) · 1 ms reference</strong><canvas id="slotLatencyChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>Sionna iteration time (ms) · stacked by stage</strong><canvas id="sionnaIterationChart" class="resource-history sionna-iteration"></canvas><div id="sionnaIterationSummary" class="chart-summary"></div></div><div class="resource-chart-card"><strong>Application CPU (logical cores)</strong><canvas id="applicationCpuChart" class="resource-history"></canvas></div>${renderMemorySummary(usage)}<div class="resource-chart-card"><strong>PCIe throughput (MB/s)</strong><canvas id="pcieChart" class="resource-history"></canvas></div></div>`;
+      $('combinedGpuCard').innerHTML=`${renderHardware(usage)}<div class="system-metrics"><div class="gpu-metric"><b>${fmt(system.cpu_util_percent,0)}%</b><span>Host CPU</span></div><div class="gpu-metric"><b>${fmtMib(system.used_mib)} / ${fmtMib(system.total_mib)}</b><span>Host RAM</span></div><div class="gpu-metric"><b>${fmtMib(gpuUsed)} / ${fmtMib(gpuTotal)}</b><span>GPU VRAM</span></div><div class="gpu-metric"><b>${fmtRate(pcie.h2d_mb_s)}</b><span>PCIe H2D</span></div><div class="gpu-metric"><b>${fmtRate(pcie.d2h_mb_s)}</b><span>PCIe D2H</span></div></div><div class="gpu-processes">${renderGpuProcess('sionna','Sionna RT',usage)}${renderGpuProcess('gpu_channel','GPU Channel',usage)}</div><div class="warmup-banner ${warming.length?'':'ok'}">${warming.length?`⚠ ${warming.length} links warming up · output unavailable before slot ${warmupUntil}`:'No links warming up · backend output is usable'}</div><div class="resource-charts"><div class="resource-chart-card"><strong>Estimated nominal-slot processing time (µs) · 1 ms reference</strong><canvas id="slotLatencyChart" class="resource-history"></canvas></div><div class="resource-chart-card"><strong>Application CPU (logical cores)</strong><canvas id="applicationCpuChart" class="resource-history"></canvas></div>${renderMemorySummary(usage)}<div class="resource-chart-card"><strong>PCIe throughput (MB/s)</strong><canvas id="pcieChart" class="resource-history"></canvas></div></div>`;
       drawResourceHistory(usage,history,runtime,sionna);
       const phaseLabels={initializing_scene:'initializing scene/solver',ready:'ready to start update loop',waiting_for_next_update:'waiting for next update',tracing_channels:'tracing Sionna RT channels',sending_control:'sending profile batch and waiting for ACK',stopped:'stopped',failed:'failed'};
       const alive=runtime?.process_alive===true,phase=phaseLabels[runtime?.phase]||runtime?.phase||'waiting for runtime';
@@ -743,7 +823,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       if(runtime){const duration=Number(runtime.configured_duration_seconds)===0?'runs until SIGINT':`stops after ${fmt(runtime.configured_duration_seconds,0)}s`,limit=Number(runtime.configured_iteration_limit)===0?'no iteration limit':`${runtime.configured_iteration_limit}-iteration limit`;$('runtimeConfig').textContent=`Scene/solver initialized once at process startup · recomputes ${runtime.link_count??'—'} links per iteration at ${fmt(runtime.target_update_hz,2)} Hz · ${duration} · ${limit}`}
       else $('runtimeConfig').textContent='—';
       const sampling=usage?.sampling,samplingText=sampling?`${sampling.backend} · ${sampling.target_interval_ms}ms samples · hardware refresh every ${sampling.hardware_interval_ms}ms`:'Waiting for sampling interval';
-      $('gpuMonitorNote').textContent=usage?.error?`Resource monitor error: ${usage.error}`:usage?.warning?`Partial hardware metric warning: ${usage.warning} · ${samplingText}`:`${samplingText} · SM is an average over the NVML sampling interval and is shown only in status cards. The IQ chart shows sample-proportional nominal-slot estimates; the Sionna chart shows measured iteration wall time.`;
+      $('gpuMonitorNote').textContent=usage?.error?`Resource monitor error: ${usage.error}`:usage?.warning?`Partial hardware metric warning: ${usage.warning} · ${samplingText}`:`${samplingText} · SM is an average over the NVML sampling interval and is shown only in status cards. Time-series charts show completed 100 ms intervals using wall-clock timestamps.`;
     }
 
     function drawScene(sionna) {
@@ -825,6 +905,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       renderDeadlineCards(telemetry);
       renderEdgeCards(s?.channels,sampleRateHz);
       renderNodeCards(s);
+      renderRanCards(data.ran);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
       drawScene(s);
     }
@@ -840,11 +921,9 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       catch(e){setPill($('telemetryPill'),false,'UI feed error')}
       finally{statusInFlight=false}
     }
-    // Chart-only refresh: /api/realtime carries just the series the
-    // canvases plot, so this can run inside the CHART_WINDOW_MS the
-    // charts draw without the DOM rebuild. Both loops guard against
-    // overlapping requests so a slow response cannot queue up behind
-    // itself at a 20 ms interval.
+    // Chart-only refresh: /api/realtime carries just the plotted series.
+    // One request advances all canvases to the next completed 100 ms block;
+    // the in-flight guard prevents a slow response from queueing another.
     async function pollCharts(){
       if(chartsInFlight)return; chartsInFlight=true;
       try{const r=await fetch(`/api/realtime?history_ms=${CHART_HISTORY_MS}`,{cache:'no-store'});if(!r.ok)throw Error(r.status);lastRealtime=await r.json();redrawCharts()}

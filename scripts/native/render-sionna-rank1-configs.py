@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -180,6 +181,66 @@ def _port_lines(count: int) -> str:
     return "".join(f"      - gnb0_p{index}\n" for index in range(count))
 
 
+# Metrics are opt-in. The gNB emits none of the RAN KPIs by default, and
+# turning them on costs real time on the 1 ms slot path, so the block is
+# appended only when OCUDU_NATIVE_GNB_METRICS is truthy. With it unset the
+# rendered gnb.yaml is byte-identical to the pre-metrics output, which is
+# what keeps the 2x1/4x1 gates provably unaffected.
+#
+# Schema verified against the OCUDU sources rather than guessed:
+#   metrics.enable_json          apps/helpers/metrics/metrics_config_yaml_writer.cpp
+#   metrics.layers.enable_sched* apps/units/.../du_high/du_high_config_yaml_writer.cpp
+#   metrics.periodicity.*        same file
+#   remote_control.{enabled,bind_addr,port}
+#                                apps/services/remote_control/remote_control_appconfig_cli11_schema.cpp
+# Note metrics.enable_json is bound twice: once to the JSON metrics sink and
+# once to remote_control_appconfig::enable_metrics_subscription. The struct
+# field is NOT a YAML key -- writing remote_control.enable_metrics_subscription
+# makes the gNB exit with "INI was not able to parse". One enable_json covers
+# both, which was confirmed against the deployed binary, not just the source.
+# The dashboard reads them over the same WebSocket the official GUI uses.
+GNB_METRICS_ENV = "OCUDU_NATIVE_GNB_METRICS"
+DEFAULT_METRICS_PORT = 8001
+DEFAULT_DU_REPORT_PERIOD_MS = 1000
+
+
+def metrics_enabled(environ: dict[str, str] | None = None) -> bool:
+    raw = (environ if environ is not None else os.environ).get(GNB_METRICS_ENV, "")
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def render_gnb_metrics(port: int = DEFAULT_METRICS_PORT,
+                       report_period_ms: int = DEFAULT_DU_REPORT_PERIOD_MS) -> str:
+    """The metrics + remote_control blocks appended to the rendered gNB config.
+
+    Only the scheduler layers are enabled. enable_sched_ue is the one that
+    carries the per-UE KPIs the dashboard shows (RNTI, CQI, RI, MCS, BLER,
+    SINR/RSRP, BSR, TA, PHR); the other layers stay off so the metrics cost
+    stays proportional to what is actually displayed.
+    """
+
+    if not 1 <= port <= 65535:
+        raise ValueError("gNB metrics port must be in [1, 65535]")
+    if report_period_ms <= 0:
+        raise ValueError("du_report_period must be positive")
+    return (
+        "\n"
+        "# Appended by render-sionna-rank1-configs.py because "
+        f"{GNB_METRICS_ENV} is set.\n"
+        "metrics:\n"
+        "  enable_json: true\n"
+        "  layers:\n"
+        "    enable_sched: true\n"
+        "    enable_sched_ue: true\n"
+        "  periodicity:\n"
+        f"    du_report_period: {report_period_ms}\n"
+        "remote_control:\n"
+        "  enabled: true\n"
+        "  bind_addr: 127.0.0.1\n"
+        f"  port: {port}\n"
+    )
+
+
 def render_topology(shape: LiveShape) -> str:
     device_count = max(shape.gnb_tx, shape.gnb_rx)
     devices = "".join(
@@ -268,6 +329,18 @@ def self_test() -> None:
         pass
     else:
         raise AssertionError("invalid Sionna array dimensions were accepted")
+    # Metrics stay out of the rendered config unless explicitly enabled,
+    # which is what keeps the existing gates byte-identical.
+    assert metrics_enabled({"OCUDU_NATIVE_GNB_METRICS": "1"})
+    assert metrics_enabled({"OCUDU_NATIVE_GNB_METRICS": "true"})
+    assert not metrics_enabled({})
+    assert not metrics_enabled({"OCUDU_NATIVE_GNB_METRICS": "0"})
+    metrics_block = render_gnb_metrics()
+    for token in ("enable_json: true", "enable_sched_ue: true", "port: 8001"):
+        assert token in metrics_block, token
+    # Not a YAML key -- the gNB refuses to start if it appears.
+    assert "enable_metrics_subscription" not in metrics_block
+    assert "enable_rlc" not in metrics_block, "only scheduler layers are enabled"
     print("event=native_sionna_rank1_config_renderer_self_test result=pass")
 
 
@@ -314,7 +387,8 @@ def main() -> int:
         "native subscriber template",
     )
     rendered = {
-        "gnb.yaml": render_gnb(gnb_source, log_dir, shape),
+        "gnb.yaml": render_gnb(gnb_source, log_dir, shape)
+        + (render_gnb_metrics() if metrics_enabled() else ""),
         "topology.yaml": render_topology(shape),
         "open5gs.yaml": legacy.render_open5gs(open5gs_source, native_root),
         "srsue.conf": legacy.render_srsue(srsue_source, log_dir),

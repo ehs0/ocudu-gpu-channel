@@ -17,6 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "web_ui"))
 
 from server import (  # noqa: E402
     DEFAULT_HISTORY_WINDOW_MS,
+    GNB_UE_REPORT_STALE_SECONDS,
     GPU_HISTORY_RETAIN_MS,
     HARDWARE_REFRESH_INTERVAL_SECONDS,
     NvmlResourceSampler,
@@ -45,6 +46,9 @@ from server import (  # noqa: E402
     sample_gpu_usage,
     slice_history,
     trim_history,
+    extract_ue_rows,
+    is_scheduler_report,
+    parse_ws_endpoint,
 )
 
 
@@ -228,7 +232,7 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(narrow[-1]["slot"], 49)
 
     def test_realtime_snapshot_carries_only_the_charted_series(self) -> None:
-        """The 20 ms loop must not pay for the full status document."""
+        """The 100 ms chart loop must not pay for the full status document."""
 
         store = StatusStore()
         store.update_telemetry(
@@ -364,6 +368,178 @@ class WebUiTests(unittest.TestCase):
         sampler.sample(targets)
         self.assertEqual(calls["pcie"], 4)
         self.assertEqual(calls["utilization"], 2)
+
+    def test_ue_rows_are_found_wherever_the_envelope_puts_them(self) -> None:
+        """The gNB nests ue_list differently per release.
+
+        The deployed build could not be exercised against the live run (a
+        second gNB would connect to the broker's IQ sockets), so the reader
+        walks for ue_list instead of hard-coding one path.
+        """
+
+        nested = {
+            "timestamp": 1.0,
+            "cell_metrics": {"cells": [{"pci": 1, "ue_list": [{"rnti": 17921}]}]},
+        }
+        rows = extract_ue_rows(nested)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["rnti"], 17921)
+        # The cell's pci is carried onto the UE row for the table.
+        self.assertEqual(rows[0]["pci"], 1)
+        # A flatter envelope must work just as well.
+        self.assertEqual(len(extract_ue_rows({"ue_list": [{"rnti": 2}]})), 1)
+        # And nothing anywhere is simply empty, not an exception.
+        self.assertEqual(extract_ue_rows({"other": [1, 2]}), [])
+        self.assertEqual(extract_ue_rows(None), [])
+        # A UE that already carries pci keeps its own.
+        own = extract_ue_rows({"pci": 9, "ue_list": [{"rnti": 1, "pci": 3}]})
+        self.assertEqual(own[0]["pci"], 3)
+
+    def test_only_a_scheduler_report_speaks_for_the_ue_table(self) -> None:
+        """Other consumers on the shared socket are silent, not empty.
+
+        The gNB fans every metrics consumer out to the same subscribers
+        (remote_server.cpp), so a CU-CP or RU notification carries no UE
+        vocabulary at all. Recognising it as a report about UEs would
+        turn its silence into "zero UEs" every time one landed between
+        two scheduler reports.
+        """
+
+        self.assertTrue(
+            is_scheduler_report({"cells": [{"pci": 1, "ue_list": [{"rnti": 1}]}]})
+        )
+        # A report whose cells hold no UEs is still a report about UEs:
+        # this is the message that legitimately means "none attached".
+        self.assertTrue(is_scheduler_report({"cells": [{"pci": 1}]}))
+        self.assertTrue(is_scheduler_report({"ue_list": []}))
+        # Everything else on the bus is not.
+        self.assertFalse(is_scheduler_report({"cu_cp": {"nof_ues": 0}}))
+        self.assertFalse(is_scheduler_report({"app_resource_usage": {"cpu": 3.5}}))
+        self.assertFalse(is_scheduler_report({"cells": "not-a-list"}))
+        self.assertFalse(is_scheduler_report(None))
+
+    def test_foreign_notifications_do_not_blank_the_ue_table(self) -> None:
+        """The regression: a live table flickering to "no connected UEs".
+
+        Every notification used to overwrite the whole UE table, so the
+        table only survived until the next non-scheduler message, which
+        on this socket is most of them.
+        """
+
+        store = StatusStore()
+        store.update_gnb_metrics(
+            {"cells": [{"pci": 1, "ue_list": [{"rnti": 17921, "cqi": 12.4}]}]}
+        )
+        ran = store.snapshot()["ran"]
+        self.assertEqual(ran["ue_reports"], 1)
+        first_report_unix_ms = ran["ue_list_unix_ms"]
+        self.assertIsNotNone(first_report_unix_ms)
+
+        # An RU notification arrives; it says nothing about UEs.
+        store.update_gnb_metrics({"ru": {"average_latency_us": 12.0}})
+        ran = store.snapshot()["ran"]
+        self.assertEqual(ran["messages"], 2)
+        self.assertEqual(ran["ue_reports"], 1)
+        self.assertEqual(ran["ue_list"][0]["rnti"], 17921)
+        # The UE table keeps its own timestamp, not the feed's.
+        self.assertEqual(ran["ue_list_unix_ms"], first_report_unix_ms)
+
+        # A scheduler report with no UEs is the one message that empties
+        # the table, because that report always lists every attached UE.
+        store.update_gnb_metrics({"cells": [{"pci": 1}]})
+        ran = store.snapshot()["ran"]
+        self.assertEqual(ran["ue_list"], [])
+        self.assertEqual(ran["ue_reports"], 2)
+
+    def test_ue_table_age_is_measured_from_the_scheduler_report(self) -> None:
+        """Staleness is judged on the report that owns the rows.
+
+        Foreign notifications keep the feed's own age at zero, so reading
+        staleness off `age_seconds` would call a frozen scheduler live.
+        """
+
+        store = StatusStore()
+        with mock.patch("server.time.monotonic", return_value=1000.0):
+            store.update_gnb_metrics(
+                {"cells": [{"pci": 1, "ue_list": [{"rnti": 17921}]}]}
+            )
+        with mock.patch("server.time.monotonic", return_value=1030.0):
+            store.update_gnb_metrics({"ru": {"average_latency_us": 12.0}})
+            ran = store.snapshot()["ran"]
+        self.assertEqual(ran["age_seconds"], 0.0)
+        self.assertEqual(ran["ue_list_age_seconds"], 30.0)
+        self.assertTrue(ran["ue_list_stale"])
+        self.assertGreater(30.0, GNB_UE_REPORT_STALE_SECONDS)
+
+    def test_scheduler_sentinels_are_not_rendered_as_readings(self) -> None:
+        """The gNB signals "not reported" as a value, not as an omission.
+
+        `cqi` is -1 when no CSI report arrived in the period, an unreported
+        PUSCH RSRP is -inf clamped to -99.9 dB on the way out, and a PUCCH
+        SINR mean that any DTX occasion pulled to -inf lands on the same
+        floor (ocudu json_generators/du_high/scheduler.cpp and
+        lib/scheduler/logging/cell_metrics_handler.cpp:683-687). Printed
+        as readings they claim the UE measured the worst link on record.
+        """
+
+        page = (PROJECT_ROOT / "scripts" / "web_ui" / "index.html").read_text()
+        # CQI is guarded on the -1 sentinel rather than formatted blind.
+        self.assertIn("['CQI',r=>finite(r.cqi)&&Number(r.cqi)>=0", page)
+        # Every dB column goes through the clamp-aware formatter.
+        for field in ("pusch_snr_db", "pucch_snr_db", "pusch_rsrp_db"):
+            self.assertIn(f"fmtDb(r.{field})", page)
+        self.assertIn("const RAN_DB_FLOOR=-99.9,RAN_DB_CEIL=99.9", page)
+        # The sentinels that cannot be told apart from readings are named
+        # for the reader instead of being silently hidden.
+        self.assertIn("falls back to 1 when no rank was reported", page)
+
+    def test_metrics_endpoint_parsing(self) -> None:
+        self.assertEqual(
+            parse_ws_endpoint("ws://127.0.0.1:8001"),
+            ("127.0.0.1", 8001, "/", None),
+        )
+        # Bare host:port and a default port both resolve.
+        self.assertEqual(
+            parse_ws_endpoint("127.0.0.1"), ("127.0.0.1", 8001, "/", None)
+        )
+        # The native gate runs the gNB in its own network namespace, so the
+        # dashboard reaches it through a relayed AF_UNIX socket instead.
+        self.assertEqual(
+            parse_ws_endpoint("ws+unix:///run/s1/gnb-metrics.sock"),
+            ("localhost", 0, "/", "/run/s1/gnb-metrics.sock"),
+        )
+        with self.assertRaises(ValueError):
+            parse_ws_endpoint("tcp://127.0.0.1:8001")
+        with self.assertRaises(ValueError):
+            parse_ws_endpoint("ws+unix://relative.sock")
+
+    def test_ran_block_is_present_and_read_only_by_default(self) -> None:
+        store = StatusStore()
+        ran = store.snapshot()["ran"]
+        # Disabled until the operator passes --gnb-metrics-endpoint.
+        self.assertEqual(ran["state"], "disabled")
+        self.assertEqual(ran["ue_list"], [])
+        self.assertEqual(ran["messages"], 0)
+
+        store.update_gnb_metrics(
+            {"cell_metrics": {"cells": [{"pci": 1, "ue_list": [
+                {"rnti": 17921, "cqi": 12.4, "dl_brate": 18_400_000,
+                 "dl_nof_ok": 1000, "dl_nof_nok": 7, "pusch_snr_db": 24.5,
+                 "bsr": 4096, "ta_ns": 520.0, "last_phr": 23}]}]}}
+        )
+        ran = store.snapshot()["ran"]
+        self.assertEqual(ran["state"], "connected")
+        self.assertEqual(ran["messages"], 1)
+        self.assertEqual(ran["ue_list"][0]["rnti"], 17921)
+        self.assertEqual(ran["ue_list"][0]["pusch_snr_db"], 24.5)
+
+        store.set_gnb_metrics_state("disconnected", "boom")
+        ran = store.snapshot()["ran"]
+        self.assertEqual(ran["state"], "disconnected")
+        self.assertEqual(ran["error"], "boom")
+        # The last good sample survives a disconnect so the table does not
+        # blank out while the feed reconnects.
+        self.assertEqual(ran["ue_list"][0]["rnti"], 17921)
 
     def test_store_exposes_runtime_phase_and_process_targets(self) -> None:
         store = StatusStore()
@@ -511,7 +687,7 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("Current MEM", index)
         self.assertNotIn('id="gpuComputeChart"', index)
         self.assertIn('id="slotLatencyChart"', index)
-        self.assertIn('id="sionnaIterationChart"', index)
+        self.assertNotIn('id="sionnaIterationChart"', index)
         self.assertNotIn('id="channelPowerChart"', index)
         self.assertIn('id="applicationCpuChart"', index)
         self.assertNotIn('id="memoryChart"', index)
@@ -519,12 +695,12 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn('id="computeChart"', index)
         self.assertNotIn("GPU Compute (%)", index)
         self.assertIn("Estimated nominal-slot processing time (µs) · 1 ms reference", index)
-        self.assertIn("Sionna iteration time (ms) · stacked by stage", index)
+        self.assertNotIn("Sionna iteration time", index)
         self.assertNotIn("Sionna channel power history", index)
         self.assertNotIn("Total path power by link (dB)", index)
         self.assertIn("NVML sampled utilization", index)
         self.assertIn("1 ms nominal deadline", index)
-        self.assertIn("update budget", index)
+        self.assertNotIn("update budget", index)
         self.assertIn("slot_processing?.nominal?.latest_estimated_us", index)
         self.assertIn("nominal.deadline_misses", index)
         self.assertIn("Estimated p95", index)
@@ -532,8 +708,8 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("Fragment (조각)", index)
         self.assertIn("sample_proportional", index)
         self.assertIn("fixed CUDA launch/transfer overhead", index)
-        self.assertIn("DL ray trace", index)
-        self.assertIn("Broker control ACK", index)
+        self.assertNotIn("DL ray trace", index)
+        self.assertNotIn("Broker control ACK", index)
         self.assertIn("Array.from({length:8}", index)
         self.assertIn("overlaid matrix-lane tap impulse responses", index)
         self.assertIn("tapPlot(plotLanes,plotColors)", index)
@@ -606,9 +782,16 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("label:'Other / OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
         self.assertIn("const CHART_WINDOW_MS = 100;", index)
+        self.assertIn("const CHART_POLL_MS = CHART_WINDOW_MS;", index)
         self.assertIn("windowMs=config.windowMs||CHART_WINDOW_MS", index)
+        self.assertIn("end=Math.floor(now/windowMs)*windowMs", index)
         self.assertIn("tickDivisions=5", index)
-        self.assertIn("`${Math.round(millisecondsAgo)}ms ago`", index)
+        self.assertIn("const fmtClock = value =>", index)
+        self.assertIn("date.getHours()", index)
+        self.assertIn("date.getMilliseconds(),3", index)
+        self.assertIn("ctx.fillText(fmtClock(time)", index)
+        self.assertNotIn("millisecondsAgo", index)
+        self.assertNotIn("ms ago", index)
         # Per-port lane picker on the impulse/frequency responses.
         self.assertIn("function laneOptions(lanes)", index)
         # One antenna row per edge, 1-based labels over 0-based ports,
@@ -640,6 +823,19 @@ class WebUiTests(unittest.TestCase):
         # picker exists, or a selection would silently do nothing.
         self.assertNotIn("tapPlot(lanes,laneColors)", index)
         self.assertNotIn("frequencyResponsePlot(lanes,laneColors", index)
+        # RAN KPI panel, and it must be the last section on the page.
+        self.assertIn("RAN KPIs by UE · gNB scheduler metrics", index)
+        self.assertIn("function renderRanCards(ran)", index)
+        self.assertIn("renderRanCards(data.ran)", index)
+        for field in ("rnti", "cqi", "dl_ri", "dl_mcs", "dl_brate", "dl_nof_nok",
+                      "pusch_snr_db", "pucch_snr_db", "pusch_rsrp_db", "bsr",
+                      "ta_ns", "last_phr"):
+            self.assertIn(f"r.{field}", index)
+        self.assertLess(
+            index.index("Impulse and frequency response by edge link"),
+            index.index("RAN KPIs by UE"),
+            "the RAN panel must sit at the bottom of the page",
+        )
         self.assertIn("hardware-card.active", index)
         self.assertIn("started_unix_ms", index)
         self.assertIn("warmup_started_unix_ms", index)

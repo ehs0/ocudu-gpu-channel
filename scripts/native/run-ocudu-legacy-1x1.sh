@@ -24,8 +24,13 @@ sionna_bridge="${repo_root}/scripts/sionna_rt/run_bridge.py"
 sionna_scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-${repo_root}/examples/sionna/ocudu-docker.json}"
 web_server="${repo_root}/scripts/web_ui/server.py"
 web_index="${repo_root}/scripts/web_ui/index.html"
-sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-500}"
+sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-20}"
 sionna_ready_seconds="${OCUDU_NATIVE_SIONNA_READY_SECONDS:-120}"
+# The same switch that makes the renderer emit the gNB metrics block also
+# points the Web UI at the gNB's remote-control WebSocket, so one variable
+# turns the whole RAN KPI path on. Unset, neither side is touched.
+gnb_metrics_enabled="${OCUDU_NATIVE_GNB_METRICS:-}"
+gnb_metrics_port="${OCUDU_NATIVE_GNB_METRICS_PORT:-8001}"
 web_bind="${OCUDU_NATIVE_WEB_BIND:-127.0.0.1}"
 web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
 sionna_result_family="${OCUDU_NATIVE_SIONNA_RESULT_FAMILY:-ocudu-sionna-1x1}"
@@ -179,9 +184,18 @@ done
 mkdir -p "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}" "${ipc_dir}"
 control_endpoint="ipc://${ipc_dir}/control.sock"
 telemetry_endpoint="ipc://${ipc_dir}/telemetry.sock"
+# The gNB's remote-control WebSocket is bound inside the isolated network
+# namespace, so it is relayed out through this socket file the same way the
+# ZMQ planes cross the boundary. Only created when metrics are enabled.
+gnb_metrics_socket="${ipc_dir}/gnb-metrics.sock"
 sionna_status_jsonl="${log_dir}/sionna-status.jsonl"
 live_ready_path="${report_dir}/live-ready.json"
 web_status_path="${report_dir}/web-ui-status.json"
+
+gnb_metrics_relay_arg=""
+case "${gnb_metrics_enabled,,}" in
+  1|true|yes|on) gnb_metrics_relay_arg="${gnb_metrics_socket}" ;;
+esac
 
 source_manifest="${report_dir}/channel-source-manifest.tsv"
 source_manifest_after="${report_dir}/channel-source-manifest.after-build.tsv"
@@ -415,6 +429,7 @@ trap 'exit 143' TERM
 unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagation private \
   "${common_inner_args[@]}" \
   --control-endpoint "${control_endpoint}" --telemetry-endpoint "${telemetry_endpoint}" \
+  --gnb-metrics-socket "${gnb_metrics_relay_arg}" \
   --sionna-python "${sionna_python}" --sionna-bridge "${sionna_bridge}" \
   --sionna-scenario-config "${sionna_scenario}" \
   --sionna-status-jsonl "${sionna_status_jsonl}" --sionna-update-hz "${sionna_update_hz}" \
@@ -431,9 +446,14 @@ while [[ "${SECONDS}" -lt "${runtime_child_deadline}" ]]; do
 done
 [[ -n "${runtime_child_pid}" ]] || usage_error "native runtime supervisor did not start its child"
 
+web_metrics_args=()
+if [[ -n "${gnb_metrics_relay_arg}" ]]; then
+  web_metrics_args=(--gnb-metrics-endpoint "ws+unix://${gnb_metrics_socket}")
+fi
 "${sionna_python}" "${web_server}" --bind "${web_bind}" --port "${web_port}" \
   --telemetry-endpoint "${telemetry_endpoint}" --status-jsonl "${sionna_status_jsonl}" \
-  --index "${web_index}" >"${log_dir}/web-ui.log" 2>&1 9<&- &
+  --index "${web_index}" "${web_metrics_args[@]}" \
+  >"${log_dir}/web-ui.log" 2>&1 9<&- &
 web_pid="$!"
 web_url="http://${web_bind}:${web_port}"
 

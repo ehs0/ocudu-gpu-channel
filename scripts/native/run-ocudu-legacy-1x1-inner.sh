@@ -23,21 +23,20 @@ run_family=""
 broker_ready_device="ue0"
 control_endpoint=""
 telemetry_endpoint=""
+# Empty unless the outer script enabled metrics. The gNB binds its
+# remote-control WebSocket on this namespace's loopback, which the
+# dashboard cannot reach, so a relay re-exports it as this socket file.
+gnb_metrics_socket=""
+# Must match the port the renderer wrote into gnb.yaml.
+gnb_metrics_port="${OCUDU_NATIVE_GNB_METRICS_PORT:-8001}"
 sionna_python=""
 sionna_bridge=""
 sionna_scenario_config=""
 sionna_status_jsonl=""
-sionna_update_hz="500"
+sionna_update_hz="20"
 sionna_ready_seconds="120"
 live_ready_path=""
 live_ready_event="native_sionna_1x1_live_ready"
-
-usage_error()
-{
-  printf 'error: %s\n' "$1" >&2
-  exit 2
-}
-
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --mode) mode="${2:-}"; shift 2 ;;
@@ -62,6 +61,7 @@ while [[ "$#" -gt 0 ]]; do
     --broker-ready-device) broker_ready_device="${2:-}"; shift 2 ;;
     --control-endpoint) control_endpoint="${2:-}"; shift 2 ;;
     --telemetry-endpoint) telemetry_endpoint="${2:-}"; shift 2 ;;
+    --gnb-metrics-socket) gnb_metrics_socket="${2:-}"; shift 2 ;;
     --sionna-python) sionna_python="${2:-}"; shift 2 ;;
     --sionna-bridge) sionna_bridge="${2:-}"; shift 2 ;;
     --sionna-scenario-config) sionna_scenario_config="${2:-}"; shift 2 ;;
@@ -493,6 +493,14 @@ PY
   start_group gnb "${log_dir}/gnb-console.log" "${gnb}" -c "${config_dir}/gnb.yaml"
   gnb_pid="${started_pid}"
   wait_log "${log_dir}/gnb-console.log" '==== gNB started ===' "${gnb_pid}" 15 || usage_error "gNB did not start"
+  if [[ -n "${gnb_metrics_socket}" ]]; then
+    # Runs inside this namespace so it can reach the gNB's loopback, and
+    # writes its listening socket into the shared run directory. Started
+    # after the gNB so the first dashboard connection finds a live port.
+    start_group gnb-metrics-relay "${log_dir}/gnb-metrics-relay.log" \
+      /usr/bin/python3 "${repo_root}/scripts/native/gnb-metrics-relay.py" \
+      --socket "${gnb_metrics_socket}" --port "${gnb_metrics_port}"
+  fi
   sleep 3
   start_group srsue "${log_dir}/srsue.log" "${srsue}" "${config_dir}/srsue.conf"
   srsue_pid="${started_pid}"
@@ -514,7 +522,7 @@ PY
   fi
   if [[ "${rrc}" -eq 1 && "${pdu}" -eq 1 && "${ping_ok}" -eq 1 ]]; then
     write_live_ready "${rrc}" "${pdu}" "${ping_ok}"
-  elif [[ "${run_duration_seconds}" -eq 0 ]] && process_running "${broker_pid}"; then
+    elif [[ "${run_duration_seconds}" -eq 0 ]] && process_running "${broker_pid}"; then
     # An unbounded live demo must still return a useful failure if attach did
     # not complete; otherwise the outer launcher would wait forever.
     stop_group "${broker_index}" || true

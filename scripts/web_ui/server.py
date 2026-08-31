@@ -9,14 +9,19 @@ the broker control REP socket and therefore cannot mutate a live channel.
 from __future__ import annotations
 
 import argparse
+import base64
 import csv
 import ctypes
 import ctypes.util
+import hashlib
 import io
 import json
 import os
 import pathlib
+import secrets
 import signal
+import socket
+import struct
 import subprocess
 import threading
 import time
@@ -1312,6 +1317,275 @@ def delivery_status(
     }
 
 
+# ── gNB metrics over the remote-control WebSocket ────────────────────────
+# The OCUDU/srsRAN gNB publishes its JSON metrics on the same WebSocket the
+# official GUI subscribes to (remote_control.enabled + metrics.enable_json).
+# No WebSocket library is installed in the runtime venv, and this server is
+# deliberately a single file whose only third-party import is pyzmq, so the
+# handful of RFC 6455 client bits it needs are implemented here rather than
+# adding a dependency: a text-only client that sends one subscribe command
+# and then reads server frames.
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+WS_OP_CONTINUATION = 0x0
+WS_OP_TEXT = 0x1
+WS_OP_BINARY = 0x2
+WS_OP_CLOSE = 0x8
+WS_OP_PING = 0x9
+WS_OP_PONG = 0xA
+# The gNB caps its own payloads at 16 KiB but a metrics notification is sent
+# as one message; this bounds a hostile or runaway peer instead of the heap.
+WS_MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+GNB_METRICS_SUBSCRIBE = '{"cmd":"metrics_subscribe"}'
+# How long a UE table may go unrefreshed before the dashboard stops
+# presenting it as current. The scheduler reports on its own period
+# (metrics.periodicity, 1 s by default), so this is a few periods plus
+# jitter: long enough that a normal gap never flags, short enough that a
+# stalled scheduler does not read as a live table.
+GNB_UE_REPORT_STALE_SECONDS = 5.0
+
+
+def is_scheduler_report(payload: Any) -> bool:
+    """Say whether this notification is the one that owns the UE table.
+
+    The remote-control socket is a shared broadcast bus, not a scheduler
+    feed: every metrics consumer the gNB builds -- CU-CP, CU-UP, RLC, RU,
+    O-DU-low, app resource usage, buffer pool -- serialises its own JSON
+    and hands it to the same `send()` that fans out to every subscriber
+    (ocudu `apps/services/remote_control/remote_server.cpp`). Most
+    notifications therefore have no per-UE vocabulary at all and say
+    nothing whatever about how many UEs are attached.
+
+    Only the scheduler report speaks to that. It carries `ue_list` per
+    cell just when the cell has UEs (ocudu `apps/helpers/metrics/
+    json_generators/du_high/scheduler.cpp`, emitted under
+    `report_ue_metrics and not ue_metrics.empty()`) and otherwise lists
+    every UE of the period (ocudu `lib/scheduler/logging/
+    cell_metrics_handler.cpp::report_metrics`). So a scheduler report
+    with no `ue_list` is the one message that does mean "no UEs", and
+    every other message is silence on the subject rather than a zero.
+
+    Either marker identifies it: a `ue_list` anywhere, or the `cells`
+    array the report is built around. Demanding both would leave a
+    zero-UE report unrecognisable, which is the case that has to stay
+    reportable.
+    """
+
+    def walk(node: Any, depth: int) -> bool:
+        if depth > 12:
+            return False
+        if isinstance(node, dict):
+            if isinstance(node.get("ue_list"), list):
+                return True
+            cells = node.get("cells")
+            if isinstance(cells, list) and any(
+                isinstance(cell, dict) for cell in cells
+            ):
+                return True
+            return any(walk(value, depth + 1) for value in node.values())
+        if isinstance(node, list):
+            return any(walk(value, depth + 1) for value in node)
+        return False
+
+    return walk(payload, 0)
+
+
+def extract_ue_rows(payload: Any) -> list[dict[str, Any]]:
+    """Pull per-UE scheduler rows out of a metrics notification.
+
+    The envelope around `ue_list` is not pinned down here: the gNB wraps it
+    differently per release and the deployed build could not be exercised
+    against the live run without a second gNB connecting to the broker's
+    sockets. So rather than hard-coding a path that may be wrong, this
+    walks the document and collects every `ue_list` it finds. A schema
+    change moves the list, it does not silently empty the table.
+    """
+
+    rows: list[dict[str, Any]] = []
+
+    def walk(node: Any, depth: int) -> None:
+        if depth > 12 or len(rows) > 512:
+            return
+        if isinstance(node, dict):
+            entries = node.get("ue_list")
+            if isinstance(entries, list):
+                for entry in entries:
+                    if isinstance(entry, dict):
+                        # A cell-level row carries pci; keep it on the UE so
+                        # the table can say which cell the UE belongs to.
+                        merged = dict(entry)
+                        if "pci" in node and "pci" not in merged:
+                            merged["pci"] = node["pci"]
+                        rows.append(merged)
+            for key, value in node.items():
+                if key != "ue_list":
+                    walk(value, depth + 1)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, depth + 1)
+
+    walk(payload, 0)
+    return rows
+
+
+class WebSocketError(RuntimeError):
+    """Any handshake or framing failure; the caller reconnects."""
+
+
+class WebSocketClient:
+    """Minimal RFC 6455 text client: connect, subscribe, read messages."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        path: str = "/",
+        timeout: float = 5.0,
+        unix_path: str | None = None,
+    ):
+        self.host = host
+        self.port = port
+        self.path = path or "/"
+        if unix_path is not None:
+            # The gNB runs in its own network namespace, so its TCP port is
+            # unreachable from here; a relay in that namespace exposes it as
+            # an AF_UNIX socket in the shared run directory, the same way the
+            # ZMQ control and telemetry planes already cross the boundary.
+            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._sock.settimeout(timeout)
+            self._sock.connect(unix_path)
+        else:
+            self._sock = socket.create_connection((host, port), timeout=timeout)
+        self._buffer = b""
+        try:
+            self._handshake()
+        except Exception:
+            self.close()
+            raise
+
+    def _handshake(self) -> None:
+        key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+        request = (
+            f"GET {self.path} HTTP/1.1\r\n"
+            f"Host: {self.host}:{self.port}\r\n"
+            "Upgrade: websocket\r\n"
+            "Connection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\n"
+            "Sec-WebSocket-Version: 13\r\n"
+            "\r\n"
+        ).encode("ascii")
+        self._sock.sendall(request)
+        header = b""
+        while b"\r\n\r\n" not in header:
+            chunk = self._sock.recv(4096)
+            if not chunk:
+                raise WebSocketError("connection closed during handshake")
+            header += chunk
+            if len(header) > 64 * 1024:
+                raise WebSocketError("handshake response too large")
+        head, _, rest = header.partition(b"\r\n\r\n")
+        self._buffer = rest
+        status = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+        if "101" not in status:
+            raise WebSocketError(f"server refused upgrade: {status}")
+        expected = base64.b64encode(
+            hashlib.sha1((key + WS_GUID).encode("ascii")).digest()
+        ).decode("ascii")
+        accept = ""
+        for line in head.decode("latin-1", "replace").split("\r\n")[1:]:
+            name, _, value = line.partition(":")
+            if name.strip().lower() == "sec-websocket-accept":
+                accept = value.strip()
+        if accept != expected:
+            raise WebSocketError("Sec-WebSocket-Accept mismatch")
+
+    def _read_exactly(self, count: int) -> bytes:
+        while len(self._buffer) < count:
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                raise WebSocketError("connection closed")
+            self._buffer += chunk
+        head, self._buffer = self._buffer[:count], self._buffer[count:]
+        return head
+
+    def send_text(self, text: str) -> None:
+        """Send one unfragmented masked text frame (clients must mask)."""
+
+        payload = text.encode("utf-8")
+        header = bytearray([0x80 | WS_OP_TEXT])
+        length = len(payload)
+        if length < 126:
+            header.append(0x80 | length)
+        elif length < (1 << 16):
+            header.append(0x80 | 126)
+            header += struct.pack("!H", length)
+        else:
+            header.append(0x80 | 127)
+            header += struct.pack("!Q", length)
+        mask = secrets.token_bytes(4)
+        header += mask
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+        self._sock.sendall(bytes(header) + masked)
+
+    def _send_control(self, opcode: int, payload: bytes = b"") -> None:
+        mask = secrets.token_bytes(4)
+        masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
+        self._sock.sendall(
+            bytes([0x80 | opcode, 0x80 | len(payload)]) + mask + masked
+        )
+
+    def recv_message(self) -> str | None:
+        """Return the next text message, or None if the peer closed.
+
+        Control frames are answered inline; binary frames are skipped.
+        Fragmented messages are reassembled.
+        """
+
+        chunks: list[bytes] = []
+        message_opcode: int | None = None
+        while True:
+            first, second = self._read_exactly(2)
+            fin, opcode = first & 0x80, first & 0x0F
+            if second & 0x80:
+                raise WebSocketError("server frame must not be masked")
+            length = second & 0x7F
+            if length == 126:
+                (length,) = struct.unpack("!H", self._read_exactly(2))
+            elif length == 127:
+                (length,) = struct.unpack("!Q", self._read_exactly(8))
+            if length > WS_MAX_MESSAGE_BYTES:
+                raise WebSocketError(f"frame of {length} bytes exceeds cap")
+            payload = self._read_exactly(length) if length else b""
+            if opcode == WS_OP_CLOSE:
+                return None
+            if opcode == WS_OP_PING:
+                self._send_control(WS_OP_PONG, payload)
+                continue
+            if opcode == WS_OP_PONG:
+                continue
+            if opcode == WS_OP_CONTINUATION:
+                if message_opcode is None:
+                    raise WebSocketError("continuation without a start frame")
+            else:
+                message_opcode = opcode
+                chunks = []
+            chunks.append(payload)
+            if sum(len(chunk) for chunk in chunks) > WS_MAX_MESSAGE_BYTES:
+                raise WebSocketError("reassembled message exceeds cap")
+            if not fin:
+                continue
+            body = b"".join(chunks)
+            if message_opcode == WS_OP_TEXT:
+                return body.decode("utf-8", "replace")
+            message_opcode = None
+            chunks = []
+
+    def close(self) -> None:
+        try:
+            self._sock.close()
+        except OSError:
+            pass
+
+
 class StatusStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -1329,6 +1603,13 @@ class StatusStore:
         self._iteration_history: list[dict[str, Any]] = []
         self._warmup_targets: dict[tuple[Any, Any], dict[str, int]] = {}
         self._bad_telemetry_frames = 0
+        self._gnb_metrics: dict[str, Any] | None = None
+        self._gnb_metrics_seen: float | None = None
+        self._gnb_metrics_state = "disabled"
+        self._gnb_metrics_error: str | None = None
+        self._gnb_metrics_messages = 0
+        self._gnb_metrics_ue_seen: float | None = None
+        self._gnb_metrics_ue_reports = 0
 
     def _iteration_event(
         self, session_id: Any, iteration: Any
@@ -1441,6 +1722,45 @@ class StatusStore:
                 TELEMETRY_HISTORY_MAX_ENTRIES,
             )
             self._close_completed_warmups(observed_unix_ms)
+
+    def update_gnb_metrics(self, payload: dict[str, Any]) -> None:
+        """Record one metrics notification from the gNB remote-control feed.
+
+        The UE table is replaced only by the notification that owns it
+        (see `is_scheduler_report`). Every other consumer sharing the
+        socket is silent on the subject, and writing that silence into
+        the table as an empty list is what made a live UE list flicker
+        to "no connected UEs" between two scheduler reports. The last
+        observed rows are kept instead, with their own timestamp, so the
+        UI can say how old they are rather than show them as current.
+        """
+
+        with self._lock:
+            received_unix_ms = time.time_ns() // 1_000_000
+            previous = self._gnb_metrics or {}
+            if is_scheduler_report(payload):
+                ue_list = extract_ue_rows(payload)
+                ue_list_unix_ms = received_unix_ms
+                self._gnb_metrics_ue_seen = time.monotonic()
+                self._gnb_metrics_ue_reports += 1
+            else:
+                ue_list = previous.get("ue_list", [])
+                ue_list_unix_ms = previous.get("ue_list_unix_ms")
+            self._gnb_metrics = {
+                "received_unix_ms": received_unix_ms,
+                "ue_list": ue_list,
+                "ue_list_unix_ms": ue_list_unix_ms,
+                "raw": payload,
+            }
+            self._gnb_metrics_seen = time.monotonic()
+            self._gnb_metrics_messages += 1
+            self._gnb_metrics_state = "connected"
+            self._gnb_metrics_error = None
+
+    def set_gnb_metrics_state(self, state: str, error: str | None = None) -> None:
+        with self._lock:
+            self._gnb_metrics_state = state
+            self._gnb_metrics_error = error
 
     def note_bad_telemetry(self) -> None:
         with self._lock:
@@ -1678,6 +1998,32 @@ class StatusStore:
             # appear mid-serialization.
             iteration_history = [dict(event) for event in self._iteration_history]
             bad_frames = self._bad_telemetry_frames
+            gnb_metrics = self._gnb_metrics
+            # Two clocks, because they answer two questions: how long
+            # since anything arrived on the shared feed, and how long
+            # since the scheduler last spoke about UEs. Only the second
+            # tells the reader whether the table below is current.
+            gnb_ue_age = (
+                None
+                if self._gnb_metrics_ue_seen is None
+                else round(now - self._gnb_metrics_ue_seen, 3)
+            )
+            gnb_state = {
+                "state": self._gnb_metrics_state,
+                "error": self._gnb_metrics_error,
+                "messages": self._gnb_metrics_messages,
+                "age_seconds": (
+                    None
+                    if self._gnb_metrics_seen is None
+                    else round(now - self._gnb_metrics_seen, 3)
+                ),
+                "ue_reports": self._gnb_metrics_ue_reports,
+                "ue_list_age_seconds": gnb_ue_age,
+                "ue_list_stale": (
+                    gnb_ue_age is not None
+                    and gnb_ue_age > GNB_UE_REPORT_STALE_SECONDS
+                ),
+            }
         if sionna_runtime is not None:
             sionna_runtime["process_alive"] = process_is_alive(
                 sionna_runtime.get("process_id")
@@ -1709,6 +2055,16 @@ class StatusStore:
                 "iterations": iteration_history[-32:],
             },
             "delivery": delivery_status(sionna, telemetry),
+            "ran": {
+                **gnb_state,
+                "received_unix_ms": (
+                    gnb_metrics.get("received_unix_ms") if gnb_metrics else None
+                ),
+                "ue_list": gnb_metrics.get("ue_list") if gnb_metrics else [],
+                "ue_list_unix_ms": (
+                    gnb_metrics.get("ue_list_unix_ms") if gnb_metrics else None
+                ),
+            },
         }
 
     def realtime_snapshot(
@@ -1840,6 +2196,74 @@ def telemetry_loop(endpoint: str, store: StatusStore, stop: threading.Event) -> 
         socket.close(linger=0)
 
 
+def gnb_metrics_loop(
+    endpoint: str, store: StatusStore, stop: threading.Event
+) -> None:
+    """Subscribe to the gNB remote-control WebSocket and store its metrics.
+
+    Read-only, like every other feed here: the only frame this ever sends is
+    the subscribe command. It reconnects with backoff because the gNB is
+    started and stopped independently of the dashboard, and a gNB that is
+    simply not running must not be reported as an error state forever.
+    """
+
+    host, port, path, unix_path = parse_ws_endpoint(endpoint)
+    backoff = 1.0
+    while not stop.is_set():
+        client: WebSocketClient | None = None
+        try:
+            store.set_gnb_metrics_state("connecting")
+            client = WebSocketClient(host, port, path, unix_path=unix_path)
+            client.send_text(GNB_METRICS_SUBSCRIBE)
+            store.set_gnb_metrics_state("subscribed")
+            backoff = 1.0
+            while not stop.is_set():
+                message = client.recv_message()
+                if message is None:
+                    break
+                try:
+                    payload = json.loads(message)
+                except ValueError:
+                    continue
+                if isinstance(payload, dict):
+                    store.update_gnb_metrics(payload)
+        except (OSError, WebSocketError, ValueError) as exc:
+            store.set_gnb_metrics_state("disconnected", str(exc))
+        else:
+            store.set_gnb_metrics_state("disconnected", "gNB closed the feed")
+        finally:
+            if client is not None:
+                client.close()
+        if stop.wait(backoff):
+            break
+        backoff = min(backoff * 2.0, 30.0)
+
+
+def parse_ws_endpoint(endpoint: str) -> tuple[str, int, str, str | None]:
+    """Split a metrics endpoint into host, port, HTTP path and unix path.
+
+    Two forms are accepted. `ws://host:port/path` is a plain TCP
+    connection. `ws+unix:///run/dir/gnb-metrics.sock` connects to an
+    AF_UNIX socket instead, which is what the native gate needs: the gNB
+    binds its remote-control port inside an isolated network namespace, so
+    a relay there re-exports it as a socket file both sides can see.
+    """
+
+    if endpoint.startswith("ws+unix://"):
+        unix_path = endpoint[len("ws+unix://") :]
+        if not unix_path.startswith("/"):
+            raise ValueError("ws+unix endpoint needs an absolute socket path")
+        return "localhost", 0, "/", unix_path
+    parsed = urllib.parse.urlparse(
+        endpoint if "://" in endpoint else f"ws://{endpoint}"
+    )
+    if parsed.scheme not in ("ws", "http"):
+        raise ValueError(f"unsupported metrics scheme: {parsed.scheme}")
+    if not parsed.hostname:
+        raise ValueError("metrics endpoint needs a host")
+    return parsed.hostname, parsed.port or 8001, parsed.path or "/", None
+
+
 def gpu_usage_loop(
     store: StatusStore,
     stop: threading.Event,
@@ -1967,6 +2391,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--index", type=pathlib.Path, default=DEFAULT_INDEX)
     parser.add_argument(
+        "--gnb-metrics-endpoint",
+        default="",
+        help=(
+            "gNB remote-control WebSocket to subscribe to for RAN KPIs "
+            "(e.g. ws://127.0.0.1:8001). Empty disables the feed. Requires "
+            "the gNB to run with metrics.enable_json and remote_control."
+        ),
+    )
+    parser.add_argument(
         "--resource-interval-ms",
         type=float,
         default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
@@ -1982,6 +2415,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("port must be in [1, 65535]")
     if args.resource_interval_ms <= 0:
         parser.error("resource-interval-ms must be positive")
+    if args.gnb_metrics_endpoint:
+        try:
+            parse_ws_endpoint(args.gnb_metrics_endpoint)
+        except ValueError as exc:
+            parser.error(f"gnb-metrics-endpoint: {exc}")
     return args
 
 
@@ -2017,9 +2455,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         name="nvidia-process-monitor",
         daemon=True,
     )
+    metrics_thread = None
+    if args.gnb_metrics_endpoint:
+        metrics_thread = threading.Thread(
+            target=gnb_metrics_loop,
+            args=(args.gnb_metrics_endpoint, store, stop),
+            name="gnb-metrics-sub",
+            daemon=True,
+        )
     telemetry_thread.start()
     status_thread.start()
     gpu_thread.start()
+    if metrics_thread is not None:
+        metrics_thread.start()
 
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(store, index_html))
 
@@ -2037,6 +2485,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "telemetry_endpoint": args.telemetry_endpoint,
                 "status_jsonl": str(args.status_jsonl),
                 "resource_interval_ms": args.resource_interval_ms,
+                "gnb_metrics_endpoint": args.gnb_metrics_endpoint or None,
                 "read_only": True,
             },
             separators=(",", ":"),
@@ -2051,6 +2500,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         telemetry_thread.join(timeout=1.0)
         status_thread.join(timeout=1.0)
         gpu_thread.join(timeout=5.0)
+        if metrics_thread is not None:
+            metrics_thread.join(timeout=1.0)
     return 0
 
 
