@@ -171,12 +171,7 @@
         "cols": 1,
         "pattern": "iso",
         "polarization": "V"
-      },
-      "start_m": [
-        -152.78,
-        -45.11,
-        1.5
-      ]
+      }
     }
   },
   "links": [
