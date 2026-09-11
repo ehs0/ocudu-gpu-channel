@@ -85,6 +85,14 @@ cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # preamble per UE below is what makes several UEs possible at all; this
 # stagger is what makes it reliable. 0 disables it.
 ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
+# Host to fetch Ubuntu packages from while building the images, e.g.
+# sg.archive.ubuntu.com. Empty keeps Docker's default archive.ubuntu.com.
+# This is a network-locality knob and nothing else: apt verifies every package
+# against its GPG signature either way, so a mirror cannot substitute content.
+# It is left unset by default because the right mirror depends on where the
+# gate runs -- on this host archive.ubuntu.com timed out entirely while
+# sg.archive.ubuntu.com served the same file in 1.3 s.
+apt_mirror="${OCUDU_MGNB_APT_MIRROR:-}"
 # srsUE base: latest zhouyou-gu/srsRAN_4G master. Stock srsRAN cannot run more
 # than one UE on a cell -- proc_ra_nr.cc hardcodes preamble_index = 0 with no
 # random draw at all, so every UE sends the same preamble. master restores the
@@ -136,7 +144,8 @@ remote_sh bash -s -- \
   "${hold_seconds}" \
   "${ue_inactivity_seconds:-__unset__}" \
   "${ue_keepalive_seconds}" \
-  "${topology_name:-__default__}" <<'REMOTE'
+  "${topology_name:-__default__}" \
+  "${apt_mirror:-__none__}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -162,6 +171,8 @@ hold_seconds="${20}"
 ue_inactivity_seconds="${21}"
 ue_keepalive_seconds="${22}"
 topology_name="${23}"
+apt_mirror="${24}"
+[[ "${apt_mirror}" == "__none__" ]] && apt_mirror=""
 [[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
   exit 2
@@ -508,7 +519,13 @@ cat >"${srsue_dockerfile}" <<'DOCKER'
 FROM ubuntu:22.04
 ARG SRSRAN_4G_REPO=https://github.com/zhouyou-gu/srsRAN_4G.git
 ARG SRSRAN_4G_REF=master
+ARG APT_MIRROR=
 ENV DEBIAN_FRONTEND=noninteractive
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|http://archive.ubuntu.com|http://${APT_MIRROR}|g; \
+              s|http://security.ubuntu.com|http://${APT_MIRROR}|g" \
+          /etc/apt/sources.list; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates cmake g++ gcc git iproute2 iputils-ping \
     libboost-program-options-dev libconfig++-dev libfftw3-dev \
@@ -627,7 +644,8 @@ docker rm -f open5gs_5gc ocudu_gnb ocudu_gnb1 ocudu_srsue_0 ocudu_srsue_1 >"${lo
 if [[ "${build_docker}" == "1" ]]; then
   "${compose[@]}" build 5gc gnb >"${log_dir}/docker-build.log" 2>&1
 fi
-if ! docker build --build-arg "SRSRAN_4G_REF=${srsran_ref}" -f "${srsue_dockerfile}" \
+if ! docker build --build-arg "SRSRAN_4G_REF=${srsran_ref}" \
+     --build-arg "APT_MIRROR=${apt_mirror}" -f "${srsue_dockerfile}" \
      -t "${srsue_image}" "${config_dir}" >"${log_dir}/srsue-docker-build.log" 2>&1; then
   echo "SRSUE BUILD FAILED"; tail -25 "${log_dir}/srsue-docker-build.log"
   write_summary "srsue_build_failed" 2
