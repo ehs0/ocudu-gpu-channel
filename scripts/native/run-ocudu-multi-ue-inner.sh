@@ -20,6 +20,17 @@ channel_build=""
 parent_netns=""
 parent_mntns=""
 outer_uid=""
+# Sionna mode. Empty channel_mode keeps the legacy fixed-TDL behaviour this
+# gate has always had, so the existing invocation is byte-for-byte unchanged.
+channel_mode="legacy"
+control_endpoint=""
+telemetry_endpoint=""
+sionna_python=""
+sionna_bridge=""
+sionna_scenario_config=""
+sionna_status_jsonl=""
+sionna_update_hz="10"
+sionna_ready_seconds="180"
 
 usage_error()
 {
@@ -40,6 +51,15 @@ while [[ "$#" -gt 0 ]]; do
     --parent-netns) parent_netns="${2:-}"; shift 2 ;;
     --parent-mntns) parent_mntns="${2:-}"; shift 2 ;;
     --outer-uid) outer_uid="${2:-}"; shift 2 ;;
+    --channel-mode) channel_mode="${2:-}"; shift 2 ;;
+    --control-endpoint) control_endpoint="${2:-}"; shift 2 ;;
+    --telemetry-endpoint) telemetry_endpoint="${2:-}"; shift 2 ;;
+    --sionna-python) sionna_python="${2:-}"; shift 2 ;;
+    --sionna-bridge) sionna_bridge="${2:-}"; shift 2 ;;
+    --sionna-scenario-config) sionna_scenario_config="${2:-}"; shift 2 ;;
+    --sionna-status-jsonl) sionna_status_jsonl="${2:-}"; shift 2 ;;
+    --sionna-update-hz) sionna_update_hz="${2:-}"; shift 2 ;;
+    --sionna-ready-seconds) sionna_ready_seconds="${2:-}"; shift 2 ;;
     *) usage_error "unexpected argument: $1" ;;
   esac
 done
@@ -48,6 +68,25 @@ for value in "${repo_root}" "${native_root}" "${config_dir}" "${log_dir}" \
              "${netns_dir}" "${timestamp}" "${parent_netns}" "${parent_mntns}" "${outer_uid}"; do
   [[ -n "${value}" ]] || usage_error "missing required argument"
 done
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
+  usage_error "unsupported channel mode: ${channel_mode}"
+if [[ "${channel_mode}" == "sionna" ]]; then
+  for value in "${control_endpoint}" "${telemetry_endpoint}" "${sionna_python}" \
+               "${sionna_bridge}" "${sionna_scenario_config}" "${sionna_status_jsonl}"; do
+    [[ -n "${value}" ]] || usage_error "sionna mode requires the sionna arguments"
+  done
+  # The endpoints are created by the outer script inside this user namespace's
+  # mount, so they have to be filesystem sockets rather than TCP: a TCP bind
+  # here would be visible to anything else on the host.
+  [[ "${control_endpoint}" == ipc://* && "${telemetry_endpoint}" == ipc://* ]] || \
+    usage_error "sionna control and telemetry endpoints must be ipc://"
+  [[ -x "${sionna_python}" ]] || usage_error "missing Sionna Python: ${sionna_python}"
+  [[ -f "${sionna_bridge}" ]] || usage_error "missing Sionna bridge: ${sionna_bridge}"
+  [[ -f "${sionna_scenario_config}" ]] || \
+    usage_error "missing Sionna scenario: ${sionna_scenario_config}"
+  [[ "${sionna_update_hz}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || \
+    usage_error "invalid Sionna update rate: ${sionna_update_hz}"
+fi
 [[ "$(readlink /proc/self/ns/net)" != "${parent_netns}" ]] || usage_error "network namespace was not isolated"
 [[ "$(readlink /proc/self/ns/mnt)" != "${parent_mntns}" ]] || usage_error "mount namespace was not isolated"
 # /proc/self/uid_map is column-aligned with leading whitespace, so compare
@@ -245,8 +284,18 @@ raise SystemExit(2)
 PY
 
 # --- broker, gNB, UEs -------------------------------------------------------
+declare -a broker_args=(
+  "${broker}" --config "${config_dir}/topology.yaml" --duration 240s
+)
+if [[ "${channel_mode}" == "sionna" ]]; then
+  broker_args+=(
+    --control-endpoint "${control_endpoint}"
+    --telemetry-endpoint "${telemetry_endpoint}"
+    --telemetry-rate-hz 500
+  )
+fi
 start_group broker "${log_dir}/broker.log" \
-  env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${broker}" --config "${config_dir}/topology.yaml" --duration 240s
+  env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${broker_args[@]}"
 broker_pid="${started_pid}"
 broker_index=$((${#process_pids[@]} - 1))
 # The fixed 240 s run plus ten seconds for grouped drain and orderly shutdown.
@@ -262,6 +311,24 @@ for id in "${ue_ids[@]}"; do
   wait_log "${log_dir}/broker.log" "event=socket_ready device=${id}" "${broker_pid}" 15 \
     || usage_error "broker did not bind ${id}"
 done
+
+# Sionna has to be streaming before the gNB is admitted. Every link starts as a
+# quiet -100 dB TDL, so a UE that RACHes before the first matrix_profile_swap
+# lands is transmitting into a dead channel and never attaches.
+sionna_pid=""
+if [[ "${channel_mode}" == "sionna" ]]; then
+  wait_log "${log_dir}/broker.log" 'event=control_start ' "${broker_pid}" 15 || \
+    usage_error "broker control server did not become ready"
+  start_group sionna "${log_dir}/sionna-bridge.log" \
+    env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${sionna_python}" "${sionna_bridge}" \
+    --scenario-config "${sionna_scenario_config}" \
+    --control-endpoint "${control_endpoint}" --duration 0 \
+    --update-hz "${sionna_update_hz}" --status-jsonl "${sionna_status_jsonl}"
+  sionna_pid="${started_pid}"
+  wait_log "${log_dir}/sionna-bridge.log" '"event":"sionna_rt_update"' \
+    "${sionna_pid}" "${sionna_ready_seconds}" || \
+    usage_error "Sionna RT did not publish its first matrix profile update"
+fi
 
 start_group gnb "${log_dir}/gnb-console.log" "${gnb}" -c "${config_dir}/gnb.yaml"
 gnb_pid="${started_pid}"

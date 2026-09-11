@@ -48,6 +48,32 @@ sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
 sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-500}"
 sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
 sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
+# Which Sionna scenario feeds the two cells. The default is the built-in street
+# canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
+# with the serving and intercell models works, which is how the OpenStreetMap
+# SUTD campus scene is selected.
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/multi-gnb.json}"
+# Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
+# to the 5GC from outside the compose network; the base compose publishes 9999
+# only so a human can poke it, and that mapping is enough to abort the whole
+# run on a machine where something else already listens there.
+fivegc_host_port="${OCUDU_MGNB_5GC_HOST_PORT:-}"
+# Seconds to keep the whole stack -- cells, UEs, broker, bridge and Web UI --
+# running after the verdict is in. 0 tears down as soon as both UEs ping, which
+# is what a gate wants and what makes the Web UI unwatchable; set it to look at
+# the dashboard while the channel is still being traced.
+hold_seconds="${OCUDU_MGNB_HOLD_SECONDS:-0}"
+# The gNB releases an idle UE after its 120 s default, which ends the demo a
+# couple of minutes after the acceptance ping: the UE drops to idle and the
+# dashboard loses it. These two are the pair the native gate uses -- the timer
+# raises the gNB's own bound (it enforces [1, 7200]) and the keepalive gives
+# the DRB actual user-plane traffic to carry. Both are opt-in, so an unset run
+# keeps the proven behaviour byte for byte.
+ue_inactivity_seconds="${OCUDU_MGNB_UE_INACTIVITY_SECONDS:-}"
+ue_keepalive_seconds="${OCUDU_MGNB_UE_KEEPALIVE_SECONDS:-0}"
+# Which broker topology to run. Empty picks the one that matches the channel
+# mode; see where topology_name is resolved for why the two differ.
+topology_name="${OCUDU_MGNB_TOPOLOGY:-}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: the two UEs camp on different cells so they do not
 # collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
@@ -93,8 +119,14 @@ remote_sh bash -s -- \
   "${sionna_update_hz}" \
   "${sionna_ready_seconds}" \
   "${sionna_web_port}" \
+  "${sionna_scenario}" \
   "${cuda_compiler_arg}" \
-  "${execution_mode}" <<'REMOTE'
+  "${execution_mode}" \
+  "${fivegc_host_port}" \
+  "${hold_seconds}" \
+  "${ue_inactivity_seconds:-__unset__}" \
+  "${ue_keepalive_seconds}" \
+  "${topology_name:-__default__}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -112,8 +144,45 @@ sionna_python="${12}"
 sionna_update_hz="${13}"
 sionna_ready_seconds="${14}"
 sionna_web_port="${15}"
-cuda_compiler="${16}"
-execution_mode="${17}"
+sionna_scenario="${16}"
+cuda_compiler="${17}"
+execution_mode="${18}"
+fivegc_host_port="${19}"
+hold_seconds="${20}"
+ue_inactivity_seconds="${21}"
+ue_keepalive_seconds="${22}"
+topology_name="${23}"
+[[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
+  echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
+  exit 2
+}
+[[ "${ue_inactivity_seconds}" == "__unset__" ]] && ue_inactivity_seconds=""
+# The bound is the gNB's own: apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_cli11_schema.cpp
+# declares range(1, 7200), and anything outside it makes the cell refuse to start.
+if [[ -n "${ue_inactivity_seconds}" ]]; then
+  [[ "${ue_inactivity_seconds}" =~ ^[1-9][0-9]*$ && "${ue_inactivity_seconds}" -le 7200 ]] || {
+    echo "OCUDU_MGNB_UE_INACTIVITY_SECONDS must be an integer in [1, 7200]" >&2
+    exit 2
+  }
+fi
+# ping refuses an interval below 0.2 s for a non-root caller and the flood it
+# would become is not what this is for; 60 s is past every inactivity timer.
+[[ "${ue_keepalive_seconds}" =~ ^(0|0?\.[0-9]+|[1-9][0-9]*(\.[0-9]+)?)$ ]] || {
+  echo "OCUDU_MGNB_UE_KEEPALIVE_SECONDS must be 0 or a positive number" >&2
+  exit 2
+}
+if [[ "${ue_keepalive_seconds}" != "0" ]]; then
+  awk -v value="${ue_keepalive_seconds}" 'BEGIN { exit !(value >= 0.2 && value <= 60) }' || {
+    echo "OCUDU_MGNB_UE_KEEPALIVE_SECONDS must be 0 or within [0.2, 60] seconds" >&2
+    exit 2
+  }
+fi
+# An empty list is what tells Compose to publish nothing at all.
+if [[ -n "${fivegc_host_port}" ]]; then
+  fivegc_ports="      - \"${fivegc_host_port}:9999/tcp\""
+else
+  fivegc_ports="      []"
+fi
 [[ "${broker_image}" == "__native__" ]] && broker_image=""
 
 expand_remote_path() {
@@ -205,6 +274,14 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     echo "invalid OCUDU_MGNB_WEB_PORT" >&2
     exit 2
   }
+  case "${sionna_scenario}" in
+    /*) ;;
+    *) sionna_scenario="${project_root}/${sionna_scenario}" ;;
+  esac
+  if [[ ! -f "${sionna_scenario}" ]]; then
+    echo "missing Sionna scenario: ${sionna_scenario}" >&2
+    exit 2
+  fi
   if [[ ! -x "${sionna_python}" ]]; then
     echo "missing Sionna Python: ${sionna_python}" >&2
     echo "create ${workspace}/venvs/sionna and install scripts/sionna_rt/requirements.txt" >&2
@@ -282,14 +359,26 @@ srsue_dockerfile="${config_dir}/Dockerfile.srsue"
 
 # One gNB config per cell from the shared ZMQ base: rewrite the ZMQ ports and
 # add a distinct PCI, gnb_id and node name so the two cells are independent.
+#
+# The gains go to 0 for the same reason the native renderers zero them: the
+# fixture carries the B210's tx_gain/rx_gain of 75, and OCUDU's ZMQ device
+# refuses anything above 0 dB ("Channel gain must be <= 0.0 dB for
+# ZMQ-device"), which kills the cell right after the DU is created.
 gen_gnb_config() {
   # $1 dst  $2 tx_port  $3 rx_port  $4 pci  $5 gnb_id  $6 ran_node_name
-  awk -v tx="$2" -v rx="$3" -v pci="$4" -v gid="$5" -v nm="$6" '
+  #
+  # inactivity_timer goes inside the fixture's existing cu_cp block, not after
+  # it: a second top-level `cu_cp:` mapping is a duplicate key, not an override.
+  awk -v tx="$2" -v rx="$3" -v pci="$4" -v gid="$5" -v nm="$6" \
+      -v inactivity="${ue_inactivity_seconds}" '
     /^[[:space:]]*device_args:/ {
       print "  device_args: tx_port=tcp://*:" tx ",rx_port=tcp://host.docker.internal:" rx ",base_srate=23.04e6"
       next
     }
+    /^[[:space:]]*tx_gain:/ { print "  tx_gain: 0"; next }
+    /^[[:space:]]*rx_gain:/ { print "  rx_gain: 0"; next }
     { print }
+    /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
     END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
   ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml" >"$1"
@@ -310,11 +399,20 @@ awk '
 # Compose override: point Open5GS at a two-UE subscriber CSV, publish the cell-0
 # gNB TX port, and add a second gNB (cell 1) on its own 5GC-network IP, ZMQ
 # port and layered config.
-cat >"${compose_override}" <<'YAML'
+cat >"${compose_override}" <<YAML
 services:
   5gc:
     environment:
       SUBSCRIBER_DB: /open5gs/subscriber_db.csv
+    # The base compose publishes 9999 on the host, which collides with anything
+    # else already listening there and takes the whole stack down before a
+    # single cell comes up. Nothing in this gate reaches the 5GC from outside
+    # the compose network, so the mapping is replaced rather than merged --
+    # !override is what stops Compose appending to the base list.
+    ports: !override
+${fivegc_ports}
+YAML
+cat >>"${compose_override}" <<'YAML'
   gnb:
     ports:
       - "3000:3000"
@@ -462,9 +560,15 @@ sionna_pid=""
 telemetry_pid=""
 ue0_pid=""
 ue1_pid=""
+keepalive0_pid=""
+keepalive1_pid=""
 
 cleanup() {
   set +e
+  # The keepalive goes first: no reason to keep injecting user-plane traffic
+  # into a stack that is being torn down.
+  [[ -n "${keepalive0_pid}" ]] && kill "${keepalive0_pid}" >/dev/null 2>&1
+  [[ -n "${keepalive1_pid}" ]] && kill "${keepalive1_pid}" >/dev/null 2>&1
   [[ -n "${ue0_pid}" ]] && kill "${ue0_pid}" >/dev/null 2>&1
   [[ -n "${ue1_pid}" ]] && kill "${ue1_pid}" >/dev/null 2>&1
   [[ -n "${telemetry_pid}" ]] && kill "${telemetry_pid}" >/dev/null 2>&1
@@ -505,8 +609,44 @@ echo "open5gs: ${h:-?}"
 # runtime profiles on the same validated topology and enables control/telemetry
 # without changing OCUDU. A Sionna run is stopped explicitly after attach/ping so tracing setup
 # time does not consume the radio validation window.
-topology_host="${project_root}/examples/topology.multi-gnb.cuda.yaml"
-topology_container="/work/examples/topology.multi-gnb.cuda.yaml"
+# The static gate's topology hand-tunes the two cells apart (serving 6 dB vs
+# intercell 20 dB of fixed path loss) and a profile_swap replaces only a link's
+# taps, so those steps would sit on top of every ray-traced channel. Sionna
+# mode therefore defaults to the bare-anchor topology, where the scene alone
+# decides which cell is stronger.
+if [[ "${topology_name}" == "__default__" ]]; then
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    topology_name="examples/topology.sionna-multi-gnb.cuda.yaml"
+  else
+    topology_name="examples/topology.multi-gnb.cuda.yaml"
+  fi
+fi
+case "${topology_name}" in
+  /*) topology_host="${topology_name}" ;;
+  *) topology_host="${project_root}/${topology_name}" ;;
+esac
+topology_container="/work/${topology_name#"${project_root}/"}"
+[[ -f "${topology_host}" ]] || { echo "missing topology: ${topology_host}" >&2; exit 2; }
+
+# The telemetry topic is the broker's own link key, "from>to:model", so the
+# list of links to expect has to come from the topology the broker was handed.
+# check_feed.py's built-in default names ten ":sionna_rt" links, which belongs
+# to topology.sionna-2gnb-2ue.cuda.yaml, not to this gate's eight
+# serving/intercell ones -- left implicit it reports every real link as
+# missing while the feed is perfectly healthy.
+topology_links() {
+  awk '
+    /^links:/ { in_links = 1; next }
+    /^[^[:space:]]/ { in_links = 0 }
+    in_links && $1 == "-" && $2 == "from:" { from = $3; next }
+    in_links && $1 == "to:" { to = $2; next }
+    in_links && $1 == "model:" {
+      printf "%s%s>%s:%s", separator, from, to, $2
+      separator = ","
+    }
+    END { printf "\n" }
+  ' "$1"
+}
 broker_duration="${duration_seconds}s"
 broker_extra=()
 if [[ "${channel_mode}" == "sionna" ]]; then
@@ -550,7 +690,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
 
   "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
     --python "${sionna_python}" \
-    --scenario "${project_root}/examples/sionna/multi-gnb.json" \
+    --scenario "${sionna_scenario}" \
     --control-endpoint tcp://127.0.0.1:5559 \
     --telemetry-endpoint tcp://127.0.0.1:5560 \
     --duration 0 \
@@ -578,8 +718,10 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
   echo "Sionna Web UI: http://127.0.0.1:${sionna_web_port}"
 
+  expected_links="$(topology_links "${topology_host}")"
+  [[ -n "${expected_links}" ]] || write_summary "topology_has_no_links" 2
   "${sionna_python}" "${project_root}/scripts/telemetry/check_feed.py" \
-    --endpoint tcp://127.0.0.1:5560 --duration 10 \
+    --endpoint tcp://127.0.0.1:5560 --duration 10 --links "${expected_links}" \
     >"${log_dir}/telemetry-check.json" 2>&1 &
   telemetry_pid="$!"
 fi
@@ -639,6 +781,36 @@ ping_ue() {
 }
 [[ "${rrc0}" -eq 1 && "${pdu0}" -eq 1 ]] && ping0="$(ping_ue ocudu_srsue_0)"
 [[ "${rrc1}" -eq 1 && "${pdu1}" -eq 1 ]] && ping1="$(ping_ue ocudu_srsue_1)"
+
+# Keep the DRBs carrying traffic so the gNB has no idle UE to release. Started
+# only after the verdict is in, so it cannot manufacture the attach it is meant
+# to preserve.
+keepalive_ue() {
+  # $1 container name
+  docker exec "$1" sh -lc '
+      if ip netns list 2>/dev/null | grep -q ue1; then ns="ip netns exec ue1"; else ns=""; fi
+      exec $ns ping -I tun_srsue -i '"${ue_keepalive_seconds}"' 10.45.1.1
+    ' >/dev/null 2>&1 &
+}
+if [[ "${ue_keepalive_seconds}" != "0" ]]; then
+  [[ "${ping0}" -eq 1 ]] && { keepalive_ue ocudu_srsue_0; keepalive0_pid="$!"; }
+  [[ "${ping1}" -eq 1 ]] && { keepalive_ue ocudu_srsue_1; keepalive1_pid="$!"; }
+  printf 'UE keepalive every %ss\n' "${ue_keepalive_seconds}"
+fi
+
+# Hold the live stack open so the dashboard can be watched. Everything stays
+# running: both cells keep serving, the UEs keep their PDU sessions, and the
+# bridge keeps re-tracing the moving UEs into the broker. Ctrl-C cuts the hold
+# short and still runs the normal teardown and summary.
+if [[ "${hold_seconds}" -gt 0 ]]; then
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    printf 'holding the stack for %ss -- Web UI: http://127.0.0.1:%s\n' \
+      "${hold_seconds}" "${sionna_web_port}"
+  else
+    printf 'holding the stack for %ss\n' "${hold_seconds}"
+  fi
+  sleep "${hold_seconds}" || true
+fi
 
 set +e
 if [[ "${channel_mode}" == "sionna" ]]; then

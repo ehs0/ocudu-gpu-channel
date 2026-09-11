@@ -1,0 +1,262 @@
+{
+  "name": "sionna_SUTD_test_2x2",
+  "description": "Two cells on the SUTD campus: gnb0 on SUTD Building 2 serving the car at the drop-off, gnb1 on Building 1 covering the far side of the pedestrian ring around Building 2. The roofs were chosen by measurement, not by eye \u2014 over a full lap the two cells cover 8 and 9 of 30 sample points with no overlap, so the pedestrian link hands between them instead of sitting on one. Both serving and intercell links are traced in each direction, which is the link set examples/topology.multi-gnb.cuda.yaml declares. Single-port radios throughout, to match that topology. UE-to-UE crosstalk is traced as well, so each receiver sums every edge that reaches it rather than only its cell's.",
+  "scene": "sionna_SUTD_test",
+  "simple_road": false,
+  "solver": {
+    "max_depth": 3,
+    "samples_per_source": 200000,
+    "seed": 42,
+    "path_polylines": 6,
+    "propagation": {
+      "los": true,
+      "specular_reflection": true,
+      "diffuse_reflection": false,
+      "refraction": false,
+      "diffraction": false
+    }
+  },
+  "nodes": {
+    "gnb0": {
+      "start_m": [
+        -151.28,
+        -57.99,
+        30.5
+      ],
+      "mobility": "fixed",
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "gnb1": {
+      "start_m": [
+        -158.93,
+        -132.53,
+        30.5
+      ],
+      "mobility": "fixed",
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue0": {
+      "mobility": "car",
+      "route_m": [
+        [
+          -150.229,
+          -48.078,
+          1.5
+        ],
+        [
+          -137.472,
+          -47.193,
+          1.5
+        ],
+        [
+          -75.0,
+          -36.07,
+          1.5
+        ]
+      ],
+      "route_mode": "pingpong",
+      "speed_mps": 8.33,
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue1": {
+      "mobility": "pedestrian",
+      "route_m": [
+        [
+          -155.99,
+          -45.87,
+          1.5
+        ],
+        [
+          -219.35,
+          -63.84,
+          1.5
+        ],
+        [
+          -221.21,
+          -64.32,
+          1.5
+        ],
+        [
+          -222.89,
+          -65.45,
+          1.5
+        ],
+        [
+          -224.21,
+          -67.09,
+          1.5
+        ],
+        [
+          -225.02,
+          -69.1,
+          1.5
+        ],
+        [
+          -232.38,
+          -113.68,
+          1.5
+        ],
+        [
+          -232.3,
+          -115.84,
+          1.5
+        ],
+        [
+          -231.62,
+          -117.91,
+          1.5
+        ],
+        [
+          -230.4,
+          -119.69,
+          1.5
+        ],
+        [
+          -228.77,
+          -121.02,
+          1.5
+        ],
+        [
+          -166.29,
+          -125.92,
+          1.5
+        ],
+        [
+          -154.98,
+          -198.84,
+          1.5
+        ],
+        [
+          -81.42,
+          -120.89,
+          1.5
+        ],
+        [
+          -78.67,
+          -119.53,
+          1.5
+        ],
+        [
+          -76.26,
+          -117.47,
+          1.5
+        ],
+        [
+          -70.2,
+          -109.24,
+          1.5
+        ],
+        [
+          -53.57,
+          -53.7,
+          1.5
+        ],
+        [
+          -56.57,
+          -46.72,
+          1.5
+        ],
+        [
+          -66.69,
+          -38.67,
+          1.5
+        ],
+        [
+          -74.55,
+          -38.4,
+          1.5
+        ]
+      ],
+      "route_mode": "loop",
+      "speed_mps": 1.4,
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "start_m": [
+        -155.99,
+        -45.87,
+        1.5
+      ]
+    }
+  },
+  "links": [
+    {
+      "from": "gnb0",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "serving"
+    },
+    {
+      "from": "gnb1",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "serving"
+    },
+    {
+      "from": "gnb0",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "intercell"
+    },
+    {
+      "from": "gnb1",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "serving"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb1",
+      "direction": "uplink",
+      "model": "serving"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb1",
+      "direction": "uplink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue0",
+      "to": "ue1",
+      "direction": "crosstalk",
+      "model": "crosstalk"
+    },
+    {
+      "from": "ue1",
+      "to": "ue0",
+      "direction": "crosstalk",
+      "model": "crosstalk"
+    }
+  ]
+}

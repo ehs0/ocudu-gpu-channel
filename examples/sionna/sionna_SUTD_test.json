@@ -1,0 +1,204 @@
+{
+  "name": "sionna_SUTD_test",
+  "scene": "sionna_SUTD_test",
+  "simple_road": false,
+  "nodes": {
+    "gnb0": {
+      "start_m": [
+        -151.28,
+        -57.99,
+        30.5
+      ],
+      "mobility": "fixed",
+      "array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue0": {
+      "mobility": "car",
+      "route_m": [
+        [
+          -150.229,
+          -48.078,
+          1.5
+        ],
+        [
+          -137.472,
+          -47.193,
+          1.5
+        ],
+        [
+          -75.0,
+          -36.07,
+          1.5
+        ]
+      ],
+      "route_mode": "pingpong",
+      "speed_mps": 8.33,
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue1": {
+      "mobility": "pedestrian",
+      "route_m": [
+        [
+          -155.99,
+          -45.87,
+          1.5
+        ],
+        [
+          -219.35,
+          -63.84,
+          1.5
+        ],
+        [
+          -221.21,
+          -64.32,
+          1.5
+        ],
+        [
+          -222.89,
+          -65.45,
+          1.5
+        ],
+        [
+          -224.21,
+          -67.09,
+          1.5
+        ],
+        [
+          -225.02,
+          -69.1,
+          1.5
+        ],
+        [
+          -232.38,
+          -113.68,
+          1.5
+        ],
+        [
+          -232.3,
+          -115.84,
+          1.5
+        ],
+        [
+          -231.62,
+          -117.91,
+          1.5
+        ],
+        [
+          -230.4,
+          -119.69,
+          1.5
+        ],
+        [
+          -228.77,
+          -121.02,
+          1.5
+        ],
+        [
+          -166.29,
+          -125.92,
+          1.5
+        ],
+        [
+          -154.98,
+          -198.84,
+          1.5
+        ],
+        [
+          -81.42,
+          -120.89,
+          1.5
+        ],
+        [
+          -78.67,
+          -119.53,
+          1.5
+        ],
+        [
+          -76.26,
+          -117.47,
+          1.5
+        ],
+        [
+          -70.2,
+          -109.24,
+          1.5
+        ],
+        [
+          -53.57,
+          -53.7,
+          1.5
+        ],
+        [
+          -56.57,
+          -46.72,
+          1.5
+        ],
+        [
+          -66.69,
+          -38.67,
+          1.5
+        ],
+        [
+          -74.55,
+          -38.4,
+          1.5
+        ]
+      ],
+      "route_mode": "loop",
+      "speed_mps": 1.4,
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "start_m": [
+        -155.99,
+        -45.87,
+        1.5
+      ]
+    }
+  },
+  "links": [
+    {
+      "from": "gnb0",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "gnb0",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "ue0",
+      "to": "ue1",
+      "direction": "crosstalk",
+      "model": "sionna_rt"
+    }
+  ]
+}

@@ -7,6 +7,7 @@
   <style>
     :root { color-scheme: dark; --bg:#081019; --panel:#101d29; --line:#26394a; --text:#e9f2f8; --muted:#8ca4b5; --cyan:#42d3ff; --green:#53e58b; --amber:#ffc857; --red:#ff6577; }
     * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
     body { margin:0; background:radial-gradient(circle at 30% 0,#102a3a 0,var(--bg) 42%); color:var(--text); font:14px/1.45 ui-sans-serif,system-ui,sans-serif; }
     header { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:18px 24px; border-bottom:1px solid var(--line); background:#081019cc; position:sticky; top:0; z-index:2; backdrop-filter:blur(12px); }
     h1 { margin:0; font-size:20px; letter-spacing:.02em; } .sub { color:var(--muted); font-size:12px; }
@@ -19,7 +20,26 @@
     .panel { background:linear-gradient(145deg,#132331e8,#0d1822e8); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 16px 50px #0004; }
     .panel h2 { font-size:14px; margin:0 0 12px; color:#bed1de; text-transform:uppercase; letter-spacing:.08em; }
     canvas { display:block; width:100%; height:520px; border-radius:10px; background:#07111a; border:1px solid #213443; }
-    .legend { display:flex; gap:14px; margin-top:10px; color:var(--muted); font-size:12px; }
+    .legend { display:flex; flex-wrap:wrap; align-items:center; gap:6px 14px; margin-top:10px; color:var(--muted); font-size:12px; }
+    /* The scene reads as a cartographic inset: the OpenStreetMap standard
+       style's land/building/road values on a light ground, deliberately
+       lighter than the surrounding dashboard so it reads as a map. */
+    .scene-stage { position:relative; border-radius:10px; overflow:hidden; border:1px solid #cfc7bc; background:linear-gradient(180deg,#f7f5f1 0,#f2efe9 55%,#eae5dc 100%); }
+    .scene-stage canvas { border:0; border-radius:0; background:transparent; }
+    #scene3d { width:100%; height:520px; }
+    #scene3d canvas { height:100% !important; }
+    .scene-toolbar { position:absolute; top:10px; right:10px; display:flex; gap:6px; z-index:1; }
+    .scene-toolbar button { font:600 11px/1 ui-sans-serif,system-ui,sans-serif; letter-spacing:.06em; text-transform:uppercase; color:#4a4136; background:#ffffffd9; border:1px solid #c2b8ae; border-radius:7px; padding:7px 10px; cursor:pointer; backdrop-filter:blur(8px); }
+    .scene-toolbar button:hover { border-color:#7a1220; color:#7a1220; }
+    .scene-toolbar button[aria-pressed="false"] { opacity:.42; }
+    /* ODbL 1.0 requires the OpenStreetMap credit to be visible wherever the
+       data is shown, so it sits on the scene itself, not only in the repo. */
+    .scene-credit { position:absolute; right:10px; bottom:10px; z-index:1; color:#6b6055; font-size:11px; background:#ffffffd9; border:1px solid #c2b8ae; border-radius:7px; padding:5px 9px; pointer-events:none; }
+    .scene-hint { position:absolute; left:12px; bottom:10px; z-index:1; color:#8a7f72; font-size:11px; letter-spacing:.04em; pointer-events:none; }
+    .scene-gainbar { position:absolute; left:12px; top:12px; z-index:1; display:flex; align-items:center; gap:8px; color:#6b6055; font-size:11px; font-variant-numeric:tabular-nums; pointer-events:none; }
+    .scene-gainbar i { display:block; width:120px; height:7px; border-radius:4px; border:1px solid #d5ccc1; background:linear-gradient(90deg,#ded8ce,#a9a096,#6b6055,#4a4136); }
+    .scene-status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#8a7f72; font-size:13px; pointer-events:none; }
+    .scene-status.corner { inset:auto auto 10px 12px; color:#6b6055; font-size:11px; background:#ffffffd9; border:1px solid #c2b8ae; border-radius:7px; padding:5px 9px; }
     .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
     .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
     .stat { padding:12px; border:1px solid var(--line); border-radius:10px; background:#09141d; }
@@ -473,9 +493,22 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       </section>
       <section class="panel">
         <h2>Sionna environment · Near top-down 3D mobility</h2>
-        <canvas id="scene" width="900" height="560"></canvas>
-        <div class="legend"><span><i class="dot" style="background:var(--cyan)"></i>gNB</span><span><i class="dot" style="background:var(--red)"></i>Vehicle UE</span><span><i class="dot" style="background:var(--green)"></i>Pedestrian UE</span><span><i class="dot" style="background:#ff9f43"></i>UE↔UE crosstalk</span><span><i class="dot" style="background:#343f49"></i>Road</span></div>
-        <div class="foot">Buildings, ground, road footprints, and node coordinates used by Sionna. Geometry is included only in UI state and is not sent in GPU Channel control messages.</div>
+        <div class="scene-stage">
+          <div id="scene3d"></div>
+          <canvas id="scene" width="900" height="560" hidden></canvas>
+          <div class="scene-gainbar" id="sceneGainBar" hidden><span id="sceneGainMin">—</span><i></i><span id="sceneGainMax">—</span><span>dB per ray · hue = transmitter</span></div>
+          <div class="scene-toolbar">
+            <button type="button" id="sceneRaysToggle" aria-pressed="true">Rays</button>
+            <button type="button" id="sceneLabelsToggle" aria-pressed="true">Labels</button>
+            <button type="button" id="sceneResetView">Reset view</button>
+          </div>
+          <div class="scene-hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
+          <div class="scene-credit" id="sceneCredit" hidden></div>
+          <div class="scene-status" id="sceneStatus">Loading 3D scene…</div>
+        </div>
+        <div class="legend"><span><i class="dot" style="background:#0b6fa4"></i>gnb0</span><span><i class="dot" style="background:#6b3fa0"></i>gnb1</span><span><i class="dot" style="background:#c0392b"></i>Vehicle UE</span><span><i class="dot" style="background:#2e7d4f"></i>Pedestrian UE</span><span><i class="dot" style="background:#2b5f8a"></i>Reflection point</span><span>Ray colour = UE</span></div>
+        <div class="legend" id="sceneMaterials" hidden></div>
+        <div class="foot">Rays take the colour of the UE on the link, and the fainter and thinner a ray is the weaker that path. Specular propagation is reciprocal, so an uplink ray retraces its downlink path exactly; each node pair is therefore drawn once, from the downlink where there is one. The two directions still differ in gain — FDD puts them on different carriers and ITU material properties are frequency dependent — so the tables below carry both. Ground cover is coloured by what OpenStreetMap says it is — water, grass, woodland, pitch — and buildings by the ITU P.2040 material the solver reflects them with. The real triangle mesh Sionna ray-traces against, plus the interaction points of the strongest rays on every link, re-read at each update. Geometry is included only in UI state and is not sent in GPU Channel control messages.</div>
       </section>
       <section class="panel">
         <h2>Timing</h2>
@@ -563,6 +596,12 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     const CHART_WINDOW_MS = 1000;
     const CHART_POLL_MS = CHART_WINDOW_MS;
     const STATUS_POLL_MS = 500;
+    // The Sionna bridge publishes at --update-hz (10 in the native gates), but
+    // render() rebuilds every card and table in the page and cannot run that
+    // often. The scene is cheap by comparison, so it gets its own poll at the
+    // bridge's cadence and the dashboard keeps the slow one — otherwise eight
+    // of every ten Sionna updates never reach the screen.
+    const SCENE_POLL_MS = 100;
     const CHART_HISTORY_MS = CHART_WINDOW_MS * 2;
     let lastStatus = null;
     let lastRealtime = null;
@@ -863,6 +902,191 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       $('gpuMonitorNote').textContent=usage?.error?`Resource monitor error: ${usage.error}`:usage?.warning?`Partial hardware metric warning: ${usage.warning} · ${samplingText}`:`${samplingText} · SM is an average over the NVML sampling interval and is shown only in status cards. Time-series charts show completed 1,000 ms intervals using wall-clock timestamps; green lines mark Sionna channel ACKs.`;
     }
 
+    // Node colours, shared by the 2D projection below and — as NODE_PALETTE —
+    // by the WebGL viewer at the end of the document. Both must agree: a
+    // marker and every ray leaving it carry the same colour.
+    const NODE_PALETTE_2D = {
+      gnb: ['#0b6fa4', '#6b3fa0'],
+      car: ['#c0392b', '#d4722c'],
+      pedestrian: ['#2e7d4f', '#6a8f2a'],
+      unknown: ['#8a6d3b'],
+    };
+    function nodeHex(id, sionna) {
+      const kind = id.startsWith('gnb') ? 'gnb' : (sionna?.environment?.nodes?.[id]?.mobility || 'unknown');
+      const ramp = NODE_PALETTE_2D[kind] || NODE_PALETTE_2D.unknown;
+      return ramp[Number((id.match(/\d+$/) || ['0'])[0]) % ramp.length];
+    }
+    function nodeRgba(id, sionna, alpha) {
+      const hex = nodeHex(id, sionna);
+      const value = parseInt(hex.slice(1), 16);
+      return `rgba(${value >> 16 & 255},${value >> 8 & 255},${value & 255},${alpha})`;
+    }
+
+    // `window.sceneViewer` is installed by the WebGL module at the end of the
+    // document. It stays undefined when WebGL is unavailable, and the 2D
+    // projection below keeps the panel working.
+    function sceneRender(sionna) {
+      if (window.sceneViewer) { window.sceneViewer.update(sionna); return; }
+      drawScene(sionna);
+    }
+
+    // Same palette as the WebGL viewer, so the two renderers agree.
+    const KIND_HEX_2D = {
+      water:'#6fbfe4', grass:'#8ccf63', park:'#9ad97a', pitch:'#62c48a',
+      wood:'#5da65f', scrub:'#a7c98a', sand:'#e4d5a8',
+      road:'#232323', ground:'#e6e0d6',
+    };
+    const MATERIAL_HEX_2D = {
+      concrete:'#6b645d', brick:'#7c584a', glass:'#46687a', metal:'#646a71',
+      wood:'#7a6248', marble:'#8b8681', plasterboard:'#76706a',
+      plywood:'#7d6a52', chipboard:'#796751', floorboard:'#7f6a4f',
+      ceiling_board:'#847e76',
+      very_dry_ground:'#d8cfa8', medium_dry_ground:'#8ccf63', wet_ground:'#6fbfe4',
+    };
+    function surfaceHex2D(object) {
+      if (object.kind !== 'building') return KIND_HEX_2D[object.kind] || KIND_HEX_2D.ground;
+      return MATERIAL_HEX_2D[object.material] || '#6f6862';
+    }
+
+    function shade(hex, factor) {
+      const value = parseInt(hex.slice(1), 16);
+      const channel = shift => Math.max(0, Math.min(255, Math.round((value >> shift & 255) * factor)));
+      return `rgb(${channel(16)},${channel(8)},${channel(0)})`;
+    }
+
+    // Surfaces are coloured by ITU material, so the legend has to say which
+    // materials the scene actually contains — otherwise a scene that is
+    // almost all concrete just looks like a renderer that ignores material.
+    function renderMaterialLegend(mesh) {
+      const box = $('sceneMaterials');
+      if (!box) return;
+      const counts = new Map();
+      for (const object of mesh.objects || []) {
+        const key = object.kind === 'road' ? 'road surface' : object.material || 'unknown';
+        const entry = counts.get(key) || { count: 0, hex: surfaceHex2D(object) };
+        entry.count += 1;
+        counts.set(key, entry);
+      }
+      const items = [...counts.entries()].sort((a, b) => b[1].count - a[1].count);
+      box.innerHTML = '<span style="color:#8ca4b5">Surface material:</span>'
+        + items.map(([name, entry]) =>
+            `<span><i class="dot" style="background:${entry.hex};outline:1px solid #3a4c5a"></i>`
+            + `${esc(name.replace(/_/g, ' '))} · ${entry.count}</span>`).join('');
+      box.hidden = items.length === 0;
+    }
+
+    window.renderMaterialLegend = renderMaterialLegend;
+    let sceneMesh = null, sceneMeshRequested = false;
+    function ensureSceneMesh() {
+      if (sceneMeshRequested) return;
+      sceneMeshRequested = true;
+      fetch('/api/scene_mesh').then(response => response.json()).then(mesh => {
+        const credit = $('sceneCredit');
+        if (credit && mesh.source?.attribution) {
+          credit.textContent = mesh.source.attribution;
+          credit.hidden = false;
+        }
+        if (mesh.objects?.length) {
+          sceneMesh = mesh;
+          renderMaterialLegend(mesh);
+          sceneRender(lastStatus?.sionna);
+        }
+      }).catch(() => {});
+    }
+
+    // Draw the scene from its real triangles. The `scene_geometry` in the
+    // status record is only an axis-aligned box per mesh, which is fine for
+    // the six-box canyon but turns a city of bent roads into a heap of
+    // rectangles — so the mesh is preferred whenever it is available.
+    // Ground cover sits millimetres above the base plane, so depth alone
+    // cannot order it reliably. What each surface *is* decides who paints
+    // over whom; only buildings need real depth sorting among themselves.
+    const DRAW_ORDER = {
+      ground: 0, water: 1, wood: 1, grass: 1, park: 1, scrub: 1, sand: 1,
+      pitch: 2, road: 3, building: 4,
+    };
+
+    // The world does not move, so its projection and triangle list are built
+    // once per canvas size and blitted afterwards. At the 10 Hz scene poll,
+    // re-sorting a few thousand triangles every frame was itself enough to
+    // hold the picture back to about one update a second.
+    let sceneRaster = null;
+
+    function drawMeshScene(sionna, ctx, W, H) {
+      const positions = sionna?.positions || {};
+      const raw = p => [(p[0] - p[1]) * .707, (p[0] + p[1]) * .686 - (p[2] || 0) * .242];
+      if (sceneRaster && sceneRaster.width === W && sceneRaster.height === H) {
+        ctx.drawImage(sceneRaster.canvas, 0, 0, W, H);
+        drawSceneOverlay(ctx, sceneRaster.xyz, sionna);
+        return;
+      }
+      const world = [];
+      for (const object of sceneMesh.objects) {
+        const xs = object.positions;
+        for (let i = 0; i < xs.length; i += 3) world.push(raw([xs[i], xs[i + 1], xs[i + 2]]));
+      }
+      for (const position of Object.values(positions)) world.push(raw(position));
+      const pad = 30;
+      const xs = world.map(p => p[0]), ys = world.map(p => p[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const spanX = Math.max(1, maxX - minX), spanY = Math.max(1, maxY - minY);
+      const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY);
+      const offsetX = (W - spanX * scale) / 2, offsetY = (H - spanY * scale) / 2;
+      const xyz = p => { const q = raw(p); return [offsetX + (q[0] - minX) * scale, offsetY + (q[1] - minY) * scale]; };
+
+      // Painter's algorithm: one flat list of triangles, far ones first.
+      const triangles = [];
+      for (const object of sceneMesh.objects) {
+        const hex = surfaceHex2D(object), points = object.positions, indices = object.indices;
+        for (let i = 0; i < indices.length; i += 3) {
+          const a = indices[i] * 3, b = indices[i + 1] * 3, c = indices[i + 2] * 3;
+          const va = [points[a], points[a + 1], points[a + 2]];
+          const vb = [points[b], points[b + 1], points[b + 2]];
+          const vc = [points[c], points[c + 1], points[c + 2]];
+          // Lambert term against a fixed sun, so walls read darker than roofs
+          // and the extrusion has depth without a real renderer.
+          const ux = vb[0] - va[0], uy = vb[1] - va[1], uz = vb[2] - va[2];
+          const vx = vc[0] - va[0], vy = vc[1] - va[1], vz = vc[2] - va[2];
+          let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+          const length = Math.hypot(nx, ny, nz) || 1;
+          nx /= length; ny /= length; nz /= length;
+          const lambert = Math.abs(nx * 0.40 - ny * 0.31 + nz * 0.86);
+          triangles.push({
+            priority: DRAW_ORDER[object.kind] ?? 1,
+            fill: shade(hex, 0.72 + 0.28 * lambert),
+            depth: (va[0] + va[1] + vb[0] + vb[1] + vc[0] + vc[1]) / 6
+                 - (va[2] + vb[2] + vc[2]) / 60,
+            points: [xyz(va), xyz(vb), xyz(vc)],
+          });
+        }
+      }
+      triangles.sort((a, b) => a.priority - b.priority || a.depth - b.depth);
+      for (const triangle of triangles) {
+        ctx.beginPath();
+        ctx.moveTo(triangle.points[0][0], triangle.points[0][1]);
+        ctx.lineTo(triangle.points[1][0], triangle.points[1][1]);
+        ctx.lineTo(triangle.points[2][0], triangle.points[2][1]);
+        ctx.closePath();
+        ctx.fillStyle = triangle.fill;
+        // Stroking with the fill colour hides the hairline seams canvas
+        // leaves between adjacent triangles.
+        ctx.strokeStyle = triangle.fill;
+        ctx.lineWidth = 1;
+        ctx.fill();
+        ctx.stroke();
+      }
+      // Keep the finished surfaces so the next poll only redraws the overlay.
+      const cache = document.createElement('canvas');
+      cache.width = Math.max(1, Math.round(W * (window.devicePixelRatio || 1)));
+      cache.height = Math.max(1, Math.round(H * (window.devicePixelRatio || 1)));
+      const cacheCtx = cache.getContext('2d');
+      cacheCtx.scale(cache.width / W, cache.height / H);
+      cacheCtx.drawImage(ctx.canvas, 0, 0, W, H);
+      sceneRaster = { width: W, height: H, canvas: cache, xyz };
+      drawSceneOverlay(ctx, xyz, sionna);
+    }
+
     function drawScene(sionna) {
       const canvas=$('scene'), ctx=canvas.getContext('2d'), dpr=window.devicePixelRatio||1;
       const rect=canvas.getBoundingClientRect(), width=Math.round(rect.width*dpr), height=Math.round(rect.height*dpr);
@@ -871,48 +1095,63 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       const W=rect.width,H=rect.height,positions=sionna?.positions||{},nodes=Object.entries(positions);
       const geometry=sionna?.scene_geometry?.objects||[];
       const worldPoints=[...nodes.map(([,position])=>position),...geometry.flatMap(item=>(item.footprint_xy_m||[]).flatMap(point=>[[point[0],point[1],Number(item.z_min_m)||0],[point[0],point[1],Number(item.z_max_m)||0]]))];
-      ctx.clearRect(0,0,W,H);ctx.fillStyle='#07111a';ctx.fillRect(0,0,W,H);
-      if(!worldPoints.length){ctx.fillStyle='#7890a2';ctx.textAlign='center';ctx.fillText('Waiting for Sionna scene data',W/2,H/2);return}
+      ctx.clearRect(0,0,W,H);ctx.fillStyle='#eee9e0';ctx.fillRect(0,0,W,H);
+      ensureSceneMesh();
+      if(sceneMesh){drawMeshScene(sionna,ctx,W,H);return}
+      if(!worldPoints.length){ctx.fillStyle='#8a7f72';ctx.textAlign='center';ctx.fillText('Waiting for Sionna scene data',W/2,H/2);return}
 
       // Orthographic camera at roughly 76 degrees above the horizon: almost
       // top-down, with just enough height projection to preserve shallow 3D.
       const pad=42,raw=p=>[(Number(p[0])-Number(p[1]))*.707,(Number(p[0])+Number(p[1]))*.686-(Number(p[2])||0)*.242],projected=worldPoints.map(raw),xs=projected.map(p=>p[0]),ys=projected.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),spanX=Math.max(1,maxX-minX),spanY=Math.max(1,maxY-minY),scale=Math.min((W-2*pad)/spanX,(H-2*pad)/spanY),offsetX=(W-spanX*scale)/2,offsetY=(H-spanY*scale)/2;
       const xyz=p=>{const q=raw(p);return [offsetX+(q[0]-minX)*scale,offsetY+(q[1]-minY)*scale]};
       const atHeight=(points,z)=>(points||[]).map(point=>[point[0],point[1],z]);
-      const polygon=(points,fill,stroke='#526573')=>{if(!points?.length)return;ctx.beginPath();points.forEach((point,index)=>{const [x,y]=xyz(point);index?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()};
+      const polygon=(points,fill,stroke='#c2b8ae')=>{if(!points?.length)return;ctx.beginPath();points.forEach((point,index)=>{const [x,y]=xyz(point);index?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.closePath();ctx.fillStyle=fill;ctx.fill();ctx.strokeStyle=stroke;ctx.lineWidth=1;ctx.stroke()};
 
-      for(const item of geometry.filter(item=>item.kind==='ground')) polygon(atHeight(item.footprint_xy_m,Number(item.z_max_m)||0),'#17242b','#2b3b44');
+      for(const item of geometry.filter(item=>item.kind==='ground')) polygon(atHeight(item.footprint_xy_m,Number(item.z_max_m)||0),'#f2efe9','#e0dad0');
       for(const item of geometry.filter(item=>item.kind==='road')){
-        const z=Number(item.z_max_m)||0;polygon(atHeight(item.footprint_xy_m,z),'#303941','#56616a');
-        if(item.centerline_xy_m){const [start,end]=item.centerline_xy_m.map(point=>xyz([point[0],point[1],z+.02]));ctx.save();ctx.setLineDash([10,8]);ctx.strokeStyle='#d5b957';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(...start);ctx.lineTo(...end);ctx.stroke();ctx.restore()}
+        const z=Number(item.z_max_m)||0;polygon(atHeight(item.footprint_xy_m,z),'#fefefe','#c8c0b6');
+        if(item.centerline_xy_m){const [start,end]=item.centerline_xy_m.map(point=>xyz([point[0],point[1],z+.02]));ctx.save();ctx.setLineDash([10,8]);ctx.strokeStyle='#c8b06a';ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(...start);ctx.lineTo(...end);ctx.stroke();ctx.restore()}
       }
       const buildings=geometry.filter(item=>item.kind==='building').sort((a,b)=>{const depth=item=>(item.footprint_xy_m||[]).reduce((sum,p)=>sum+p[0]+p[1],0)/Math.max(1,(item.footprint_xy_m||[]).length);return depth(a)-depth(b)});
       for(const item of buildings){
-        const points=item.footprint_xy_m||[],z0=Number(item.z_min_m)||0,z1=Number(item.z_max_m)||0,height=Math.max(0,z1-z0),shade=Math.min(190,75+height*2),bottom=atHeight(points,z0),topFace=atHeight(points,z1);
-        for(let i=0;i<points.length;i++){const next=(i+1)%points.length,sideShade=Math.max(35,shade-(i%2?38:18));polygon([bottom[i],bottom[next],topFace[next],topFace[i]],`rgb(${sideShade},${Math.round(sideShade*.78)},${Math.round(sideShade*.62)})`,'#8f806f')}
-        polygon(topFace,`rgb(${shade},${Math.round(shade*.82)},${Math.round(shade*.68)})`,'#d9c3a4');
-        const center=points.reduce((sum,p)=>[sum[0]+p[0]/points.length,sum[1]+p[1]/points.length],[0,0]),[x,y]=xyz([center[0],center[1],z1]);ctx.fillStyle='#111a20';ctx.font='600 10px system-ui';ctx.textAlign='center';ctx.fillText(`${item.id} · ${fmt(height,0)}m`,x,y+3);
+        const points=item.footprint_xy_m||[],z0=Number(item.z_min_m)||0,z1=Number(item.z_max_m)||0,height=Math.max(0,z1-z0),bottom=atHeight(points,z0),topFace=atHeight(points,z1);
+        // #d9d0c9 roof over walls stepped toward the #c2b8ae casing, so the
+        // extrusion reads as depth without leaving the map palette.
+        for(let i=0;i<points.length;i++){const next=(i+1)%points.length,wall=i%2?'#c6bcb2':'#d0c7bf';polygon([bottom[i],bottom[next],topFace[next],topFace[i]],wall,'#b7ada3')}
+        polygon(topFace,'#d9d0c9','#b7ada3');
+        const center=points.reduce((sum,p)=>[sum[0]+p[0]/points.length,sum[1]+p[1]/points.length],[0,0]),[x,y]=xyz([center[0],center[1],z1]);
+        // A city-scale scene has dozens of buildings and their labels turn
+        // into a grey smear. Label only the ones whose roof is wide enough on
+        // screen to hold the text; the 3D view labels the rest on zoom.
+        const roofXs=topFace.map(point=>xyz(point)[0]),roofWidth=Math.max(...roofXs)-Math.min(...roofXs);
+        if(roofWidth>92){const label=`${item.id} · ${fmt(height,0)}m`;ctx.font='700 13px system-ui';ctx.textAlign='center';ctx.lineWidth=4;ctx.strokeStyle='rgba(255,255,255,.8)';ctx.strokeText(label,x,y+3);ctx.fillStyle='#6b6055';ctx.fillText(label,x,y+3)}
       }
+      drawSceneOverlay(ctx, xyz, sionna);
+    }
 
+    // Links, nodes and labels sit on top of whichever surface renderer ran.
+    function drawSceneOverlay(ctx, xyz, sionna) {
+      const positions = sionna?.positions || {}, nodes = Object.entries(positions);
       const channels=linkMap(sionna.channels);
       for(const g of ['gnb0','gnb1']) for(const u of ['ue0','ue1']) if(positions[g]&&positions[u]){
         const [x1,y1]=xyz(positions[g]),[x2,y2]=xyz(positions[u]),channel=channels[`${g}>${u}:sionna_rt`];
-        const gain=Number(channel?.strongest_tap_gain_db??-100),alpha=Math.max(.08,Math.min(.8,(gain+100)/80));
-        ctx.strokeStyle=`rgba(66,211,255,${alpha})`;ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+        const gain=Number(channel?.strongest_tap_gain_db??-100),alpha=Math.max(.12,Math.min(.85,(gain+100)/80));
+        ctx.strokeStyle=nodeRgba(u,sionna,alpha);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
       }
       if(positions.ue0&&positions.ue1){
-        const [x1,y1]=xyz(positions.ue0),[x2,y2]=xyz(positions.ue1),cross=channels['ue0>ue1:sionna_rt']||channels['ue1>ue0:sionna_rt'],gain=Number(cross?.strongest_tap_gain_db??-100),alpha=Math.max(.18,Math.min(.9,(gain+100)/80));ctx.save();ctx.setLineDash([7,5]);ctx.strokeStyle=`rgba(255,159,67,${alpha})`;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2,(y1+y2)/2-20,x2,y2);ctx.stroke();ctx.restore();
+        const [x1,y1]=xyz(positions.ue0),[x2,y2]=xyz(positions.ue1),cross=channels['ue0>ue1:sionna_rt']||channels['ue1>ue0:sionna_rt'],gain=Number(cross?.strongest_tap_gain_db??-100),alpha=Math.max(.2,Math.min(.9,(gain+100)/80));ctx.save();ctx.setLineDash([7,5]);ctx.strokeStyle=nodeRgba('ue0',sionna,alpha);ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2,(y1+y2)/2-20,x2,y2);ctx.stroke();ctx.restore();
       }
 
       const mobility=sionna?.environment?.nodes||{};
       for(const [id,position] of nodes){
-        const [x,y]=xyz(position),[gx,gy]=xyz([position[0],position[1],0]),kind=mobility[id]?.mobility||'unknown';ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle='#7890a2';ctx.beginPath();ctx.moveTo(gx,gy);ctx.lineTo(x,y);ctx.stroke();ctx.restore();ctx.lineWidth=2;ctx.strokeStyle='#e8fbff';
-        if(id.startsWith('gnb')){ctx.fillStyle='#42d3ff';ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.fill();ctx.stroke()}
-        else if(kind==='car'){ctx.fillStyle='#ff6577';ctx.fillRect(x-11,y-6,22,12);ctx.strokeRect(x-11,y-6,22,12);ctx.fillStyle='#101820';ctx.fillRect(x-7,y-8,5,3);ctx.fillRect(x+3,y-8,5,3)}
-        else{ctx.fillStyle='#53e58b';ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fill();ctx.stroke()}
-        ctx.fillStyle='#e9f2f8';ctx.font='600 12px system-ui';ctx.textAlign='left';ctx.fillText(`${id} · ${kind}`,x+13,y+4);
+        const [x,y]=xyz(position),[gx,gy]=xyz([position[0],position[1],0]),kind=mobility[id]?.mobility||'unknown',color=nodeHex(id,sionna);ctx.save();ctx.setLineDash([3,3]);ctx.strokeStyle=nodeRgba(id,sionna,.55);ctx.beginPath();ctx.moveTo(gx,gy);ctx.lineTo(x,y);ctx.stroke();ctx.restore();ctx.lineWidth=2;ctx.strokeStyle='#ffffff';ctx.fillStyle=color;
+        if(id.startsWith('gnb')){ctx.beginPath();ctx.arc(x,y,9,0,Math.PI*2);ctx.fill();ctx.stroke()}
+        else if(kind==='car'){ctx.fillRect(x-11,y-6,22,12);ctx.strokeRect(x-11,y-6,22,12);ctx.fillStyle='#ffffff';ctx.fillRect(x-7,y-8,5,3);ctx.fillRect(x+3,y-8,5,3)}
+        else{ctx.beginPath();ctx.arc(x,y,7,0,Math.PI*2);ctx.fill();ctx.stroke()}
+        ctx.font='700 15px system-ui';ctx.textAlign='left';ctx.lineWidth=4;ctx.strokeStyle='rgba(255,255,255,.85)';ctx.strokeText(`${id} · ${kind}`,x+15,y+5);ctx.fillStyle='#4a4136';ctx.fillText(`${id} · ${kind}`,x+15,y+5);
       }
     }
+
 
     function render(data) {
       lastStatus=data; const feeds=data.feeds||{}, s=data.sionna, telemetry=data.telemetry||{}, delivery=data.delivery||{}, timing=s?.timing_ms||{}, env=s?.environment||{}, runtime=data.sionna_runtime, gpuUsage=data.gpu_usage, history=data.history||{};
@@ -944,7 +1183,6 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       renderNodeCards(s);
       renderRanCards(data.ran);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
-      drawScene(s);
     }
     // Two loops with very different costs. render() rebuilds every card,
     // table and canvas in the page, which is far too expensive to run at
@@ -980,8 +1218,537 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       laneSelection[linkId]=button.dataset.port;
       if(lastEdgeArgs)renderEdgeCards(...lastEdgeArgs);
     });
-    window.addEventListener('resize',()=>{drawScene(lastStatus?.sionna);redrawCharts()});
-    poll(); pollCharts(); setInterval(poll,STATUS_POLL_MS); setInterval(pollCharts,CHART_POLL_MS);
+    window.addEventListener('resize',()=>{sceneRender(lastStatus?.sionna);redrawCharts()});
+    // history_ms=0 keeps this off the retained telemetry buffer: the scene
+    // needs positions and path polylines, nothing historical.
+    let sceneInFlight=false;
+    async function pollScene(){
+      if(sceneInFlight)return; sceneInFlight=true;
+      try{const r=await fetch('/api/status?history_ms=0',{cache:'no-store'});if(!r.ok)throw Error(r.status);
+        const data=await r.json(); if(data.sionna){lastStatus={...(lastStatus||{}),...data}; sceneRender(data.sionna)}}
+      catch(e){/* poll() owns feed-error reporting */}
+      finally{sceneInFlight=false}
+    }
+    poll(); pollCharts(); pollScene();
+    setInterval(poll,STATUS_POLL_MS); setInterval(pollCharts,CHART_POLL_MS); setInterval(pollScene,SCENE_POLL_MS);
+  </script>
+  <script type="importmap">
+    {"imports":{"three":"/vendor/three.module.min.js"}}
+  </script>
+  <script type="module">
+    // WebGL viewer for the Sionna scene. It draws the real triangle mesh the
+    // solver traces against (fetched once from /api/scene_mesh) and the
+    // interaction points of the strongest rays on every link, which arrive
+    // with each status poll as `channels[].path_polylines`.
+    //
+    // Sionna is Z-up, so the world keeps Sionna metres verbatim and the
+    // camera's up vector is moved instead of rotating the geometry. Every
+    // coordinate below is therefore directly comparable to the numbers in
+    // the status JSON.
+    import * as THREE from 'three';
+    import { OrbitControls } from '/vendor/OrbitControls.js';
+    // WebGL ignores lineWidth on LineBasicMaterial almost everywhere, so a
+    // ray drawn with it is always one pixel. Line2 draws the line as screen-
+    // space quads, which is the only way to get a ray thick enough to follow.
+    import { Line2 } from '/vendor/Line2.js';
+    import { LineGeometry } from '/vendor/LineGeometry.js';
+    import { LineMaterial } from '/vendor/LineMaterial.js';
+
+    const host = document.getElementById('scene3d');
+    const statusOverlay = document.getElementById('sceneStatus');
+    const gainBar = document.getElementById('sceneGainBar');
+
+    function fail(message) {
+      host.hidden = true;
+      const fallback = document.getElementById('scene');
+      if (fallback) fallback.hidden = false;
+      if (statusOverlay) {
+        statusOverlay.textContent = message;
+        statusOverlay.classList.add('corner');
+      }
+      document.getElementById('sceneGainBar')?.setAttribute('hidden', '');
+      document.querySelector('.scene-toolbar')?.setAttribute('hidden', '');
+      document.querySelector('.scene-hint')?.setAttribute('hidden', '');
+      // The 2D projection measures the canvas it draws into, so a status
+      // poll that landed while it was still hidden produced nothing. Ask
+      // the page to redraw now that the element has a size.
+      window.dispatchEvent(new Event('resize'));
+    }
+
+    let renderer;
+    try {
+      // Deliberately NOT logarithmicDepthBuffer. It would help the precision
+      // problem below, but three.js implements it by writing gl_FragDepth in
+      // the fragment shader, and a shader-written depth replaces the
+      // rasteriser's — which discards polygon offset. The decal offsets on the
+      // ground cover are the reliable fix, so they win.
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    } catch (error) {
+      fail('WebGL unavailable — falling back to the 2D projection');
+      throw error;
+    }
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // A map wants flat, faithful fills. ACES rolls highlights off and would
+    // pull the OSM land and building values away from what the legend and
+    // the CSS gradient show.
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    host.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.Fog(0xe6e0d6, 220, 720);
+
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 4000);
+    camera.up.set(0, 0, 1);
+    camera.position.set(120, -140, 95);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.maxPolarAngle = Math.PI * 0.495;   // never drop under the ground
+    controls.minDistance = 12;
+    controls.maxDistance = 900;
+
+    // Heavy ambient plus one soft sun: enough directional light to read
+    // building height, not enough to shade a facade away from its fill.
+    scene.add(new THREE.AmbientLight(0xffffff, 2.2));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd8d2c8, 1.0));
+    const sun = new THREE.DirectionalLight(0xfffaf0, 1.15);
+    sun.position.set(90, -70, 160);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -0.0006;
+    scene.add(sun);
+
+    const grid = new THREE.GridHelper(600, 60, 0xc9c0b4, 0xded7cc);
+    grid.rotation.x = Math.PI / 2;   // GridHelper lies in XZ; Sionna wants XY
+    grid.position.z = -0.05;
+    scene.add(grid);
+
+    const worldGroup = new THREE.Group();
+    const rayGroup = new THREE.Group();
+    const nodeGroup = new THREE.Group();
+    scene.add(worldGroup, rayGroup, nodeGroup);
+
+    // Fills taken from the OpenStreetMap standard style (openstreetmap-carto,
+    // CC0): building #d9d0c9 over casing #c2b8ae, minor road white over a grey
+    // casing, land #f2efe9. Nothing here needs an OSM tile or OSM data.
+    // Ground cover and roads are coloured by what they are — a lawn has to
+    // read as green and a river as water — while buildings stay coloured by
+    // their ITU P.2040 material, which is what decides how they reflect.
+    const KIND_COLORS = {
+      water: 0x6fbfe4, grass: 0x8ccf63, park: 0x9ad97a, pitch: 0x62c48a,
+      wood: 0x5da65f, scrub: 0xa7c98a, sand: 0xe4d5a8,
+      road: 0x232323, ground: 0xe6e0d6,
+    };
+    // Buildings: the same material distinctions, darkened so they sit clearly
+    // above the ground cover instead of blending into it.
+    const MATERIAL_COLORS = {
+      concrete: 0x6b645d, brick: 0x7c584a, glass: 0x46687a, metal: 0x646a71,
+      wood: 0x7a6248, marble: 0x8b8681, plasterboard: 0x76706a,
+      plywood: 0x7d6a52, chipboard: 0x796751, floorboard: 0x7f6a4f,
+      ceiling_board: 0x847e76,
+      very_dry_ground: 0xd8cfa8, medium_dry_ground: 0x8ccf63, wet_ground: 0x6fbfe4,
+    };
+    const UNKNOWN_MATERIAL_COLOR = 0x6f6862;
+    function surfaceColor(object) {
+      if (object.kind !== 'building') {
+        return KIND_COLORS[object.kind] ?? KIND_COLORS.ground;
+      }
+      return MATERIAL_COLORS[object.material] ?? UNKNOWN_MATERIAL_COLOR;
+    }
+
+    // Paint order for the flat surfaces stacked on the ground plane. The
+    // millimetre gaps between them exist so the *solver* never has to pick
+    // arbitrarily between two coplanar faces; they are far too small to order
+    // on screen, so the renderer is told the order explicitly instead.
+    const SURFACE_ORDER = {
+      ground: 0, water: 1, wood: 1, grass: 1, park: 1, scrub: 1, sand: 1,
+      pitch: 2, road: 3, building: 0,
+    };
+
+    const MATERIALS = new Map();
+    function surfaceMaterial(object) {
+      const color = surfaceColor(object);
+      const order = SURFACE_ORDER[object.kind] ?? 0;
+      const key = `${color}:${order}`;
+      if (!MATERIALS.has(key)) {
+        MATERIALS.set(key, new THREE.MeshStandardMaterial({
+          color, roughness: 1.0, metalness: 0.0,
+          // Decal bias: each layer is pulled a little further toward the
+          // camera in depth-buffer space, which is what actually keeps a
+          // lawn above the ground and a road above the lawn.
+          polygonOffset: order > 0,
+          polygonOffsetFactor: -order,
+          polygonOffsetUnits: -4 * order,
+        }));
+      }
+      return MATERIALS.get(key);
+    }
+    const EDGE_MATERIAL = new THREE.LineBasicMaterial({ color: 0xc2b8ae });
+
+    let sceneBounds = null;
+    let framedOnce = false;
+
+    // Hue identifies the transmitter and never moves; received power is
+    // carried by saturation and lightness alone, so a weak ray fades toward
+    // the map ground while staying recognisably its transmitter's colour.
+    // (A plain RGB lerp toward the cream ground would drag every hue warm.)
+    const GROUND_LIGHTNESS = 0.93;
+    function rayColor(transmitterColor, t) {
+      const clamped = Math.min(1, Math.max(0, t));
+      const fade = 0.6 * (1 - clamped);
+      const hsl = new THREE.Color(transmitterColor).getHSL({});
+      return new THREE.Color().setHSL(
+        hsl.h,
+        hsl.s * (1 - 0.45 * fade),
+        hsl.l + (GROUND_LIGHTNESS - hsl.l) * fade,
+      );
+    }
+
+    function labelSprite(text, color) {
+      const scale = 4;
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      context.font = `700 ${15 * scale}px ui-sans-serif,system-ui,sans-serif`;
+      const width = Math.ceil(context.measureText(text).width) + 16 * scale;
+      canvas.width = width;
+      canvas.height = 22 * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.font = `700 ${15 * scale}px ui-sans-serif,system-ui,sans-serif`;
+      ctx.fillStyle = 'rgba(8,16,25,.78)';
+      ctx.beginPath();
+      ctx.roundRect(0, 0, canvas.width, canvas.height, 6 * scale);
+      ctx.fill();
+      ctx.fillStyle = color;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, 8 * scale, canvas.height / 2);
+      const texture = new THREE.CanvasTexture(canvas);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
+      sprite.renderOrder = 10;
+      // A fixed world height keeps the label legible while orbiting; the
+      // width follows the texture aspect so the text is never stretched.
+      const height = 6.5;
+      sprite.scale.set(height * (canvas.width / canvas.height), height, 1);
+      return sprite;
+    }
+
+    function disposeChildren(group) {
+      for (const child of group.children) {
+        child.traverse?.(item => {
+          item.geometry?.dispose?.();
+          const shared = item.material === EDGE_MATERIAL
+            || (item.material && [...MATERIALS.values()].includes(item.material));
+          if (item.material && !shared) {
+            item.material.map?.dispose?.();
+            item.material.dispose?.();
+          }
+        });
+      }
+      group.clear();
+    }
+
+    function buildWorld(mesh) {
+      disposeChildren(worldGroup);
+      const box = new THREE.Box3();
+      for (const object of mesh.objects || []) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(object.positions, 3));
+        geometry.setIndex(object.indices);
+        geometry.computeVertexNormals();
+        geometry.computeBoundingBox();
+        const item = new THREE.Mesh(geometry, surfaceMaterial(object));
+        item.renderOrder = SURFACE_ORDER[object.kind] ?? 0;
+        item.castShadow = object.kind === 'building';
+        item.receiveShadow = true;
+        item.name = object.id;
+        worldGroup.add(item);
+        if (object.kind === 'building') {
+          const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 25), EDGE_MATERIAL);
+          worldGroup.add(edges);
+        }
+        box.union(geometry.boundingBox);
+      }
+      if (!box.isEmpty()) {
+        sceneBounds = box;
+        const size = box.getSize(new THREE.Vector3());
+        const span = Math.max(size.x, size.y);
+        grid.scale.setScalar(Math.max(1, span / 300));
+        scene.fog.near = span * 1.1;
+        scene.fog.far = span * 4.5;
+        sun.shadow.camera.left = -span;
+        sun.shadow.camera.right = span;
+        sun.shadow.camera.top = span;
+        sun.shadow.camera.bottom = -span;
+        sun.shadow.camera.far = span * 6;
+        sun.shadow.camera.updateProjectionMatrix();
+      }
+      if (statusOverlay) statusOverlay.hidden = true;
+      window.renderMaterialLegend?.(mesh);
+      const credit = document.getElementById('sceneCredit');
+      if (credit && mesh.source?.attribution) {
+        credit.textContent = mesh.source.attribution;
+        credit.hidden = false;
+      }
+    }
+
+    function frameScene() {
+      if (!sceneBounds) return;
+      const center = sceneBounds.getCenter(new THREE.Vector3());
+      const size = sceneBounds.getSize(new THREE.Vector3());
+      const radius = Math.max(size.x, size.y, size.z) * 0.5;
+      const distance = radius / Math.sin((camera.fov * Math.PI) / 360) * 1.35;
+      controls.target.copy(center);
+      // Look in from the -Y quadrant and about 34 degrees up: high enough to
+      // read the street layout, low enough that the buildings have height.
+      camera.position.set(
+        center.x + distance * 0.62,
+        center.y - distance * 0.66,
+        center.z + distance * 0.56,
+      );
+      // Depth precision is set by the near:far ratio, and a 600 m scene whose
+      // ground cover sits a centimetre off the ground has none to spare. Both
+      // planes are fitted to the scene rather than left at fixed defaults.
+      camera.near = Math.max(1.0, radius / 40);
+      camera.far = distance * 3 + radius * 2;
+      camera.updateProjectionMatrix();
+      // The default 900 m ceiling is smaller than the framing distance of a
+      // campus-sized scene, so the opening view would be clamped inside it.
+      controls.maxDistance = distance * 2.5;
+      controls.minDistance = Math.max(5, radius / 60);
+      controls.update();
+    }
+
+    // One palette drives both a node's marker and the rays leaving it, so a
+    // ray can be traced back to its transmitter by colour alone. Values are
+    // dark enough to read against the light map ground. Nodes of the same
+    // kind take successive entries, keyed by the digits in their id, so
+    // gnb0 and gnb1 stay tellable apart.
+    const NODE_PALETTE = {
+      gnb: [0x0b6fa4, 0x6b3fa0],
+      car: [0xc0392b, 0xd4722c],
+      pedestrian: [0x2e7d4f, 0x6a8f2a],
+      unknown: [0x8a6d3b],
+    };
+    function nodeKind(id, sionna) {
+      if (id.startsWith('gnb')) return 'gnb';
+      return sionna?.environment?.nodes?.[id]?.mobility || 'unknown';
+    }
+    function nodeColor(id, kind) {
+      const ramp = NODE_PALETTE[kind] || NODE_PALETTE.unknown;
+      const index = Number((id.match(/\d+$/) || ['0'])[0]);
+      return ramp[index % ramp.length];
+    }
+
+    function buildNodes(sionna) {
+      disposeChildren(nodeGroup);
+      const positions = sionna?.positions || {};
+      const mobility = sionna?.environment?.nodes || {};
+      for (const [id, position] of Object.entries(positions)) {
+        const isGnb = id.startsWith('gnb');
+        const kind = isGnb ? 'gnb' : (mobility[id]?.mobility || 'unknown');
+        const color = nodeColor(id, kind);
+        // Flat and unlit-looking, like a map symbol rather than a rendered
+        // object, so the marker colour is exactly the ray colour.
+        const material = new THREE.MeshStandardMaterial({
+          color, roughness: 0.6, metalness: 0.0, emissive: color, emissiveIntensity: 0.18,
+        });
+        let body;
+        if (isGnb) {
+          body = new THREE.Group();
+          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, position[2], 12), material);
+          mast.rotation.x = Math.PI / 2;
+          mast.position.set(position[0], position[1], position[2] / 2);
+          const head = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 3.2), material);
+          head.position.set(position[0], position[1], position[2] + 1.2);
+          body.add(mast, head);
+        } else if (kind === 'car') {
+          body = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.9, 1.5), material);
+          body.position.set(position[0], position[1], position[2]);
+        } else {
+          body = new THREE.Mesh(new THREE.CapsuleGeometry(0.35, 1.1, 4, 10), material);
+          body.rotation.x = Math.PI / 2;
+          body.position.set(position[0], position[1], position[2]);
+        }
+        body.traverse(item => { item.castShadow = true; });
+        nodeGroup.add(body);
+
+        // The drop line is what makes the height of a node readable at all
+        // in an orbiting view; without it a mast and a rooftop look alike.
+        const drop = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([
+            new THREE.Vector3(position[0], position[1], 0),
+            new THREE.Vector3(position[0], position[1], position[2]),
+          ]),
+          new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.55, dashSize: 1.2, gapSize: 1.0 }),
+        );
+        drop.computeLineDistances();
+        nodeGroup.add(drop);
+
+        const label = labelSprite(`${id} · ${kind}`, `#${color.toString(16).padStart(6, '0')}`);
+        label.position.set(position[0], position[1], position[2] + (isGnb ? 7.0 : 4.0));
+        label.userData.isLabel = true;
+        label.visible = showLabels;
+        nodeGroup.add(label);
+      }
+    }
+
+    const BOUNCE_GEOMETRY = new THREE.SphereGeometry(0.9, 12, 8);
+    // Neutral on purpose: an interaction point belongs to the scene, not to
+    // any one transmitter, so it must not read as a fifth node colour.
+    const BOUNCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2b5f8a });
+
+    // LineMaterial needs the drawing-buffer size to convert its pixel width,
+    // so every live ray material is kept for the resize handler.
+    let rayMaterials = [];
+    let lastSionna = null;
+
+    function buildRays(sionna) {
+      disposeChildren(rayGroup);
+      rayMaterials = [];
+      // Specular propagation is reciprocal: the uplink paths are the downlink
+      // paths walked backwards, on exactly the same geometry. Drawing both
+      // would put two lines on top of each other and show only whichever was
+      // drawn last, so each node pair is drawn once. Downlink is preferred
+      // because it exists for every gNB link; a UE-to-UE pair has neither.
+      const DIRECTION_RANK = { downlink: 0, uplink: 1, crosstalk: 2 };
+      const chosen = new Map();
+      for (const channel of sionna?.channels || []) {
+        if (!channel.path_polylines?.length) continue;
+        const key = [channel.source, channel.destination].sort().join('|')
+          + ':' + (channel.model || '');
+        const previous = chosen.get(key);
+        const rank = DIRECTION_RANK[channel.direction] ?? 3;
+        if (!previous || rank < (DIRECTION_RANK[previous.direction] ?? 3)) {
+          chosen.set(key, channel);
+        }
+      }
+      const channels = [...chosen.values()];
+      if (!channels.length) {
+        if (gainBar) gainBar.hidden = true;
+        return;
+      }
+      const gains = channels.flatMap(channel => channel.path_polylines.map(line => line.gain_db));
+      const minGain = Math.min(...gains);
+      const maxGain = Math.max(...gains);
+      const span = Math.max(1e-6, maxGain - minGain);
+      if (gainBar) {
+        gainBar.hidden = false;
+        document.getElementById('sceneGainMin').textContent = minGain.toFixed(0);
+        document.getElementById('sceneGainMax').textContent = maxGain.toFixed(0);
+      }
+
+      const bouncePoints = [];
+      for (const channel of channels) {
+        // Coloured by the UE on the link, not by whichever end transmits: a
+        // path belongs to a handset, and with one path per pair there is no
+        // direction left for a transmitter colour to encode. A UE-to-UE pair
+        // has no gNB end, so its source stands in.
+        const ueEnd = channel.destination.startsWith('gnb') ? channel.source : channel.destination;
+        const transmitter = nodeColor(ueEnd, nodeKind(ueEnd, sionna));
+        for (const line of channel.path_polylines) {
+          const normalized = (line.gain_db - minGain) / span;
+          const points = line.points.map(point => new THREE.Vector3(point[0], point[1], point[2]));
+          const geometry = new LineGeometry();
+          geometry.setPositions(line.points.flat());
+          const material = new LineMaterial({
+            color: rayColor(transmitter, normalized),
+            // Screen-space pixels. Stronger paths are drawn thicker as well as
+            // more solid, so the carrying rays stand out at any zoom.
+            linewidth: 1.0 + 1.6 * normalized,
+            transparent: true,
+            // The weakest rays stay visible but recede, so a dense scene still
+            // reads as "these two or three carry the link". Normal blending,
+            // not additive: on a light ground additive light pushes toward
+            // white and erases the ray.
+            opacity: 0.35 + 0.6 * normalized,
+            depthWrite: false,
+            dashed: false,
+          });
+          material.resolution.set(host.clientWidth || 1, host.clientHeight || 1);
+          rayMaterials.push(material);
+          const curve = new Line2(geometry, material);
+          curve.computeLineDistances();
+          curve.renderOrder = 5;
+          rayGroup.add(curve);
+          for (let i = 1; i < points.length - 1; i++) bouncePoints.push(points[i]);
+        }
+      }
+      if (bouncePoints.length) {
+        const bounces = new THREE.InstancedMesh(BOUNCE_GEOMETRY, BOUNCE_MATERIAL, bouncePoints.length);
+        const matrix = new THREE.Matrix4();
+        bouncePoints.forEach((point, index) => {
+          matrix.makeTranslation(point.x, point.y, point.z);
+          bounces.setMatrixAt(index, matrix);
+        });
+        bounces.instanceMatrix.needsUpdate = true;
+        rayGroup.add(bounces);
+      }
+      rayGroup.visible = showRays;
+    }
+
+    let showLabels = true;
+    let showRays = true;
+    document.getElementById('sceneRaysToggle').addEventListener('click', event => {
+      showRays = !showRays;
+      rayGroup.visible = showRays;
+      event.currentTarget.setAttribute('aria-pressed', String(showRays));
+    });
+    document.getElementById('sceneLabelsToggle').addEventListener('click', event => {
+      showLabels = !showLabels;
+      nodeGroup.traverse(item => { if (item.userData.isLabel) item.visible = showLabels; });
+      event.currentTarget.setAttribute('aria-pressed', String(showLabels));
+    });
+    document.getElementById('sceneResetView').addEventListener('click', frameScene);
+
+    function resize() {
+      const width = host.clientWidth || 1;
+      const height = host.clientHeight || 1;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      for (const material of rayMaterials) material.resolution.set(width, height);
+    }
+    new ResizeObserver(resize).observe(host);
+    resize();
+
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      renderer.render(scene, camera);
+    });
+
+    // The mesh is written once per bridge process, but the bridge may still
+    // be initialising its scene when the page loads, so a missing sidecar is
+    // retried rather than treated as an error.
+    let meshLoaded = false;
+    async function loadMesh() {
+      if (meshLoaded) return;
+      try {
+        const response = await fetch('/api/scene_mesh');
+        const mesh = await response.json();
+        if (!mesh.objects?.length) return;
+        buildWorld(mesh);
+        meshLoaded = true;
+        if (!framedOnce) { frameScene(); framedOnce = true; }
+      } catch (error) {
+        if (statusOverlay) statusOverlay.textContent = `Scene mesh unavailable: ${error}`;
+      }
+    }
+    loadMesh();
+
+    window.sceneViewer = {
+      update(sionna) {
+        if (!sionna) return;
+        lastSionna = sionna;
+        if (!meshLoaded) loadMesh();
+        buildNodes(sionna);
+        buildRays(sionna);
+      },
+      resize,
+    };
   </script>
 </body>
 </html>

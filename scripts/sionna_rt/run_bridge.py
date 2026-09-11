@@ -89,12 +89,62 @@ PEDESTRIAN_SPEED_MPS = 1.4
 
 @dataclass(frozen=True)
 class Motion:
+    """Where a node is at a given elapsed time, in Sionna scene metres.
+
+    Three shapes, in order of generality. A constant `velocity` is a straight
+    drift. Adding `x_bounds` makes it bounce along the x axis, which is what
+    the built-in street-canyon layouts use. `waypoints` replaces both with a
+    polyline walked at `speed_mps`, either turning back at the ends
+    (``pingpong``) or closing the ring (``loop``) — the latter is what lets a
+    pedestrian circle a building, which no axis-aligned route can express.
+    """
+
     start: tuple[float, float, float]
     velocity: tuple[float, float, float]
     x_bounds: tuple[float, float] | None = None
     mobility: str = "static"
+    waypoints: tuple[tuple[float, float, float], ...] = ()
+    route_mode: str = "pingpong"
+    speed_mps: float = 0.0
+
+    def _route(self) -> tuple[tuple[tuple[float, float, float], ...], list[float], float]:
+        """The walked polyline, its cumulative lengths and its total length."""
+
+        points = list(self.waypoints)
+        if self.route_mode == "loop" and points[0] != points[-1]:
+            points.append(points[0])
+        lengths = [0.0]
+        for previous, current in zip(points, points[1:]):
+            lengths.append(
+                lengths[-1] + math.dist(previous, current)
+            )
+        return tuple(points), lengths, lengths[-1]
+
+    def _travelled(self, elapsed_seconds: float, total: float) -> tuple[float, float]:
+        """Distance along the polyline and the direction of travel (±1)."""
+
+        if total <= 0.0 or self.speed_mps == 0.0:
+            return 0.0, 1.0
+        distance = self.speed_mps * elapsed_seconds
+        if self.route_mode == "loop":
+            return distance % total, 1.0
+        phase = distance % (2.0 * total)
+        return (phase, 1.0) if phase <= total else (2.0 * total - phase, -1.0)
 
     def position_at(self, elapsed_seconds: float) -> tuple[float, float, float]:
+        if len(self.waypoints) >= 2:
+            points, lengths, total = self._route()
+            travelled, _ = self._travelled(elapsed_seconds, total)
+            for index in range(len(points) - 1):
+                if travelled <= lengths[index + 1] or index == len(points) - 2:
+                    segment = lengths[index + 1] - lengths[index]
+                    ratio = 0.0 if segment <= 0.0 else (travelled - lengths[index]) / segment
+                    ratio = min(1.0, max(0.0, ratio))
+                    return tuple(  # type: ignore[return-value]
+                        a + (b - a) * ratio
+                        for a, b in zip(points[index], points[index + 1])
+                    )
+            return points[-1]
         position = tuple(
             origin + elapsed_seconds * speed
             for origin, speed in zip(self.start, self.velocity)
@@ -110,6 +160,19 @@ class Motion:
         return (x, position[1], position[2])
 
     def velocity_at(self, elapsed_seconds: float) -> tuple[float, float, float]:
+        if len(self.waypoints) >= 2:
+            points, lengths, total = self._route()
+            travelled, direction = self._travelled(elapsed_seconds, total)
+            for index in range(len(points) - 1):
+                if travelled <= lengths[index + 1] or index == len(points) - 2:
+                    segment = lengths[index + 1] - lengths[index]
+                    if segment <= 0.0:
+                        return (0.0, 0.0, 0.0)
+                    return tuple(  # type: ignore[return-value]
+                        (b - a) / segment * self.speed_mps * direction
+                        for a, b in zip(points[index], points[index + 1])
+                    )
+            return (0.0, 0.0, 0.0)
         if self.x_bounds is None or self.velocity[0] == 0.0:
             return self.velocity
         low, high = self.x_bounds
@@ -160,6 +223,14 @@ class ScenarioDefinition:
     nodes: dict[str, ScenarioNode]
     links: tuple[ScenarioLink, ...]
     scene: str | None = None
+    # None means "leave the --simple-road flag alone". A scene that ships its
+    # own ground and roads has to be able to say so, because splitting a
+    # floor it does not have would abort the run.
+    simple_road: bool | None = None
+    # Solver settings the scenario pins. Only the keys it names are applied,
+    # so an example can record what it was traced with — which mechanisms
+    # were on decides how many paths exist at all — without freezing the rest.
+    solver: dict[str, Any] | None = None
 
 
 def _array_spec(value: Any, *, where: str) -> ArraySpec:
@@ -226,14 +297,49 @@ def load_scenario_config(path: pathlib.Path) -> ScenarioDefinition:
             x_bounds = (float(route[0]), float(route[1]))
             if not all(math.isfinite(item) for item in x_bounds) or x_bounds[0] >= x_bounds[1]:
                 raise ValueError(f"nodes.{node_id}.route_x_m must have finite min < max")
+        raw_route = value.get("route_m")
+        waypoints: tuple[tuple[float, float, float], ...] = ()
+        route_mode = str(value.get("route_mode", "pingpong"))
+        speed_mps = 0.0
+        if raw_route is not None:
+            if not isinstance(raw_route, list) or len(raw_route) < 2:
+                raise ValueError(f"nodes.{node_id}.route_m needs at least two points")
+            waypoints = tuple(
+                _finite_vector(point, where=f"nodes.{node_id}.route_m[{index}]")
+                for index, point in enumerate(raw_route)
+            )
+            if route_mode not in ("pingpong", "loop"):
+                raise ValueError(
+                    f"nodes.{node_id}.route_mode must be 'pingpong' or 'loop'"
+                )
+            speed = value.get("speed_mps")
+            if not isinstance(speed, (int, float)) or isinstance(speed, bool):
+                raise ValueError(f"nodes.{node_id}.speed_mps must accompany route_m")
+            speed_mps = float(speed)
+            if not math.isfinite(speed_mps) or speed_mps <= 0.0:
+                raise ValueError(f"nodes.{node_id}.speed_mps must be positive")
+            if x_bounds is not None:
+                raise ValueError(
+                    f"nodes.{node_id} cannot set both route_m and route_x_m"
+                )
+        # A routed node starts on its route, so start_m is optional there and
+        # the first waypoint stands in for it.
+        raw_start = value.get("start_m")
+        if raw_start is None and waypoints:
+            start = waypoints[0]
+        else:
+            start = _finite_vector(raw_start, where=f"nodes.{node_id}.start_m")
         motion = Motion(
-            _finite_vector(value.get("start_m"), where=f"nodes.{node_id}.start_m"),
+            start,
             _finite_vector(
                 value.get("velocity_mps", [0.0, 0.0, 0.0]),
                 where=f"nodes.{node_id}.velocity_mps",
             ),
             x_bounds,
             str(value.get("mobility", "static")),
+            waypoints,
+            route_mode,
+            speed_mps,
         )
         nodes[node_id] = ScenarioNode(motion, tx_array, rx_array)
 
@@ -272,7 +378,60 @@ def load_scenario_config(path: pathlib.Path) -> ScenarioDefinition:
         raise ValueError("scenario name must be a non-empty string")
     if scene is not None and (not isinstance(scene, str) or not scene):
         raise ValueError("scenario scene must be a non-empty string")
-    return ScenarioDefinition(name, nodes, tuple(links), scene)
+    simple_road = root.get("simple_road")
+    if simple_road is not None and not isinstance(simple_road, bool):
+        raise ValueError("scenario simple_road must be true or false")
+    solver = solver_settings(root.get("solver"))
+    return ScenarioDefinition(name, nodes, tuple(links), scene, simple_road, solver)
+
+
+# Scenario `solver` keys, mapped to the argparse destination each one sets.
+SOLVER_INTEGER_KEYS = {
+    "max_depth": "max_depth",
+    "samples_per_source": "samples_per_src",
+    "seed": "seed",
+    "path_polylines": "path_polylines",
+}
+SOLVER_PROPAGATION_KEYS = (
+    "los", "specular_reflection", "diffuse_reflection", "refraction",
+    "diffraction",
+)
+
+
+def solver_settings(raw: Any) -> dict[str, Any] | None:
+    """Validate a scenario's `solver` block into argparse destinations."""
+
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("scenario solver must be an object")
+    settings: dict[str, Any] = {}
+    for key, destination in SOLVER_INTEGER_KEYS.items():
+        if key not in raw:
+            continue
+        value = raw[key]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise ValueError(f"solver.{key} must be a non-negative integer")
+        if key != "path_polylines" and value <= 0:
+            raise ValueError(f"solver.{key} must be positive")
+        settings[destination] = value
+    propagation = raw.get("propagation")
+    if propagation is not None:
+        if not isinstance(propagation, dict):
+            raise ValueError("solver.propagation must be an object")
+        for key, value in propagation.items():
+            if key not in SOLVER_PROPAGATION_KEYS:
+                allowed = ", ".join(SOLVER_PROPAGATION_KEYS)
+                raise ValueError(
+                    f"unknown solver.propagation key {key!r}; allowed: {allowed}"
+                )
+            if not isinstance(value, bool):
+                raise ValueError(f"solver.propagation.{key} must be true or false")
+            settings[key] = value
+    unknown = set(raw) - set(SOLVER_INTEGER_KEYS) - {"propagation"}
+    if unknown:
+        raise ValueError(f"unknown solver keys: {', '.join(sorted(unknown))}")
+    return settings
 
 
 DEFAULT_MOTION = {
@@ -406,11 +565,11 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
             "seed": args.seed,
             "synthetic_array": True,
             "propagation": {
-                "los": True,
-                "specular_reflection": True,
-                "diffuse_reflection": False,
-                "refraction": False,
-                "diffraction": False,
+                "los": args.los,
+                "specular_reflection": args.specular_reflection,
+                "diffuse_reflection": args.diffuse_reflection,
+                "refraction": args.refraction,
+                "diffraction": args.diffraction,
             },
         },
         "antenna": {
@@ -492,7 +651,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default="2x2",
         help="emulator graph driven by Sionna RT (default: 2x2)",
     )
-    parser.add_argument("--scene", default="simple_street_canyon")
+    parser.add_argument(
+        "--scene",
+        default="sionna_simple_test",
+        help=(
+            "scene XML path, a directory name under "
+            "examples/sionna/scenes, or a built-in Sionna scene"
+        ),
+    )
     parser.add_argument("--duration", type=float, default=30.0,
                         help="wall-clock seconds; 0 runs until interrupted")
     parser.add_argument("--iterations", type=int, default=0,
@@ -521,6 +687,35 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--samples-per-src", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=42)
+    # The propagation mechanisms the solver is allowed to use. The defaults
+    # are the ones every existing gate ran with; they are flags now so a
+    # scenario can record what it was traced with instead of leaving it to
+    # whoever types the command.
+    for mechanism, enabled, help_text in (
+        ("los", True, "direct line-of-sight paths"),
+        ("specular-reflection", True, "mirror reflections off surfaces"),
+        ("diffuse-reflection", False, "scattering off rough surfaces"),
+        ("refraction", False, "transmission through surfaces"),
+        ("diffraction", False, "paths bending around edges"),
+    ):
+        parser.add_argument(
+            f"--{mechanism}",
+            action=argparse.BooleanOptionalAction,
+            default=enabled,
+            help=help_text,
+        )
+    parser.add_argument(
+        "--path-polylines",
+        type=int,
+        default=6,
+        metavar="N",
+        help=(
+            "per link, publish the interaction points of the N strongest rays "
+            "so the web UI can draw real multipath. UI-only: never part of a "
+            "control message. 0 disables it, which also skips the component "
+            "build Sionna does on first access to paths.vertices."
+        ),
+    )
     parser.add_argument(
         "--simple-road",
         action=argparse.BooleanOptionalAction,
@@ -588,6 +783,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             parser.error(str(exc))
         if args.scenario_definition.scene is not None:
             args.scene = args.scenario_definition.scene
+        if args.scenario_definition.simple_road is not None:
+            args.simple_road = args.scenario_definition.simple_road
+        for destination, value in (args.scenario_definition.solver or {}).items():
+            setattr(args, destination, value)
     return args
 
 
@@ -611,16 +810,23 @@ _PLY_SCALAR_FORMATS = {
 }
 
 
-def ply_bounds(path: pathlib.Path) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
-    """Read only the vertex XYZ bounds from an ASCII or binary PLY mesh."""
+def read_ply(
+    path: pathlib.Path, *, want_faces: bool = False
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]]]:
+    """Read vertex XYZ, and optionally the face index lists, from a PLY mesh.
+
+    ``want_faces`` is opt-in because the bounds callers on the scene setup
+    path only need the vertex block: stopping at ``end_header`` plus one
+    vertex sweep is what they used to do, and reading the face element for
+    them would parse geometry nobody looks at.
+    """
 
     with path.open("rb") as handle:
         if handle.readline().strip() != b"ply":
             raise ValueError(f"not a PLY file: {path}")
         encoding = ""
-        vertex_count = 0
-        vertex_properties: list[str] = []
-        in_vertices = False
+        # (name, count, [(kind, scalar_or_(count_type, index_type))]) in file order.
+        elements: list[tuple[str, int, list[tuple[str, Any]]]] = []
         while True:
             raw = handle.readline()
             if not raw:
@@ -629,36 +835,132 @@ def ply_bounds(path: pathlib.Path) -> tuple[tuple[float, float, float], tuple[fl
             fields = line.split()
             if fields[:1] == ["format"]:
                 encoding = fields[1]
-            elif fields[:2] == ["element", "vertex"]:
-                vertex_count = int(fields[2])
-                in_vertices = True
-            elif fields[:1] == ["element"]:
-                in_vertices = False
-            elif in_vertices and fields[:1] == ["property"]:
-                if len(fields) != 3 or fields[1] not in _PLY_SCALAR_FORMATS:
-                    raise ValueError(f"unsupported PLY vertex property: {line}")
-                vertex_properties.append(fields[1])
+            elif fields[:1] == ["element"] and len(fields) == 3:
+                elements.append((fields[1], int(fields[2]), []))
+            elif fields[:1] == ["property"] and elements:
+                if fields[1] == "list":
+                    if len(fields) != 5:
+                        raise ValueError(f"unsupported PLY list property: {line}")
+                    if fields[2] not in _PLY_SCALAR_FORMATS or fields[3] not in _PLY_SCALAR_FORMATS:
+                        raise ValueError(f"unsupported PLY list property: {line}")
+                    elements[-1][2].append(("list", (fields[2], fields[3])))
+                else:
+                    if len(fields) != 3 or fields[1] not in _PLY_SCALAR_FORMATS:
+                        raise ValueError(f"unsupported PLY property: {line}")
+                    elements[-1][2].append(("scalar", fields[1]))
             elif line == "end_header":
                 break
 
-        if vertex_count <= 0 or len(vertex_properties) < 3:
+        vertex_element = next((item for item in elements if item[0] == "vertex"), None)
+        if vertex_element is None:
             raise ValueError(f"PLY has no XYZ vertices: {path}")
-        vertices: list[tuple[float, float, float]] = []
+        if vertex_element[1] <= 0 or len(vertex_element[2]) < 3:
+            raise ValueError(f"PLY has no XYZ vertices: {path}")
         if encoding == "ascii":
-            for _ in range(vertex_count):
-                fields = handle.readline().split()
-                vertices.append(tuple(float(value) for value in fields[:3]))  # type: ignore[arg-type]
+            reader: _PlyReader = _PlyAsciiReader(handle)
         elif encoding in ("binary_little_endian", "binary_big_endian"):
-            prefix = "<" if encoding == "binary_little_endian" else ">"
-            row = struct.Struct(
-                prefix + "".join(_PLY_SCALAR_FORMATS[item] for item in vertex_properties)
+            reader = _PlyBinaryReader(
+                handle, "<" if encoding == "binary_little_endian" else ">"
             )
-            for _ in range(vertex_count):
-                values = row.unpack(handle.read(row.size))
-                vertices.append(tuple(float(value) for value in values[:3]))  # type: ignore[arg-type]
         else:
             raise ValueError(f"unsupported PLY encoding {encoding!r}: {path}")
 
+        vertices: list[tuple[float, float, float]] = []
+        faces: list[tuple[int, ...]] = []
+        for name, count, properties in elements:
+            if name == "vertex":
+                for _ in range(count):
+                    values = reader.row(properties)
+                    vertices.append(
+                        (float(values[0]), float(values[1]), float(values[2]))
+                    )
+            elif name == "face" and want_faces:
+                for _ in range(count):
+                    values = reader.row(properties)
+                    indices = values[0] if isinstance(values[0], (list, tuple)) else values
+                    faces.append(tuple(int(index) for index in indices))
+            elif not want_faces and vertices:
+                # Nothing after the vertex block is needed, and a bounds
+                # caller must not pay to walk it.
+                break
+            else:
+                for _ in range(count):
+                    reader.row(properties)
+
+    return vertices, faces
+
+
+class _PlyReader:
+    def row(self, properties: list[tuple[str, Any]]) -> Any:
+        raise NotImplementedError
+
+
+class _PlyAsciiReader(_PlyReader):
+    def __init__(self, handle: Any) -> None:
+        self.handle = handle
+
+    def row(self, properties: list[tuple[str, Any]]) -> Any:
+        fields = self.handle.readline().split()
+        if not fields:
+            raise ValueError("truncated PLY body")
+        values: list[Any] = []
+        cursor = 0
+        for kind, _spec in properties:
+            if kind == "list":
+                length = int(fields[cursor])
+                cursor += 1
+                values.append([int(item) for item in fields[cursor : cursor + length]])
+                cursor += length
+            else:
+                values.append(float(fields[cursor]))
+                cursor += 1
+        return values
+
+
+class _PlyBinaryReader(_PlyReader):
+    def __init__(self, handle: Any, prefix: str) -> None:
+        self.handle = handle
+        self.prefix = prefix
+        self._structs: dict[str, struct.Struct] = {}
+
+    def _struct(self, code: str) -> struct.Struct:
+        cached = self._structs.get(code)
+        if cached is None:
+            cached = struct.Struct(self.prefix + code)
+            self._structs[code] = cached
+        return cached
+
+    def row(self, properties: list[tuple[str, Any]]) -> Any:
+        values: list[Any] = []
+        # A run of scalars is unpacked in one read; a list property has to
+        # break the run because its length is only known from the file.
+        run = ""
+        def flush() -> None:
+            nonlocal run
+            if not run:
+                return
+            item = self._struct(run)
+            values.extend(item.unpack(self.handle.read(item.size)))
+            run = ""
+
+        for kind, spec in properties:
+            if kind == "list":
+                flush()
+                count_code, index_code = spec
+                counter = self._struct(_PLY_SCALAR_FORMATS[count_code])
+                length = counter.unpack(self.handle.read(counter.size))[0]
+                item = self._struct(_PLY_SCALAR_FORMATS[index_code] * int(length))
+                values.append(list(item.unpack(self.handle.read(item.size))))
+            else:
+                run += _PLY_SCALAR_FORMATS[spec]
+        flush()
+        return values
+
+
+def ply_bounds(path: pathlib.Path) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    """Read only the vertex XYZ bounds from an ASCII or binary PLY mesh."""
+
+    vertices, _ = read_ply(path)
     minimum = tuple(min(vertex[index] for vertex in vertices) for index in range(3))
     maximum = tuple(max(vertex[index] for vertex in vertices) for index in range(3))
     return minimum, maximum  # type: ignore[return-value]
@@ -769,6 +1071,22 @@ def prepare_scene_with_simple_road(
     return output_xml
 
 
+# Shape ids carry their kind as the first token — `building_2`, `road_17`,
+# `water_3`, `ground`. The web UI styles by kind, and the solver does not care,
+# so this is the one place the naming convention is interpreted.
+SURFACE_KINDS = (
+    "building", "road", "water", "grass", "park", "pitch", "wood", "scrub",
+    "sand",
+)
+
+
+def surface_kind(object_id: str) -> str:
+    for kind in SURFACE_KINDS:
+        if object_id == kind or object_id.startswith(f"{kind}_"):
+            return kind
+    return "ground"
+
+
 def scene_geometry(scene_xml: pathlib.Path) -> dict[str, Any]:
     """Extract compact top-down footprints for the UI, never the GPU control path."""
 
@@ -795,12 +1113,7 @@ def scene_geometry(scene_xml: pathlib.Path) -> dict[str, Any]:
             mesh_path = source_directory / mesh_path
         minimum, maximum = ply_bounds(mesh_path)
         object_id = shape.attrib.get("id", mesh_path.stem).removeprefix("mesh-")
-        if object_id.startswith("building"):
-            kind = "building"
-        elif object_id == "road":
-            kind = "road"
-        else:
-            kind = "ground"
+        kind = surface_kind(object_id)
         material_ref = shape.find("./ref[@name='bsdf']")
         material_id = material_ref.attrib.get("id", "") if material_ref is not None else ""
         item: dict[str, Any] = {
@@ -816,7 +1129,10 @@ def scene_geometry(scene_xml: pathlib.Path) -> dict[str, Any]:
             "z_min_m": minimum[2],
             "z_max_m": maximum[2],
         }
-        if kind == "road":
+        if object_id == "road":
+            # Only the canyon's single east-west road has a centreline that a
+            # bounding box can describe. An OpenStreetMap carriageway bends,
+            # so a line across its box would be drawn somewhere it never runs.
             center_y = 0.5 * (minimum[1] + maximum[1])
             item["centerline_xy_m"] = [
                 [minimum[0], center_y],
@@ -828,6 +1144,143 @@ def scene_geometry(scene_xml: pathlib.Path) -> dict[str, Any]:
         "projection": "top_down_xy",
         "objects": objects,
     }
+
+
+SCENE_DIRECTORY = (
+    pathlib.Path(__file__).resolve().parents[2] / "examples" / "sionna" / "scenes"
+)
+# Names the demo uses for scenes that are really Sionna built-ins, so every
+# scenario config can name its scene the same way whether the geometry ships
+# with Sionna or with this repository.
+SCENE_ALIASES = {"sionna_simple_test": "simple_street_canyon"}
+
+
+def resolve_scene(name: str, rt: Any) -> pathlib.Path:
+    """Turn a --scene value into a Mitsuba scene XML path.
+
+    Accepts, in order: a path to an XML file, a scene generated into
+    `examples/sionna/scenes/<name>/scene.xml`, an alias for a built-in, and
+    finally a Sionna built-in scene name.
+    """
+
+    candidate = pathlib.Path(name)
+    if candidate.suffix == ".xml":
+        if not candidate.is_file():
+            raise RuntimeError(f"scene XML not found: {candidate}")
+        return candidate.resolve()
+    generated = SCENE_DIRECTORY / name / "scene.xml"
+    if generated.is_file():
+        return generated.resolve()
+    builtin = SCENE_ALIASES.get(name, name)
+    try:
+        return pathlib.Path(getattr(rt.scene, builtin))
+    except AttributeError as exc:
+        known = ", ".join(sorted(SCENE_ALIASES)) or "none"
+        raise RuntimeError(
+            f"unknown scene {name!r}: not an XML path, not a directory under "
+            f"{SCENE_DIRECTORY}, and not a built-in Sionna scene "
+            f"(repository aliases: {known})"
+        ) from exc
+
+
+def scene_mesh(scene_xml: pathlib.Path) -> dict[str, Any]:
+    """Extract the real triangle mesh of every scene shape, for the 3D UI.
+
+    This is deliberately *not* part of the per-iteration status record: the
+    geometry is fixed for the life of the process while that record is
+    written twice a second, so the mesh is emitted once to a sidecar file
+    and served from there. Like `scene_geometry` it never touches the GPU
+    control path.
+    """
+
+    root = ET.parse(scene_xml).getroot()
+    source_directory = scene_xml.parent
+    materials: dict[str, str] = {}
+    for material in root.findall("bsdf"):
+        material_id = material.attrib.get("id")
+        itu_type = material.find("./string[@name='type']")
+        if material_id:
+            materials[material_id] = (
+                itu_type.attrib.get("value", material_id)
+                if itu_type is not None
+                else material_id
+            )
+
+    objects: list[dict[str, Any]] = []
+    for shape in root.findall("shape"):
+        filename = shape.find("./string[@name='filename']")
+        if filename is None or not filename.attrib.get("value"):
+            continue
+        mesh_path = pathlib.Path(filename.attrib["value"])
+        if not mesh_path.is_absolute():
+            mesh_path = source_directory / mesh_path
+        vertices, faces = read_ply(mesh_path, want_faces=True)
+        object_id = shape.attrib.get("id", mesh_path.stem).removeprefix("mesh-")
+        kind = surface_kind(object_id)
+        material_ref = shape.find("./ref[@name='bsdf']")
+        material_id = material_ref.attrib.get("id", "") if material_ref is not None else ""
+
+        positions: list[float] = []
+        for vertex in vertices:
+            # Millimetre resolution is far finer than anything the viewer
+            # can show and keeps the JSON a fraction of its full-float size.
+            positions.extend(round(value, 3) for value in vertex)
+        indices: list[int] = []
+        for face in faces:
+            # PLY allows n-gons; a triangle fan is correct for the convex
+            # faces Sionna ships and for the rectangles written here.
+            for corner in range(1, len(face) - 1):
+                indices.extend((face[0], face[corner], face[corner + 1]))
+        if not positions or not indices:
+            continue
+        objects.append(
+            {
+                "id": object_id,
+                "kind": kind,
+                "material": materials.get(material_id, material_id),
+                "positions": positions,
+                "indices": indices,
+            }
+        )
+    mesh: dict[str, Any] = {
+        "coordinate_system": "Sionna XYZ, meters",
+        "objects": objects,
+    }
+    # A generated scene records where its geometry came from. OpenStreetMap is
+    # ODbL 1.0, and the credit has to reach whoever sees the rendering, so it
+    # travels with the mesh to the web UI instead of sitting in the repository.
+    manifest_path = scene_xml.with_name("manifest.json")
+    if manifest_path.is_file():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        if manifest.get("attribution"):
+            mesh["source"] = {
+                "name": manifest.get("name"),
+                "attribution": manifest["attribution"],
+                "license": manifest.get("license"),
+                "origin_lat_lon": manifest.get("origin_lat_lon"),
+            }
+    return mesh
+
+
+def scene_mesh_path(status_jsonl: pathlib.Path | None) -> pathlib.Path | None:
+    """Sidecar path the bridge writes and the web UI reads."""
+
+    if status_jsonl is None:
+        return None
+    return status_jsonl.with_name(f"{status_jsonl.stem}-scene-mesh.json")
+
+
+def write_scene_mesh(path: pathlib.Path | None, mesh: dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Replace atomically: the web UI may be polling this file already.
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(mesh, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(path)
 
 
 def import_sionna() -> tuple[Any, Any]:
@@ -879,6 +1332,88 @@ def antenna_slice(
     raise RuntimeError(f"unexpected Sionna tensor rank {array.ndim}")
 
 
+# `interactions` uses sionna.rt.constants.InteractionType; 0 means "no
+# interaction at this depth", which is how a path shorter than max_depth is
+# padded. The constant is inlined so this module keeps importing without
+# Sionna present, which the unit tests rely on.
+_INTERACTION_NONE = 0
+_INTERACTION_LABELS = {
+    1: "specular",
+    2: "diffuse",
+    4: "refraction",
+    8: "diffraction",
+}
+
+
+def path_slice(array: Any, rx_index: int, tx_index: int, *, trailing: int) -> Any:
+    """Index a ``[max_depth, num_rx, (ant,) num_tx, (ant,) num_paths, ...]`` tensor.
+
+    ``trailing`` is the number of axes after ``num_paths`` — 1 for
+    ``paths.vertices`` (the XYZ axis) and 0 for ``paths.interactions``.
+    The synthetic-array layout drops both antenna axes, exactly as
+    `antenna_slice` handles for the CIR tensors.
+    """
+
+    if array.ndim == 6 + trailing:
+        return array[:, rx_index, 0, tx_index, 0]
+    if array.ndim == 4 + trailing:
+        return array[:, rx_index, tx_index]
+    raise RuntimeError(f"unexpected Sionna path tensor rank {array.ndim}")
+
+
+def path_polylines(
+    vertices: Any,
+    interactions: Any,
+    *,
+    source_position: Sequence[float],
+    destination_position: Sequence[float],
+    gains_db: Sequence[float | None],
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Turn per-path interaction points into drawable transmitter→receiver lines.
+
+    ``vertices`` and ``interactions`` are already sliced down to one link:
+    ``[max_depth, num_paths, 3]`` and ``[max_depth, num_paths]``. Only the
+    ``limit`` strongest paths survive, because this rides the 2 Hz status
+    record that the whole log volume is made of.
+    """
+
+    max_depth = int(vertices.shape[0]) if vertices.shape else 0
+    path_count = int(vertices.shape[1]) if len(vertices.shape) > 1 else 0
+    ranked = sorted(
+        (
+            (gain, index)
+            for index, gain in enumerate(gains_db[:path_count])
+            if gain is not None
+        ),
+        key=lambda item: item[0],
+        reverse=True,
+    )[: max(0, limit)]
+
+    lines: list[dict[str, Any]] = []
+    for gain, index in ranked:
+        points: list[list[float]] = [[round(float(v), 3) for v in source_position]]
+        kinds: list[str] = []
+        for depth in range(max_depth):
+            kind = int(interactions[depth, index])
+            if kind == _INTERACTION_NONE:
+                break
+            points.append(
+                [round(float(value), 3) for value in vertices[depth, index]]
+            )
+            kinds.append(_INTERACTION_LABELS.get(kind, str(kind)))
+        points.append([round(float(v), 3) for v in destination_position])
+        lines.append(
+            {
+                "gain_db": round(gain, 2),
+                "bounces": len(kinds),
+                "interactions": kinds,
+                "points": points,
+            }
+        )
+    return lines
+
+
 def siso_slice(array: Any, rx_index: int, tx_index: int, *, has_time: bool) -> Any:
     """Backward-compatible scalar wrapper used by existing callers/tests."""
 
@@ -886,16 +1421,17 @@ def siso_slice(array: Any, rx_index: int, tx_index: int, *, has_time: bool) -> A
 
 
 class SionnaScenario:
+    # `paths.vertices` builds a component tensor on first access. If that ever
+    # fails the run must keep going without the UI extra, so the failure is
+    # reported once and the feature switches itself off. The class-level
+    # default lets callers that construct a partial scenario reach `profiles`.
+    path_polylines_error: str | None = None
+
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
         self.rt, self.np = import_sionna()
-        try:
-            scene_path = getattr(self.rt.scene, args.scene)
-        except AttributeError as exc:
-            raise RuntimeError(f"unknown built-in Sionna scene: {args.scene}") from exc
-
         self._scene_workspace: tempfile.TemporaryDirectory[str] | None = None
-        scene_xml = pathlib.Path(scene_path)
+        scene_xml = resolve_scene(args.scene, self.rt)
         if args.simple_road:
             self._scene_workspace = tempfile.TemporaryDirectory(
                 prefix="ocudu-sionna-road-"
@@ -906,6 +1442,7 @@ class SionnaScenario:
                 args.road_width_m,
             )
         self.scene_geometry = scene_geometry(scene_xml)
+        self.scene_mesh = scene_mesh(scene_xml)
         self.scene = self.rt.load_scene(str(scene_xml), merge_shapes=True)
         self.scene.frequency = args.downlink_frequency_hz
         self.scene.bandwidth = args.sample_rate_hz
@@ -932,6 +1469,9 @@ class SionnaScenario:
         self.current_velocities = {
             node_id: motion.velocity_at(0.0)
             for node_id, motion in self.motion.items()
+        }
+        self.current_positions = {
+            node_id: motion.start for node_id, motion in self.motion.items()
         }
 
         # Each emulator node appears once as a Sionna transmitter and once as
@@ -976,6 +1516,7 @@ class SionnaScenario:
             position = motion.position_at(elapsed_seconds)
             velocity = motion.velocity_at(elapsed_seconds)
             positions[node_id] = position
+            self.current_positions[node_id] = position
             self.current_velocities[node_id] = velocity
             self.scene.get(f"{node_id}_tx").position = position
             self.scene.get(f"{node_id}_rx").position = position
@@ -990,11 +1531,11 @@ class SionnaScenario:
             max_depth=self.args.max_depth,
             samples_per_src=self.args.samples_per_src,
             synthetic_array=True,
-            los=True,
-            specular_reflection=True,
-            diffuse_reflection=False,
-            refraction=False,
-            diffraction=False,
+            los=self.args.los,
+            specular_reflection=self.args.specular_reflection,
+            diffuse_reflection=self.args.diffuse_reflection,
+            refraction=self.args.refraction,
+            diffraction=self.args.diffraction,
             seed=self.args.seed,
         )
 
@@ -1016,6 +1557,28 @@ class SionnaScenario:
         delays = numpy_value(delays, self.np)
         dopplers = numpy_value(paths.doppler, self.np)
         valid = numpy_value(paths.valid, self.np)
+
+        # UI-only ray geometry. `paths.vertices` triggers a component build
+        # inside Sionna, so it is read once per solve rather than per link,
+        # and never at all when the operator switched the feature off.
+        ray_vertices = ray_interactions = None
+        if (
+            self.args.path_polylines > 0
+            and self.path_polylines_error is None
+            and hasattr(paths, "vertices")
+        ):
+            try:
+                ray_vertices = numpy_value(paths.vertices, self.np)
+                ray_interactions = numpy_value(paths.interactions, self.np)
+            except Exception as exc:  # pragma: no cover - live Sionna path
+                self.path_polylines_error = f"{type(exc).__name__}: {exc}"
+                ray_vertices = ray_interactions = None
+                print(
+                    "sionna path polylines disabled: "
+                    f"{self.path_polylines_error}",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
         profiles: dict[str, MatrixProfile] = {}
         statuses: list[dict[str, Any]] = []
@@ -1096,6 +1659,33 @@ class SionnaScenario:
             status["model"] = link.model
             status["direction"] = link.direction
             status["carrier_frequency_hz"] = carrier_frequency_hz
+            if ray_vertices is not None and ray_interactions is not None:
+                # Lane (0, 0) drives the drawing: with a synthetic array the
+                # ray geometry is shared by every antenna pair anyway.
+                first_lane_coefficients = antenna_slice(
+                    coefficients, rx_index, tx_index, 0, 0, has_time=True
+                )
+                first_lane_valid = antenna_slice(
+                    valid, rx_index, tx_index, 0, 0, has_time=False
+                )
+                gains_db = [
+                    (
+                        20.0 * math.log10(abs(complex(coefficient)))
+                        if bool(is_valid) and abs(complex(coefficient)) > 0.0
+                        else None
+                    )
+                    for coefficient, is_valid in zip(
+                        first_lane_coefficients, first_lane_valid
+                    )
+                ]
+                status["path_polylines"] = path_polylines(
+                    path_slice(ray_vertices, rx_index, tx_index, trailing=1),
+                    path_slice(ray_interactions, rx_index, tx_index, trailing=0),
+                    source_position=self.current_positions[source],
+                    destination_position=self.current_positions[destination],
+                    gains_db=gains_db,
+                    limit=self.args.path_polylines,
+                )
             statuses.append(status)
         return profiles, statuses
 
@@ -1205,6 +1795,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     iteration = 0
     try:
         scenario = SionnaScenario(args)
+        write_scene_mesh(scene_mesh_path(args.status_jsonl), scenario.scene_mesh)
         environment = scenario_environment(args)
         client = None if args.dry_run else ZmqControlClient(args.control_endpoint)
         start = time.monotonic()

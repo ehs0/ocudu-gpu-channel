@@ -8,7 +8,7 @@ source "${script_dir}/env.sh"
 
 native_root="${OCUDU_NATIVE_ROOT}"
 channel_mode="${OCUDU_NATIVE_CHANNEL_MODE:-legacy}"
-if [[ "${channel_mode}" == "sionna" ]]; then
+if [[ "${channel_mode}" != "legacy" ]]; then
   duration_seconds="${OCUDU_NATIVE_SIONNA_DURATION_SECONDS:-0}"
 else
   duration_seconds="${OCUDU_NATIVE_LEGACY_DURATION_SECONDS:-15}"
@@ -85,8 +85,9 @@ PY
 }
 
 [[ "$#" -eq 0 ]] || usage_error "usage: $0"
-[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
-  usage_error "OCUDU_NATIVE_CHANNEL_MODE must be legacy or sionna"
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" || \
+   "${channel_mode}" == "external" ]] || \
+  usage_error "OCUDU_NATIVE_CHANNEL_MODE must be legacy, sionna or external"
 [[ "${renderer_uses_scenario}" == "0" || "${renderer_uses_scenario}" == "1" ]] || \
   usage_error "OCUDU_NATIVE_RENDERER_USES_SCENARIO must be 0 or 1"
 if [[ "${channel_mode}" == "legacy" ]]; then
@@ -120,12 +121,23 @@ for path in "${inner}" "${renderer}" "${verifier}" \
   "${repo_root}/examples/topology.ocudu-docker.cuda.yaml"; do
   [[ -e "${path}" ]] || usage_error "missing required path: ${path}"
 done
-if [[ "${channel_mode}" == "sionna" ]]; then
-  for path in "${sionna_python}" "${sionna_bridge}" "${sionna_scenario}" \
-    "${web_server}" "${web_index}"; do
-    [[ -e "${path}" ]] || usage_error "missing Sionna/Web UI path: ${path}"
+if [[ "${channel_mode}" != "legacy" ]]; then
+  # The Web UI runs in both live modes and needs an interpreter with pyzmq.
+  # The scenario is read by the config renderer, not by Sionna, so external
+  # runs need it too whenever the renderer consumes one.
+  for path in "${sionna_python}" "${sionna_scenario}" "${web_server}" "${web_index}"; do
+    [[ -e "${path}" ]] || usage_error "missing Web UI path: ${path}"
   done
-  [[ -x "${sionna_python}" ]] || usage_error "Sionna Python is not executable: ${sionna_python}"
+  [[ -x "${sionna_python}" ]] || usage_error "Web UI Python is not executable: ${sionna_python}"
+fi
+if [[ "${channel_mode}" == "external" ]]; then
+  # The sionna branch below proves pyzmq as part of its full RT import; an
+  # external run still needs it for the Web UI telemetry subscriber, so check
+  # it here rather than failing later inside the web server.
+  "${sionna_python}" -c 'import zmq' >/dev/null 2>&1 ||     usage_error "pyzmq import failed in ${sionna_python}"
+fi
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ -e "${sionna_bridge}" ]] || usage_error "missing Sionna bridge: ${sionna_bridge}"
   if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
     optix_library="$(find "${repo_root}/../local" -type f -name 'libnvoptix.so*' -print -quit 2>/dev/null || true)"
     [[ -n "${optix_library}" ]] || usage_error "libnvoptix was not found under ${repo_root}/../local"
@@ -173,7 +185,7 @@ parent_mntns="$(readlink /proc/self/ns/mnt)"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 results_root="${native_root}/results"
-if [[ "${channel_mode}" == "sionna" ]]; then
+if [[ "${channel_mode}" != "legacy" ]]; then
   result_family="${sionna_result_family}"
   run_family="${sionna_run_family}"
 else
@@ -217,7 +229,7 @@ renderer_args=(
   "${renderer}" --repo-root "${repo_root}" --native-root "${native_root}"
   --output-dir "${config_dir}" --log-dir "${log_dir}"
 )
-if [[ "${channel_mode}" == "sionna" && "${renderer_uses_scenario}" == "1" ]]; then
+if [[ "${channel_mode}" != "legacy" && "${renderer_uses_scenario}" == "1" ]]; then
   renderer_args+=(--scenario-config "${sionna_scenario}")
 fi
 "/usr/bin/python3" "${renderer_args[@]}" >"${log_dir}/render.log" 2>&1
@@ -239,7 +251,7 @@ mkdir "${preserved_configs}"
 cp "${config_dir}/gnb.yaml" "${config_dir}/topology.yaml" \
   "${config_dir}/open5gs.yaml" "${config_dir}/srsue.conf" \
   "${config_dir}/subscriber.csv" "${preserved_configs}/"
-if [[ "${channel_mode}" == "sionna" && "${execution_profile}" == "rank1" ]]; then
+if [[ "${channel_mode}" != "legacy" && "${execution_profile}" == "rank1" ]]; then
   cp "${config_dir}/sionna-rank1-shape.json" "${preserved_configs}/"
   cp "${sionna_scenario}" "${preserved_configs}/sionna-scenario.json"
 fi
@@ -281,7 +293,7 @@ config_paths = {
     name: configs / name
     for name in ("gnb.yaml", "topology.yaml", "open5gs.yaml", "srsue.conf", "subscriber.csv")
 }
-if channel_mode == "sionna" and execution_profile == "rank1":
+if channel_mode != "legacy" and execution_profile == "rank1":
     config_paths["sionna-rank1-shape.json"] = configs / "sionna-rank1-shape.json"
     config_paths["sionna-scenario.json"] = configs / "sionna-scenario.json"
 profile_label = "1x1" if channel_mode == "legacy" else execution_profile
@@ -308,8 +320,13 @@ data = {
 }
 if channel_mode == "sionna":
     data["claim_boundary"]["sionna_rt"] = True
-    if execution_profile == "rank1":
-        data["claim_boundary"]["rank1_dynamic_arrays"] = True
+if channel_mode == "external":
+    # The channel matrices came from a process this gate did not start and
+    # cannot vouch for. Nothing about Sionna RT is claimed.
+    data["claim_boundary"]["sionna_rt"] = False
+    data["claim_boundary"]["external_channel_source"] = True
+if channel_mode != "legacy" and execution_profile == "rank1":
+    data["claim_boundary"]["rank1_dynamic_arrays"] = True
 with open(output_path, "x", encoding="utf-8") as output:
     json.dump(data, output, indent=2, sort_keys=True)
     output.write("\n")
@@ -487,13 +504,16 @@ printf 'event=%s_start web_ui="%s" runtime_pid=%s web_pid=%s\n' \
   "${sionna_event_family}" "${web_url}" "${runtime_pid}" "${web_pid}"
 
 ready_deadline=$((SECONDS + sionna_ready_seconds + 60))
+require_sionna_feed=0
+[[ "${channel_mode}" == "sionna" ]] && require_sionna_feed=1
 feeds_ready=0
 while [[ "${SECONDS}" -lt "${ready_deadline}" ]]; do
   if ! process_running "${runtime_pid}"; then
     break
   fi
   if [[ -f "${live_ready_path}" ]] && \
-    /usr/bin/python3 - "${web_url}/api/status?history_ms=1000" "${web_status_path}" <<'PY' >/dev/null 2>&1
+    /usr/bin/python3 - "${web_url}/api/status?history_ms=1000" "${web_status_path}" \
+      "${require_sionna_feed}" <<'PY' >/dev/null 2>&1
 import json
 import pathlib
 import sys
@@ -502,7 +522,11 @@ import urllib.request
 with urllib.request.urlopen(sys.argv[1], timeout=1) as response:
     data = json.load(response)
 feeds = data.get("feeds", {})
-if not (feeds.get("telemetry_connected") and feeds.get("sionna_connected")):
+if not feeds.get("telemetry_connected"):
+    raise SystemExit(1)
+# An external channel source never writes the Sionna status JSONL, so that
+# feed is only evidence when this gate started the bridge itself.
+if sys.argv[3] == "1" and not feeds.get("sionna_connected"):
     raise SystemExit(1)
 path = pathlib.Path(sys.argv[2])
 with path.open("x", encoding="utf-8") as output:
@@ -541,13 +565,14 @@ if [[ "${run_status}" -ne 0 ]]; then
 fi
 
 "/usr/bin/python3" - "${summary_path}" "${live_ready_path}" "${web_status_path}" \
-  "${sionna_event_family}_live_ready" "${sionna_event_family}_attach_gate" <<'PY'
+  "${sionna_event_family}_live_ready" "${sionna_event_family}_attach_gate" \
+  "${channel_mode}" <<'PY'
 import json
 import pathlib
 import sys
 
 summary_path, live_path, web_path = map(pathlib.Path, sys.argv[1:4])
-expected_live_event, gate_event = sys.argv[4:]
+expected_live_event, gate_event, channel_mode = sys.argv[4:]
 with summary_path.open(encoding="utf-8") as source:
     summary = json.load(source)
 with live_path.open(encoding="utf-8") as source:
@@ -556,7 +581,7 @@ with web_path.open(encoding="utf-8") as source:
     web = json.load(source)
 required = {
     "status": "passed",
-    "channel_mode": "sionna",
+    "channel_mode": channel_mode,
     "docker_used": False,
     "rrc_connected": 1,
     "pdu_session_established": 1,
@@ -565,14 +590,21 @@ required = {
 for key, expected in required.items():
     if summary.get(key) != expected:
         raise SystemExit(f"invalid Sionna summary {key}: {summary.get(key)!r}")
-for key in ("sionna_updates", "telemetry_frames", "control_batches_committed"):
+counters = ("sionna_updates", "telemetry_frames", "control_batches_committed")
+# External runs make no claim about who drove the control plane, so their
+# counters are recorded but not required to be non-zero.
+for key in counters if channel_mode == "sionna" else ():
     if not isinstance(summary.get(key), int) or summary[key] < 1:
         raise SystemExit(f"missing Sionna evidence counter: {key}")
 if live.get("event") != expected_live_event:
     raise SystemExit("live readiness marker is invalid")
 feeds = web.get("feeds", {})
-if not (feeds.get("telemetry_connected") and feeds.get("sionna_connected")):
-    raise SystemExit("Web UI did not receive both live feeds")
+if not feeds.get("telemetry_connected"):
+    raise SystemExit("Web UI did not receive the telemetry feed")
+# The Sionna feed is the status JSONL this gate's own bridge writes; an
+# external channel source never produces one, so it is not evidence here.
+if channel_mode == "sionna" and not feeds.get("sionna_connected"):
+    raise SystemExit("Web UI did not receive the Sionna feed")
 print(f"event={gate_event} result=pass")
 PY
 printf 'summary=%s\n' "${summary_path}"

@@ -92,8 +92,9 @@ while [[ "$#" -gt 0 ]]; do
 done
 
 [[ "${mode}" == "probe" || "${mode}" == "run" ]] || usage_error "--mode must be probe or run"
-[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
-  usage_error "--channel-mode must be legacy or sionna"
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" || \
+   "${channel_mode}" == "external" ]] || \
+  usage_error "--channel-mode must be legacy, sionna or external"
 [[ "${run_duration_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || usage_error "invalid run duration"
 [[ "${ue_keepalive_seconds}" =~ ^(0|0?\.[0-9]+|[1-9][0-9]*(\.[0-9]+)?)$ ]] || \
   usage_error "invalid keepalive interval"
@@ -123,15 +124,18 @@ for command_name in ip mount umount nsenter timeout; do
   command -v "${command_name}" >/dev/null 2>&1 || usage_error "missing command: ${command_name}"
 done
 [[ -x /usr/bin/python3 ]] || usage_error "missing /usr/bin/python3"
+if [[ "${mode}" == "run" && "${channel_mode}" != "legacy" ]]; then
+  [[ "${live_ready_path}" == /* ]] || usage_error "live-ready path must be absolute"
+  [[ "${control_endpoint}" == ipc://* && "${telemetry_endpoint}" == ipc://* ]] || \
+    usage_error "rootless control and telemetry must use ipc:// endpoints"
+fi
 if [[ "${mode}" == "run" && "${channel_mode}" == "sionna" ]]; then
   [[ -x "${sionna_python}" ]] || usage_error "Sionna Python is missing"
   [[ -f "${sionna_bridge}" && ! -L "${sionna_bridge}" ]] || usage_error "Sionna bridge is missing"
   [[ -f "${sionna_scenario_config}" && ! -L "${sionna_scenario_config}" ]] || \
     usage_error "Sionna scenario config is missing"
-  [[ "${sionna_status_jsonl}" == /* && "${live_ready_path}" == /* ]] || \
+  [[ "${sionna_status_jsonl}" == /* ]] || \
     usage_error "Sionna artifact paths must be absolute"
-  [[ "${control_endpoint}" == ipc://* && "${telemetry_endpoint}" == ipc://* ]] || \
-    usage_error "rootless Sionna control and telemetry must use ipc:// endpoints"
   [[ "${sionna_update_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || usage_error "invalid Sionna update rate"
   [[ "${sionna_ready_seconds}" =~ ^[1-9][0-9]*$ ]] || usage_error "invalid Sionna ready timeout"
   [[ "${live_ready_event}" =~ ^[a-z0-9_]+$ ]] || usage_error "invalid live-ready event"
@@ -378,7 +382,7 @@ write_live_ready()
   local rrc="$1"
   local pdu="$2"
   local ping_ok="$3"
-  [[ "${channel_mode}" == "sionna" ]] || return 0
+  [[ "${channel_mode}" != "legacy" ]] || return 0
   /usr/bin/python3 - "${live_ready_path}" "${timestamp}" "${rrc}" "${pdu}" \
     "${ping_ok}" "${sionna_status_jsonl}" "${control_endpoint}" \
     "${telemetry_endpoint}" "${live_ready_event}" <<'PY'
@@ -484,7 +488,7 @@ PY
     "${broker}" --config "${config_dir}/topology.yaml"
     --duration "${run_duration_seconds}s"
   )
-  if [[ "${channel_mode}" == "sionna" ]]; then
+  if [[ "${channel_mode}" != "legacy" ]]; then
     broker_args+=(
       --control-endpoint "${control_endpoint}"
       --telemetry-endpoint "${telemetry_endpoint}"
@@ -503,9 +507,11 @@ PY
   fi
   wait_log "${log_dir}/broker.log" "event=socket_ready device=${broker_ready_device} " \
     "${broker_pid}" 15 || usage_error "broker did not become ready"
-  if [[ "${channel_mode}" == "sionna" ]]; then
+  if [[ "${channel_mode}" != "legacy" ]]; then
     wait_log "${log_dir}/broker.log" 'event=control_start ' "${broker_pid}" 15 || \
       usage_error "broker control server did not become ready"
+  fi
+  if [[ "${channel_mode}" == "sionna" ]]; then
     start_group sionna "${log_dir}/sionna-bridge.log" \
       env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${sionna_python}" "${sionna_bridge}" \
       --scenario-config "${sionna_scenario_config}" \
@@ -533,7 +539,7 @@ PY
   srsue_pid="${started_pid}"
 
   local attach_wait_seconds=20
-  [[ "${channel_mode}" == "sionna" ]] && attach_wait_seconds=40
+  [[ "${channel_mode}" != "legacy" ]] && attach_wait_seconds=40
   local deadline=$((SECONDS + attach_wait_seconds))
   local rrc=0 pdu=0 ping_ok=0
   while [[ "${SECONDS}" -lt "${deadline}" ]] && process_running "${srsue_pid}"; do

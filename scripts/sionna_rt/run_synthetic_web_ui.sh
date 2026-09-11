@@ -8,7 +8,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 case_name="${1:-}"
 [[ -n "${case_name}" ]] || {
-  echo "usage: $0 {single|multi-ue|graph|multi-gnb}" >&2
+  echo "usage: $0 {single|multi-ue|graph|multi-gnb|multi-gnb-sutd}" >&2
   exit 2
 }
 duration="${OCUDU_SIONNA_DEMO_DURATION_SECONDS:-60}"
@@ -42,6 +42,12 @@ case "${case_name}" in
   multi-gnb)
     topology="${repo_root}/examples/topology.multi-gnb.cuda.yaml"
     scenario="${repo_root}/examples/sionna/multi-gnb.json"
+    source_ports=(3000 3002 3101 3103); sink_ports=(3001 3003 3100 3102) ;;
+  # Same two-cell topology, on the OpenStreetMap SUTD campus instead of the
+  # built-in street canyon.
+  multi-gnb-sutd)
+    topology="${repo_root}/examples/topology.multi-gnb.cuda.yaml"
+    scenario="${repo_root}/examples/sionna/multi-gnb-sutd.json"
     source_ports=(3000 3002 3101 3103); sink_ports=(3001 3003 3100 3102) ;;
   *) echo "unknown case: ${case_name}" >&2; exit 2 ;;
 esac

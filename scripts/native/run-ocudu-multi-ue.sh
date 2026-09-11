@@ -21,7 +21,19 @@ native_root="${OCUDU_NATIVE_ROOT}"
 physical_gpu="${OCUDU_NATIVE_GPU_DEVICE:-0}"
 cuda_compiler="${CUDACXX:-/opt/conda/envs/cuda128/bin/nvcc}"
 inner="${script_dir}/run-ocudu-multi-ue-inner.sh"
-renderer="${script_dir}/render-multi-ue-configs.py"
+# Sionna mode swaps the renderer for the scenario-driven one and adds the
+# bridge, the broker control plane and the read-only web UI. Unset, this gate
+# runs exactly as it always has, on the checked-in fixed-TDL topology.
+channel_mode="${OCUDU_NATIVE_CHANNEL_MODE:-legacy}"
+sionna_scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-}"
+sionna_python="${OCUDU_NATIVE_SIONNA_PYTHON:-}"
+sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-10}"
+web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
+if [[ "${channel_mode}" == "sionna" ]]; then
+  renderer="${script_dir}/render-sionna-multi-ue-configs.py"
+else
+  renderer="${script_dir}/render-multi-ue-configs.py"
+fi
 audited_ocudu="a1916edcdbcd70ba6e0af47ee87be061dad5a4e4"
 audited_srsran="eea87b1d893ae58e0b08bc381730c502024ae71f"
 audited_open5gs="d9d3abdd480be96fac3bc8a997e83446648763ca"
@@ -33,6 +45,16 @@ usage_error()
 }
 
 [[ "$#" -eq 0 ]] || usage_error "usage: $0"
+[[ "${channel_mode}" == "legacy" || "${channel_mode}" == "sionna" ]] || \
+  usage_error "unsupported OCUDU_NATIVE_CHANNEL_MODE: ${channel_mode}"
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ "${sionna_scenario}" == /* && -f "${sionna_scenario}" && ! -L "${sionna_scenario}" ]] || \
+    usage_error "OCUDU_NATIVE_SIONNA_SCENARIO must be an absolute regular file"
+  [[ -x "${sionna_python}" ]] || \
+    usage_error "OCUDU_NATIVE_SIONNA_PYTHON must point at the Sionna interpreter"
+  [[ "${web_port}" =~ ^[1-9][0-9]*$ && "${web_port}" -le 65535 ]] || \
+    usage_error "invalid OCUDU_NATIVE_WEB_PORT: ${web_port}"
+fi
 [[ "${physical_gpu}" =~ ^(0|[1-9][0-9]*)$ && "${physical_gpu}" -le 255 ]] || usage_error "invalid GPU device"
 [[ -x "${cuda_compiler}" ]] || usage_error "missing CUDA compiler: ${cuda_compiler}"
 for command_name in unshare nsenter ip mount umount flock cmake ctest ss setsid stdbuf; do
@@ -73,8 +95,12 @@ for path in "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_
 done
 mkdir -p "${log_dir}" "${report_dir}" "${config_dir}" "${data_dir}" "${netns_dir}"
 
-"/usr/bin/python3" "${renderer}" --repo-root "${repo_root}" --native-root "${native_root}" \
-  --output-dir "${config_dir}" --log-dir "${log_dir}" >"${log_dir}/render.log" 2>&1 || {
+declare -a renderer_args=(
+  --repo-root "${repo_root}" --native-root "${native_root}"
+  --output-dir "${config_dir}" --log-dir "${log_dir}"
+)
+[[ "${channel_mode}" == "sionna" ]] && renderer_args+=(--scenario-config "${sionna_scenario}")
+"/usr/bin/python3" "${renderer}" "${renderer_args[@]}" >"${log_dir}/render.log" 2>&1 || {
   cat "${log_dir}/render.log" >&2; usage_error "config rendering failed"
 }
 "${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb" -c "${config_dir}/gnb.yaml" --dryrun \
@@ -100,17 +126,52 @@ CUDA_VISIBLE_DEVICES="${physical_gpu}" \
 
 parent_netns="$(readlink /proc/self/ns/net)"
 parent_mntns="$(readlink /proc/self/ns/mnt)"
+
+declare -a inner_args=(
+  --repo-root "${repo_root}" --native-root "${native_root}"
+  --config-dir "${config_dir}" --log-dir "${log_dir}" --netns-dir "${netns_dir}"
+  --timestamp "${timestamp}" --physical-gpu "${physical_gpu}"
+  --channel-build "${channel_build}"
+  --parent-netns "${parent_netns}" --parent-mntns "${parent_mntns}"
+  --outer-uid "$(id -u)"
+)
+web_pid=""
+if [[ "${channel_mode}" == "sionna" ]]; then
+  # ipc:// under the run directory, so the control and telemetry sockets live
+  # in the namespace the inner script owns and are not reachable from the host.
+  run_dir="${native_root}/run/ocudu-multi-ue-native/${timestamp}"
+  mkdir -p "${run_dir}"
+  control_endpoint="ipc://${run_dir}/control.sock"
+  telemetry_endpoint="ipc://${run_dir}/telemetry.sock"
+  sionna_status_jsonl="${log_dir}/sionna-status.jsonl"
+  inner_args+=(
+    --channel-mode sionna
+    --control-endpoint "${control_endpoint}"
+    --telemetry-endpoint "${telemetry_endpoint}"
+    --sionna-python "${sionna_python}"
+    --sionna-bridge "${repo_root}/scripts/sionna_rt/run_bridge.py"
+    --sionna-scenario-config "${sionna_scenario}"
+    --sionna-status-jsonl "${sionna_status_jsonl}"
+    --sionna-update-hz "${sionna_update_hz}"
+  )
+  # Read-only observer. It tails the status JSONL the bridge writes and
+  # subscribes to broker telemetry; it never touches the control socket.
+  "${sionna_python}" "${repo_root}/scripts/web_ui/server.py" \
+    --port "${web_port}" --telemetry-endpoint "${telemetry_endpoint}" \
+    --status-jsonl "${sionna_status_jsonl}" \
+    --index "${repo_root}/scripts/web_ui/index.html" \
+    >"${log_dir}/web-ui.log" 2>&1 &
+  web_pid="$!"
+  printf 'Web UI: http://127.0.0.1:%s\n' "${web_port}"
+fi
+
 set +e
 unshare --user --map-root-user --net --mount --fork --kill-child --propagation private \
-  "${inner}" \
-  --repo-root "${repo_root}" --native-root "${native_root}" \
-  --config-dir "${config_dir}" --log-dir "${log_dir}" --netns-dir "${netns_dir}" \
-  --timestamp "${timestamp}" --physical-gpu "${physical_gpu}" \
-  --channel-build "${channel_build}" \
-  --parent-netns "${parent_netns}" --parent-mntns "${parent_mntns}" \
-  --outer-uid "$(id -u)"
+  "${inner}" "${inner_args[@]}"
 inner_status="$?"
 set -e
+[[ -n "${web_pid}" ]] && kill "${web_pid}" >/dev/null 2>&1
+[[ -n "${web_pid}" ]] && wait "${web_pid}" >/dev/null 2>&1
 
 summary="${report_dir}/attach-summary.json"
 if [[ "${inner_status}" -eq 0 && -f "${summary}" ]]; then

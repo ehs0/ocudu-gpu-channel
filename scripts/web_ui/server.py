@@ -2337,7 +2337,29 @@ def gpu_usage_loop(
             nvml_sampler.close()
 
 
-def make_handler(store: StatusStore, index_html: bytes) -> type[BaseHTTPRequestHandler]:
+VENDOR_DIRECTORY = pathlib.Path(__file__).with_name("vendor")
+# Only the two file types the 3D viewer loads are servable, so a stray file
+# under vendor/ can never be handed out as something a browser will execute
+# in another context.
+VENDOR_CONTENT_TYPES = {
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+}
+
+
+def scene_mesh_path(status_jsonl: pathlib.Path | None) -> pathlib.Path | None:
+    """Mirror of run_bridge.scene_mesh_path: both derive it from the same flag."""
+
+    if status_jsonl is None:
+        return None
+    return status_jsonl.with_name(f"{status_jsonl.stem}-scene-mesh.json")
+
+
+def make_handler(
+    store: StatusStore,
+    index_html: bytes,
+    mesh_path: pathlib.Path | None = None,
+) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         server_version = "ocudu-channel-status/1"
 
@@ -2381,6 +2403,37 @@ def make_handler(store: StatusStore, index_html: bytes) -> type[BaseHTTPRequestH
                 )
                 body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
                 self.send_bytes(HTTPStatus.OK, body, "application/json")
+                return
+            if path == "/api/scene_mesh":
+                # Written once per bridge process, so it is cached in the
+                # browser rather than re-sent with every status poll.
+                if mesh_path is None or not mesh_path.is_file():
+                    self.send_bytes(
+                        HTTPStatus.NOT_FOUND,
+                        b'{"objects":[]}',
+                        "application/json",
+                    )
+                    return
+                self.send_bytes(
+                    HTTPStatus.OK, mesh_path.read_bytes(), "application/json"
+                )
+                return
+            if path.startswith("/vendor/"):
+                name = path.removeprefix("/vendor/")
+                candidate = (VENDOR_DIRECTORY / name).resolve()
+                content_type = VENDOR_CONTENT_TYPES.get(candidate.suffix)
+                if (
+                    content_type is None
+                    or VENDOR_DIRECTORY.resolve() not in candidate.parents
+                    or not candidate.is_file()
+                ):
+                    self.send_bytes(
+                        HTTPStatus.NOT_FOUND, b"not found\n", "text/plain"
+                    )
+                    return
+                self.send_bytes(
+                    HTTPStatus.OK, candidate.read_bytes(), content_type
+                )
                 return
             if path in ("/api/status", "/healthz"):
                 # /healthz reports feed liveness only, so it asks for the
@@ -2492,7 +2545,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if metrics_thread is not None:
         metrics_thread.start()
 
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(store, index_html))
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(store, index_html, scene_mesh_path(args.status_jsonl)))
 
     def request_stop(_signum: int, _frame: Any) -> None:
         stop.set()

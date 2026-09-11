@@ -51,7 +51,14 @@ from run_bridge import (  # noqa: E402
     parse_args,
     prepare_scene_with_simple_road,
     scenario_environment,
+    path_polylines,
+    path_slice,
+    SCENE_ALIASES,
+    resolve_scene,
     scene_geometry,
+    scene_mesh,
+    solver_settings,
+    scene_mesh_path,
     write_rectangle_ply,
 )
 
@@ -142,7 +149,7 @@ class AdapterTests(unittest.TestCase):
     def test_environment_record_exposes_effective_solver_and_motion(self) -> None:
         args = parse_args(["--max-depth", "4", "--update-hz", "5"])
         environment = scenario_environment(args)
-        self.assertEqual(environment["scene"], "simple_street_canyon")
+        self.assertEqual(environment["scene"], "sionna_simple_test")
         self.assertEqual(environment["solver"]["name"], "PathSolver")
         self.assertEqual(environment["solver"]["max_depth"], 4)
         self.assertTrue(environment["solver"]["propagation"]["los"])
@@ -390,6 +397,286 @@ class AdapterTests(unittest.TestCase):
                 [point["doppler_hz"] for point in lane["delay_doppler_points"]],
                 [-25.0, 40.0],
             )
+
+
+    def test_scene_mesh_carries_real_triangles_not_bounding_boxes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            write_rectangle_ply(
+                root / "floor.ply",
+                x_min=-10.0, x_max=10.0, y_min=-6.0, y_max=6.0, z=0.0,
+            )
+            (root / "scene.xml").write_text(
+                """<scene version="2.1.0">
+<bsdf type="itu-radio-material" id="concrete"><string name="type" value="concrete"/></bsdf>
+<shape type="ply" id="mesh-floor"><string name="filename" value="floor.ply"/><ref id="concrete" name="bsdf"/></shape>
+</scene>""",
+                encoding="utf-8",
+            )
+            mesh = scene_mesh(root / "scene.xml")
+
+        floor = mesh["objects"][0]
+        self.assertEqual(floor["id"], "floor")
+        self.assertEqual(floor["kind"], "ground")
+        self.assertEqual(floor["material"], "concrete")
+        self.assertEqual(len(floor["positions"]), 12)   # four XYZ corners
+        self.assertEqual(floor["indices"], [0, 1, 2, 0, 2, 3])
+
+    def test_scene_mesh_path_matches_the_web_ui_side(self) -> None:
+        # The bridge writes the sidecar and the web UI reads it; both derive
+        # the name from --status-jsonl, so the two must not drift apart.
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "web_ui"))
+        try:
+            import server as web_ui_server
+        finally:
+            sys.path.pop(0)
+        status = pathlib.Path("/tmp/results/sionna-2gnb-2ue.jsonl")
+        self.assertEqual(
+            scene_mesh_path(status), web_ui_server.scene_mesh_path(status)
+        )
+        self.assertIsNone(scene_mesh_path(None))
+
+    def test_path_slice_accepts_both_synthetic_and_per_antenna_layouts(self) -> None:
+        class Tensor:
+            def __init__(self, ndim: int, value: object) -> None:
+                self.ndim = ndim
+                self.value = value
+
+            def __getitem__(self, key: tuple[object, ...]) -> object:
+                return (self.ndim, key, self.value)
+
+        synthetic = Tensor(5, "vertices")
+        self.assertEqual(
+            path_slice(synthetic, 1, 2, trailing=1)[1],
+            (slice(None), 1, 2),
+        )
+        per_antenna = Tensor(7, "vertices")
+        self.assertEqual(
+            path_slice(per_antenna, 1, 2, trailing=1)[1],
+            (slice(None), 1, 0, 2, 0),
+        )
+        with self.assertRaises(RuntimeError):
+            path_slice(Tensor(3, "x"), 0, 0, trailing=1)
+
+    def test_path_polylines_keep_the_strongest_rays_and_close_both_ends(self) -> None:
+        # Two paths: a line of sight and a single specular bounce. Depth 1 of
+        # the LoS path is padded with InteractionType.NONE and must not add a
+        # vertex to its polyline.
+        vertices = [
+            [[0.0, 0.0, 0.0], [5.0, 6.0, 7.0]],
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ]
+        interactions = [[0, 1], [0, 0]]
+
+        class Grid:
+            def __init__(self, values: list[list[object]]) -> None:
+                self.values = values
+                self.shape = (len(values), len(values[0]), 3)
+
+            def __getitem__(self, key: tuple[int, int]) -> object:
+                return self.values[key[0]][key[1]]
+
+        lines = path_polylines(
+            Grid(vertices),
+            Grid(interactions),
+            source_position=(1.0, 2.0, 30.0),
+            destination_position=(40.0, 0.0, 1.5),
+            gains_db=[-70.0, -90.0, None],
+            limit=5,
+        )
+        self.assertEqual([line["bounces"] for line in lines], [0, 1])
+        self.assertEqual([line["gain_db"] for line in lines], [-70.0, -90.0])
+        self.assertEqual(lines[0]["points"], [[1.0, 2.0, 30.0], [40.0, 0.0, 1.5]])
+        self.assertEqual(
+            lines[1]["points"],
+            [[1.0, 2.0, 30.0], [5.0, 6.0, 7.0], [40.0, 0.0, 1.5]],
+        )
+        self.assertEqual(lines[1]["interactions"], ["specular"])
+        # An invalid path contributes no line even though the tensor has room.
+        self.assertEqual(len(lines), 2)
+
+        strongest = path_polylines(
+            Grid(vertices),
+            Grid(interactions),
+            source_position=(1.0, 2.0, 30.0),
+            destination_position=(40.0, 0.0, 1.5),
+            gains_db=[-70.0, -90.0],
+            limit=1,
+        )
+        self.assertEqual([line["gain_db"] for line in strongest], [-70.0])
+
+
+    def test_loop_route_walks_the_polyline_and_closes_the_ring(self) -> None:
+        # A 12 m square walked at 1 m/s: the lap takes 48 s, so the quarter
+        # points are the corners and the ring must close back to the start.
+        square = [(0.0, 0.0, 1.5), (12.0, 0.0, 1.5), (12.0, 12.0, 1.5), (0.0, 12.0, 1.5)]
+        motion = Motion(
+            square[0], (0.0, 0.0, 0.0), None, "pedestrian",
+            tuple(square), "loop", 1.0,
+        )
+        for elapsed, expected in (
+            (0.0, (0.0, 0.0)), (6.0, (6.0, 0.0)), (12.0, (12.0, 0.0)),
+            (24.0, (12.0, 12.0)), (36.0, (0.0, 12.0)), (48.0, (0.0, 0.0)),
+        ):
+            with self.subTest(elapsed=elapsed):
+                position = motion.position_at(elapsed)
+                self.assertAlmostEqual(position[0], expected[0], places=6)
+                self.assertAlmostEqual(position[1], expected[1], places=6)
+                self.assertAlmostEqual(position[2], 1.5, places=6)
+        # A lap later the walker is back where it started, still going.
+        self.assertAlmostEqual(motion.position_at(54.0)[0], motion.position_at(6.0)[0])
+        self.assertEqual(motion.velocity_at(6.0), (1.0, 0.0, 0.0))
+        self.assertEqual(motion.velocity_at(18.0), (0.0, 1.0, 0.0))
+
+    def test_pingpong_route_turns_round_at_the_far_end(self) -> None:
+        motion = Motion(
+            (0.0, 0.0, 1.5), (0.0, 0.0, 0.0), None, "car",
+            ((0.0, 0.0, 1.5), (10.0, 0.0, 1.5)), "pingpong", 2.0,
+        )
+        self.assertAlmostEqual(motion.position_at(2.5)[0], 5.0)
+        self.assertAlmostEqual(motion.position_at(5.0)[0], 10.0)
+        self.assertAlmostEqual(motion.position_at(7.5)[0], 5.0)   # coming back
+        self.assertAlmostEqual(motion.position_at(10.0)[0], 0.0)
+        self.assertEqual(motion.velocity_at(2.5), (2.0, 0.0, 0.0))
+        self.assertEqual(motion.velocity_at(7.5), (-2.0, 0.0, 0.0))
+
+    def test_route_config_round_trips_and_rejects_contradictions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "route.json"
+
+            def write(node: str) -> None:
+                path.write_text(
+                    '{"name":"r","nodes":{"gnb":{"start_m":[0,0,10]},"ue":'
+                    + node
+                    + '},"links":[{"from":"gnb","to":"ue","direction":"downlink"}]}',
+                    encoding="utf-8",
+                )
+
+            write('{"route_m":[[0,0,1.5],[5,0,1.5]],"route_mode":"loop","speed_mps":1.4}')
+            definition = load_scenario_config(path)
+            motion = definition.nodes["ue"].motion
+            self.assertEqual(motion.route_mode, "loop")
+            self.assertEqual(motion.speed_mps, 1.4)
+            # start_m is optional on a routed node: the route supplies it.
+            self.assertEqual(motion.start, (0.0, 0.0, 1.5))
+
+            write('{"route_m":[[0,0,1.5],[5,0,1.5]],"route_mode":"loop"}')
+            with self.assertRaisesRegex(ValueError, "speed_mps"):
+                load_scenario_config(path)
+            write('{"route_m":[[0,0,1.5],[5,0,1.5]],"speed_mps":1.4,"route_x_m":[0,5]}')
+            with self.assertRaisesRegex(ValueError, "route_m and route_x_m"):
+                load_scenario_config(path)
+            write('{"route_m":[[0,0,1.5]],"speed_mps":1.4}')
+            with self.assertRaisesRegex(ValueError, "at least two points"):
+                load_scenario_config(path)
+
+    def test_scenario_config_can_switch_off_the_synthetic_road(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "s.json"
+            path.write_text(
+                '{"name":"s","scene":"sionna_SUTD_test","simple_road":false,'
+                '"nodes":{"a":{"start_m":[0,0,1]},"b":{"start_m":[1,0,1]}},'
+                '"links":[{"from":"a","to":"b","direction":"downlink"}]}',
+                encoding="utf-8",
+            )
+            definition = load_scenario_config(path)
+            self.assertIs(definition.simple_road, False)
+            self.assertEqual(definition.scene, "sionna_SUTD_test")
+            args = parse_args(["--scenario-config", str(path)])
+            # A scene that ships its own ground must be able to turn the
+            # floor-splitting step off, or the run aborts looking for a floor.
+            self.assertFalse(args.simple_road)
+            self.assertEqual(args.scene, "sionna_SUTD_test")
+
+    def test_scene_names_resolve_to_paths_directories_and_builtins(self) -> None:
+        class FakeBuiltins:
+            simple_street_canyon = "/sionna/simple_street_canyon.xml"
+
+        class FakeRt:
+            scene = FakeBuiltins()
+
+        # The demo name for the built-in canyon still lands on Sionna's file.
+        self.assertEqual(SCENE_ALIASES["sionna_simple_test"], "simple_street_canyon")
+        self.assertEqual(
+            resolve_scene("sionna_simple_test", FakeRt()),
+            pathlib.Path("/sionna/simple_street_canyon.xml"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = pathlib.Path(directory) / "custom.xml"
+            explicit.write_text("<scene/>", encoding="utf-8")
+            self.assertEqual(resolve_scene(str(explicit), FakeRt()), explicit.resolve())
+        with self.assertRaisesRegex(RuntimeError, "unknown scene"):
+            resolve_scene("no_such_scene", FakeRt())
+        # The repository's own generated scene resolves without touching Sionna.
+        generated = resolve_scene("sionna_SUTD_test", FakeRt())
+        self.assertTrue(generated.is_file())
+        self.assertEqual(generated.name, "scene.xml")
+
+
+    def test_scenario_solver_block_pins_only_what_it_names(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "s.json"
+
+            def write(solver: str) -> None:
+                path.write_text(
+                    '{"name":"s","solver":' + solver + ','
+                    '"nodes":{"gnb0":{"start_m":[0,0,10]},"ue0":{"start_m":[1,0,1]}},'
+                    '"links":[{"from":"gnb0","to":"ue0","direction":"downlink"}]}',
+                    encoding="utf-8",
+                )
+
+            defaults = parse_args([])
+            write('{"max_depth":5,"propagation":{"diffraction":true}}')
+            args = parse_args(["--scenario-config", str(path)])
+            self.assertEqual(args.max_depth, 5)
+            self.assertTrue(args.diffraction)
+            # Untouched keys keep the command-line defaults, so a scenario
+            # pins what it means to pin and nothing else.
+            self.assertEqual(args.samples_per_src, defaults.samples_per_src)
+            self.assertEqual(args.seed, defaults.seed)
+            self.assertTrue(args.los)
+            self.assertFalse(args.refraction)
+
+            for bad, expected in (
+                ('{"max_depth":0}', "must be positive"),
+                ('{"max_depth":"3"}', "non-negative integer"),
+                ('{"propagation":{"los":"yes"}}', "must be true or false"),
+                ('{"propagation":{"reflection":true}}', "unknown solver.propagation"),
+                ('{"depth":3}', "unknown solver keys"),
+                ('[]', "must be an object"),
+            ):
+                write(bad)
+                with self.assertRaisesRegex(ValueError, expected):
+                    load_scenario_config(path)
+
+    def test_solver_settings_map_to_argparse_destinations(self) -> None:
+        self.assertIsNone(solver_settings(None))
+        self.assertEqual(
+            solver_settings({"samples_per_source": 1000, "path_polylines": 0}),
+            {"samples_per_src": 1000, "path_polylines": 0},
+        )
+
+    def test_reference_single_cell_example_is_self_contained(self) -> None:
+        # The 1 gNB / 1 UE example has to reproduce its own trace settings,
+        # not inherit whatever the caller happened to type.
+        path = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "examples" / "sionna" / "ocudu-rank1-sutd.json"
+        )
+        definition = load_scenario_config(path)
+        self.assertEqual(sorted(definition.nodes), ["gnb0", "ue0"])
+        self.assertEqual(len(definition.links), 2)
+        self.assertEqual(definition.scene, "sionna_SUTD_test")
+        self.assertIs(definition.simple_road, False)
+        self.assertEqual(definition.nodes["gnb0"].tx_array.antenna_count, 4)
+        self.assertEqual(definition.nodes["ue0"].rx_array.antenna_count, 1)
+        self.assertEqual(definition.nodes["ue0"].motion.route_mode, "pingpong")
+        args = parse_args(["--scenario-config", str(path)])
+        self.assertEqual(args.max_depth, 3)
+        self.assertEqual(args.samples_per_src, 200_000)
+        self.assertEqual(args.path_polylines, 6)
+        self.assertTrue(args.los and args.specular_reflection)
+        self.assertFalse(args.diffuse_reflection or args.refraction or args.diffraction)
 
 
 if __name__ == "__main__":

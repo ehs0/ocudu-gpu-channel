@@ -21,6 +21,9 @@ from typing import Any
 sys.dont_write_bytecode = True
 
 SUPPORTED_GNB_PORTS = frozenset((1, 2, 4))
+# srsUE (srsRAN 4G) builds its ZMQ radio with nof_antennas ports; two is
+# the most its downlink chain handles.
+MAX_UE_PORTS = 2
 MODEL_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
@@ -38,13 +41,61 @@ legacy = load_legacy_renderer()
 
 
 @dataclass(frozen=True)
+class NodePorts:
+    node_id: str
+    tx: int
+    rx: int
+
+
+@dataclass(frozen=True)
+class ShapeLink:
+    source: str
+    destination: str
+    model: str
+
+
+@dataclass(frozen=True)
 class LiveShape:
+    """The runtime shape a Sionna scenario asks the native stack to build.
+
+    Everything here is read off the scenario rather than assumed: the port
+    counts come from the node arrays, and the links come from the links array
+    whatever their number or model. The named `gnb_*`/`ue_*` fields stay for
+    the callers and the shape metadata file that already depend on them.
+    """
+
     gnb_tx: int
     gnb_rx: int
     ue_tx: int
     ue_rx: int
     downlink_model: str
     uplink_model: str
+    nodes: tuple[NodePorts, ...] = ()
+    links: tuple[ShapeLink, ...] = ()
+
+    # A shape built from the scalar fields alone — as the self-test and any
+    # older caller does — still describes one gNB and one UE, so the node and
+    # link views are synthesised rather than left empty.
+    @property
+    def gnb(self) -> NodePorts:
+        return self.nodes[0] if self.nodes else NodePorts("gnb0", self.gnb_tx, self.gnb_rx)
+
+    @property
+    def ue(self) -> NodePorts:
+        return self.nodes[1] if self.nodes else NodePorts("ue0", self.ue_tx, self.ue_rx)
+
+    @property
+    def radio_nodes(self) -> tuple[NodePorts, ...]:
+        return self.nodes or (self.gnb, self.ue)
+
+    @property
+    def channel_links(self) -> tuple[ShapeLink, ...]:
+        if self.links:
+            return self.links
+        return (
+            ShapeLink(self.gnb.node_id, self.ue.node_id, self.downlink_model),
+            ShapeLink(self.ue.node_id, self.gnb.node_id, self.uplink_model),
+        )
 
 
 def _object(value: Any, where: str) -> dict[str, Any]:
@@ -73,55 +124,113 @@ def _array_count(node: dict[str, Any], key: str, where: str) -> int:
 
 
 def load_live_shape(path: Path) -> LiveShape:
+    """Read the runtime shape out of a Sionna scenario.
+
+    Node port counts and the link list are taken as given. Two things are
+    still checked, and only because the native stack really cannot do them:
+    the OCUDU gNB is built for a fixed set of port counts, and
+    `run-ocudu-legacy-1x1-inner.sh` starts exactly one srsUE process, so the
+    scenario may name only one UE. Neither the number of links nor the UE
+    port count is constrained any more.
+    """
+
     try:
         root = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot load Sionna scenario {path}: {error}") from error
     root = _object(root, "scenario")
-    nodes = _object(root.get("nodes"), "scenario.nodes")
-    if set(nodes) != {"gnb0", "ue0"}:
-        raise ValueError("native rank-1 scenario must contain exactly gnb0 and ue0")
-    gnb = _object(nodes["gnb0"], "nodes.gnb0")
-    ue = _object(nodes["ue0"], "nodes.ue0")
-    gnb_tx = _array_count(gnb, "tx_array", "nodes.gnb0")
-    gnb_rx = _array_count(gnb, "rx_array", "nodes.gnb0")
-    ue_tx = _array_count(ue, "tx_array", "nodes.ue0")
-    ue_rx = _array_count(ue, "rx_array", "nodes.ue0")
-    if gnb_tx not in SUPPORTED_GNB_PORTS or gnb_rx not in SUPPORTED_GNB_PORTS:
+    raw_nodes = _object(root.get("nodes"), "scenario.nodes")
+    if not raw_nodes:
+        raise ValueError("scenario.nodes must not be empty")
+
+    gnb_ids = [node_id for node_id in raw_nodes if node_id.startswith("gnb")]
+    ue_ids = [node_id for node_id in raw_nodes if not node_id.startswith("gnb")]
+    if len(gnb_ids) != 1:
+        raise ValueError(
+            "the native runtime builds one OCUDU gNB; scenario names "
+            f"{len(gnb_ids)}: {', '.join(sorted(gnb_ids)) or 'none'}"
+        )
+    if len(ue_ids) != 1:
+        # run-ocudu-multi-ue.sh is not the way out of this: it is a
+        # legacy-channel attach gate with no Sionna bridge at all. Nothing in
+        # this tree drives more than one srsUE from Sionna RT today, so the
+        # message says what actually exists rather than pointing somewhere
+        # that would fail differently.
+        raise ValueError(
+            "run-ocudu-legacy-1x1-inner.sh starts a single srsUE process, so "
+            f"the native Sionna gates carry one UE; scenario names "
+            f"{len(ue_ids)}: {', '.join(sorted(ue_ids)) or 'none'}. Run a "
+            "multi-UE scenario through the Sionna bridge and web UI directly "
+            "(scripts/sionna_rt/run_bridge.py --scenario-config ...); the "
+            "live radio stacks are what is limited to one UE, not the bridge."
+        )
+
+    ports: list[NodePorts] = []
+    for node_id in (*gnb_ids, *ue_ids):
+        node = _object(raw_nodes[node_id], f"nodes.{node_id}")
+        ports.append(
+            NodePorts(
+                node_id,
+                _array_count(node, "tx_array", f"nodes.{node_id}"),
+                _array_count(node, "rx_array", f"nodes.{node_id}"),
+            )
+        )
+    gnb, ue = ports[0], ports[1]
+    if gnb.tx not in SUPPORTED_GNB_PORTS or gnb.rx not in SUPPORTED_GNB_PORTS:
         supported = ", ".join(str(value) for value in sorted(SUPPORTED_GNB_PORTS))
         raise ValueError(
             f"live OCUDU gNB arrays must resolve to {supported} ports; "
-            f"scenario requested tx={gnb_tx}, rx={gnb_rx}"
+            f"scenario requested tx={gnb.tx}, rx={gnb.rx}"
         )
-    if (ue_tx, ue_rx) != (1, 1):
+    if ue.tx > MAX_UE_PORTS or ue.rx > MAX_UE_PORTS:
         raise ValueError(
-            "native srsUE is single-port; nodes.ue0 tx_array and rx_array must both resolve to 1"
+            f"srsUE supports at most {MAX_UE_PORTS} antenna ports; "
+            f"nodes.{ue.node_id} requested tx={ue.tx}, rx={ue.rx}"
         )
 
     raw_links = root.get("links")
-    if not isinstance(raw_links, list) or len(raw_links) != 2:
-        raise ValueError("native rank-1 scenario must contain exactly one DL and one UL link")
-    models: dict[tuple[str, str, str], str] = {}
+    if not isinstance(raw_links, list) or not raw_links:
+        raise ValueError("scenario.links must be a non-empty array")
+    known = {port.node_id for port in ports}
+    links: list[ShapeLink] = []
+    seen: set[tuple[str, str, str]] = set()
     for index, raw_link in enumerate(raw_links):
         link = _object(raw_link, f"links[{index}]")
         source = link.get("from")
         destination = link.get("to")
-        direction = link.get("direction")
         model = link.get("model", "sionna_rt")
+        if source not in known or destination not in known:
+            raise ValueError(
+                f"links[{index}] references a node the scenario does not "
+                f"define: {source!r} -> {destination!r}"
+            )
         if not isinstance(model, str) or MODEL_ID_RE.fullmatch(model) is None:
             raise ValueError(f"links[{index}].model must match {MODEL_ID_RE.pattern}")
-        key = (source, destination, direction)
-        if key in models:
-            raise ValueError(f"duplicate native rank-1 link: {key}")
-        models[key] = model
-    try:
-        downlink_model = models[("gnb0", "ue0", "downlink")]
-        uplink_model = models[("ue0", "gnb0", "uplink")]
-    except KeyError as error:
-        raise ValueError("scenario links must be gnb0->ue0 downlink and ue0->gnb0 uplink") from error
-    if len(models) != 2:
-        raise ValueError("scenario contains an unsupported link for the single-gNB/single-UE runtime")
-    return LiveShape(gnb_tx, gnb_rx, ue_tx, ue_rx, downlink_model, uplink_model)
+        key = (source, destination, model)
+        if key in seen:
+            raise ValueError(f"duplicate link: {source}>{destination}:{model}")
+        seen.add(key)
+        links.append(ShapeLink(source, destination, model))
+
+    # The gNB<->UE pair still has to be present: it is what the RRC/PDU/ping
+    # gate measures. Extra links beside it are carried through untouched.
+    downlink = next(
+        (link.model for link in links
+         if link.source == gnb.node_id and link.destination == ue.node_id), None
+    )
+    uplink = next(
+        (link.model for link in links
+         if link.source == ue.node_id and link.destination == gnb.node_id), None
+    )
+    if downlink is None or uplink is None:
+        raise ValueError(
+            f"scenario must carry {gnb.node_id}->{ue.node_id} and "
+            f"{ue.node_id}->{gnb.node_id} links"
+        )
+    return LiveShape(
+        gnb.tx, gnb.rx, ue.tx, ue.rx, downlink, uplink,
+        tuple(ports), tuple(links),
+    )
 
 
 def render_gnb(source: str, log_dir: Path, shape: LiveShape) -> str:
@@ -177,8 +286,22 @@ def render_gnb(source: str, log_dir: Path, shape: LiveShape) -> str:
     return rendered
 
 
-def _port_lines(count: int) -> str:
-    return "".join(f"      - gnb0_p{index}\n" for index in range(count))
+def _port_lines(count: int, node_id: str = "gnb0") -> str:
+    return "".join(f"      - {node_id}_p{index}\n" for index in range(count))
+
+
+# ZMQ endpoints are allocated by node position: the gNB keeps 2000.. and the
+# UE keeps 2100.., which is what every existing config, log and gate message
+# already refers to.
+GNB_PORT_BASE = 2000
+UE_PORT_BASE = 2100
+
+
+def _ue_endpoints(index: int) -> tuple[str, str]:
+    """(tx, rx) as seen by the UE: it transmits on the odd port."""
+
+    base = UE_PORT_BASE + 2 * index
+    return f"tcp://127.0.0.1:{base + 1}", f"tcp://127.0.0.1:{base}"
 
 
 # Metrics are opt-in. The gNB emits none of the RAN KPIs by default, and
@@ -287,16 +410,42 @@ def render_gnb_metrics(port: int = DEFAULT_METRICS_PORT,
 
 
 def render_topology(shape: LiveShape) -> str:
-    device_count = max(shape.gnb_tx, shape.gnb_rx)
+    gnb, ue = shape.gnb, shape.ue
+    device_count = max(gnb.tx, gnb.rx)
     devices = "".join(
-        f"  - id: gnb0_p{index}\n"
+        f"  - id: {gnb.node_id}_p{index}\n"
         "    role: port\n"
         "    sample_rate_hz: 23040000\n"
-        f"    tx_endpoint: tcp://127.0.0.1:{2000 + 2 * index}\n"
-        f"    rx_endpoint: tcp://127.0.0.1:{2001 + 2 * index}\n"
+        f"    tx_endpoint: tcp://127.0.0.1:{GNB_PORT_BASE + 2 * index}\n"
+        f"    rx_endpoint: tcp://127.0.0.1:{GNB_PORT_BASE + 1 + 2 * index}\n"
         for index in range(device_count)
     )
-    model_ids = tuple(dict.fromkeys((shape.downlink_model, shape.uplink_model)))
+    # The UE's device ids follow its own port count now, so a two-port handset
+    # renders as ue0_p0 and ue0_p1 instead of being rejected.
+    for index in range(max(ue.tx, ue.rx)):
+        ue_tx, ue_rx = _ue_endpoints(index)
+        devices += (
+            f"  - id: {ue.node_id}_p{index}\n"
+            "    role: port\n"
+            "    sample_rate_hz: 23040000\n"
+            f"    tx_endpoint: {ue_tx}\n"
+            f"    rx_endpoint: {ue_rx}\n"
+        )
+    radio_nodes = "".join(
+        f"  - id: {port.node_id}\n"
+        "    tx_ports:\n"
+        f"{_port_lines(port.tx, port.node_id)}"
+        "    rx_ports:\n"
+        f"{_port_lines(port.rx, port.node_id)}"
+        for port in shape.radio_nodes
+    )
+    links = "".join(
+        f"  - from: {link.source}\n"
+        f"    to: {link.destination}\n"
+        f"    model: {link.model}\n"
+        for link in shape.channel_links
+    )
+    model_ids = tuple(dict.fromkeys(link.model for link in shape.channel_links))
     models = "".join(
         f"  {model_id}:\n"
         "    chain:\n"
@@ -318,31 +467,34 @@ def render_topology(shape: LiveShape) -> str:
         "  queue_samples: 2457600\n"
         "devices:\n"
         f"{devices}"
-        "  - id: ue0_p0\n"
-        "    role: port\n"
-        "    sample_rate_hz: 23040000\n"
-        "    tx_endpoint: tcp://127.0.0.1:2101\n"
-        "    rx_endpoint: tcp://127.0.0.1:2100\n"
         "radio_nodes:\n"
-        "  - id: gnb0\n"
-        "    tx_ports:\n"
-        f"{_port_lines(shape.gnb_tx)}"
-        "    rx_ports:\n"
-        f"{_port_lines(shape.gnb_rx)}"
-        "  - id: ue0\n"
-        "    tx_ports:\n"
-        "      - ue0_p0\n"
-        "    rx_ports:\n"
-        "      - ue0_p0\n"
+        f"{radio_nodes}"
         "links:\n"
-        "  - from: gnb0\n"
-        "    to: ue0\n"
-        f"    model: {shape.downlink_model}\n"
-        "  - from: ue0\n"
-        "    to: gnb0\n"
-        f"    model: {shape.uplink_model}\n"
+        f"{links}"
         "models:\n"
         f"{models}"
+    )
+
+
+def render_srsue(source: str, log_dir: Path, shape: LiveShape) -> str:
+    """The legacy single-port srsUE config, widened to the scenario's ports."""
+
+    rendered = legacy.render_srsue(source, log_dir)
+    ports = max(shape.ue.tx, shape.ue.rx)
+    if ports == 1:
+        return rendered
+    tx_args = [f"tx_port{index}={_ue_endpoints(index)[0]}" for index in range(shape.ue.tx)]
+    rx_args = [f"rx_port{index}={_ue_endpoints(index)[1]}" for index in range(shape.ue.rx)]
+    rendered = legacy.replace_exact(
+        rendered,
+        "device_args = tx_port=tcp://127.0.0.1:2101,rx_port=tcp://127.0.0.1:2100,base_srate=23.04e6\n",
+        "device_args = " + ",".join((*tx_args, *rx_args, "base_srate=23.04e6")) + "\n",
+        1,
+        "srsUE device args",
+    )
+    return legacy.replace_exact(
+        rendered, "nof_antennas = 1\n", f"nof_antennas = {ports}\n", 1,
+        "srsUE antenna count",
     )
 
 
@@ -354,7 +506,120 @@ def _render_gnb_document(source: str, log_dir: Path, shape: LiveShape) -> str:
     return rendered + (render_gnb_metrics() if metrics_enabled() else "")
 
 
+def _scenario_fixture(tmp: Path, nodes: dict, links: list) -> Path:
+    path = tmp / "scenario.json"
+    path.write_text(
+        json.dumps({"name": "fixture", "nodes": nodes, "links": links}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _shape_self_test() -> None:
+    """The scenario shape is read, not assumed."""
+
+    import tempfile
+
+    def array(count: int) -> dict:
+        return {"rows": 1, "cols": count}
+
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = Path(directory)
+
+        # More than two links is fine: extras ride alongside the gNB<->UE pair
+        # the gate measures.
+        path = _scenario_fixture(
+            tmp,
+            {"gnb0": {"array": array(4)}, "ue0": {"array": array(1)}},
+            [
+                {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "sionna_rt"},
+                {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "sionna_rt"},
+                {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "probe"},
+            ],
+        )
+        shape = load_live_shape(path)
+        assert len(shape.links) == 3, shape.links
+        topology = render_topology(shape)
+        assert topology.count("  - from: gnb0\n") == 2
+        assert "  probe:\n" in topology and "  sionna_rt:\n" in topology
+
+        # A two-port UE renders its own devices and widens the srsUE config.
+        path = _scenario_fixture(
+            tmp,
+            {"gnb0": {"array": array(2)}, "ue0": {"array": array(2)}},
+            [
+                {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"},
+                {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "m"},
+            ],
+        )
+        shape = load_live_shape(path)
+        assert (shape.ue_tx, shape.ue_rx) == (2, 2)
+        topology = render_topology(shape)
+        assert "  - id: ue0_p1\n" in topology
+        assert "      - ue0_p1\n" in topology
+        assert "tx_endpoint: tcp://127.0.0.1:2103\n" in topology
+        source = (
+            Path(__file__).resolve().parents[2]
+            / "examples/native/srsran/srsue_zmq_legacy_1x1.conf.in"
+        ).read_text(encoding="utf-8")
+        conf = render_srsue(source, Path("/tmp"), shape)
+        assert "nof_antennas = 2\n" in conf, conf
+        assert "tx_port0=tcp://127.0.0.1:2101" in conf and "tx_port1=tcp://127.0.0.1:2103" in conf
+        assert "rx_port0=tcp://127.0.0.1:2100" in conf and "rx_port1=tcp://127.0.0.1:2102" in conf
+        # A single-port UE must still render the untouched legacy line.
+        single = load_live_shape(_scenario_fixture(
+            tmp,
+            {"gnb0": {"array": array(4)}, "ue0": {"array": array(1)}},
+            [
+                {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"},
+                {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "m"},
+            ],
+        ))
+        assert render_srsue(source, Path("/tmp"), single) == legacy.render_srsue(source, Path("/tmp"))
+
+        # What the native launcher genuinely cannot do is still refused, and
+        # the message has to say which launcher can.
+        for nodes, links, expected in (
+            (
+                {"gnb0": {"array": array(4)}, "ue0": {"array": array(1)}, "ue1": {"array": array(1)}},
+                [
+                    {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"},
+                    {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "m"},
+                ],
+                "one UE",
+            ),
+            (
+                {"gnb0": {"array": array(3)}, "ue0": {"array": array(1)}},
+                [
+                    {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"},
+                    {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "m"},
+                ],
+                "must resolve to 1, 2, 4 ports",
+            ),
+            (
+                {"gnb0": {"array": array(4)}, "ue0": {"array": array(4)}},
+                [
+                    {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"},
+                    {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "m"},
+                ],
+                "at most 2 antenna ports",
+            ),
+            (
+                {"gnb0": {"array": array(4)}, "ue0": {"array": array(1)}},
+                [{"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "m"}],
+                "links",
+            ),
+        ):
+            try:
+                load_live_shape(_scenario_fixture(tmp, nodes, links))
+            except ValueError as error:
+                assert expected in str(error), (expected, str(error))
+            else:
+                raise AssertionError(f"scenario should have been refused: {expected}")
+
+
 def self_test() -> None:
+    _shape_self_test()
     shape = LiveShape(2, 4, 1, 1, "dl_dynamic", "ul_dynamic")
     topology = render_topology(shape)
     assert topology.count("      - gnb0_p0\n") == 2
@@ -461,7 +726,7 @@ def main() -> int:
         "gnb.yaml": _render_gnb_document(gnb_source, log_dir, shape),
         "topology.yaml": render_topology(shape),
         "open5gs.yaml": legacy.render_open5gs(open5gs_source, native_root),
-        "srsue.conf": legacy.render_srsue(srsue_source, log_dir),
+        "srsue.conf": render_srsue(srsue_source, log_dir, shape),
         "subscriber.csv": legacy.validate_subscriber(subscriber_source),
     }
     for name, text in rendered.items():
