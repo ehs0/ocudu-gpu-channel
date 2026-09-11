@@ -9,9 +9,15 @@
         60.0
       ],
       "mobility": "fixed",
-      "array": {
+      "tx_array": {
         "rows": 1,
-        "cols": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "rx_array": {
+        "rows": 1,
+        "cols": 4,
         "pattern": "iso",
         "polarization": "V"
       }
@@ -23,9 +29,15 @@
         60.0
       ],
       "mobility": "fixed",
-      "array": {
+      "tx_array": {
         "rows": 1,
-        "cols": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "rx_array": {
+        "rows": 1,
+        "cols": 4,
         "pattern": "iso",
         "polarization": "V"
       }

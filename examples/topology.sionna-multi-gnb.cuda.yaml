@@ -1,4 +1,4 @@
-# Sionna RT-driven 2-gNB / 2-UE topology.
+# Sionna RT-driven 2-gNB / 2-UE topology, four antennas per cell.
 #
 # The Sionna counterpart of topology.multi-gnb.cuda.yaml. That file is the
 # static gate's, and it hand-tunes the cells apart: `serving` carries
@@ -44,31 +44,111 @@ runtime:
   gpu_device: 0
   batch_samples: 23040
   queue_samples: 2457600
+# Each cell carries FOUR antennas and each srsUE keeps one, so per UE the
+# downlink is a 1x4 row and the uplink a 4x1 column: still rank-1 MISO/SIMO,
+# never 2x2. That makes every device a `port` and every radio a `radio_nodes`
+# entry -- declaring radio_nodes at all means every device must be claimed by
+# one, and links then name radio nodes rather than devices.
+#
+# Ports pair tx even / rx odd, the same convention the 4T4R gNB fixture's ZMQ
+# device_args use, and the two cells take disjoint blocks (gnb0 3000-3007,
+# gnb1 3010-3017) so a stale socket from one cell cannot land on the other.
+# The UEs keep the ports they always had.
 devices:
-  - id: gnb0
-    role: gnb
+  - id: gnb0_p0
+    role: port
     sample_rate_hz: 23040000
     tx_endpoint: tcp://127.0.0.1:3000
     rx_endpoint: tcp://*:3001
     rx_model: noise_floor
-  - id: gnb1
-    role: gnb
+  - id: gnb0_p1
+    role: port
     sample_rate_hz: 23040000
     tx_endpoint: tcp://127.0.0.1:3002
     rx_endpoint: tcp://*:3003
     rx_model: noise_floor
-  - id: ue0
-    role: ue
+  - id: gnb0_p2
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3004
+    rx_endpoint: tcp://*:3005
+    rx_model: noise_floor
+  - id: gnb0_p3
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3006
+    rx_endpoint: tcp://*:3007
+    rx_model: noise_floor
+  - id: gnb1_p0
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3010
+    rx_endpoint: tcp://*:3011
+    rx_model: noise_floor
+  - id: gnb1_p1
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3012
+    rx_endpoint: tcp://*:3013
+    rx_model: noise_floor
+  - id: gnb1_p2
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3014
+    rx_endpoint: tcp://*:3015
+    rx_model: noise_floor
+  - id: gnb1_p3
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3016
+    rx_endpoint: tcp://*:3017
+    rx_model: noise_floor
+  - id: ue0_p0
+    role: port
     sample_rate_hz: 23040000
     tx_endpoint: tcp://127.0.0.1:3101
     rx_endpoint: tcp://*:3100
     rx_model: noise_floor
-  - id: ue1
-    role: ue
+  - id: ue1_p0
+    role: port
     sample_rate_hz: 23040000
     tx_endpoint: tcp://127.0.0.1:3103
     rx_endpoint: tcp://*:3102
     rx_model: noise_floor
+
+radio_nodes:
+  - id: gnb0
+    tx_ports:
+      - gnb0_p0
+      - gnb0_p1
+      - gnb0_p2
+      - gnb0_p3
+    rx_ports:
+      - gnb0_p0
+      - gnb0_p1
+      - gnb0_p2
+      - gnb0_p3
+  - id: gnb1
+    tx_ports:
+      - gnb1_p0
+      - gnb1_p1
+      - gnb1_p2
+      - gnb1_p3
+    rx_ports:
+      - gnb1_p0
+      - gnb1_p1
+      - gnb1_p2
+      - gnb1_p3
+  - id: ue0
+    tx_ports:
+      - ue0_p0
+    rx_ports:
+      - ue0_p0
+  - id: ue1
+    tx_ports:
+      - ue1_p0
+    rx_ports:
+      - ue1_p0
 links:
   - from: gnb0
     to: ue0

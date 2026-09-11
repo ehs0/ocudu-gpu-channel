@@ -360,31 +360,48 @@ srsue_dockerfile="${config_dir}/Dockerfile.srsue"
 # One gNB config per cell from the shared ZMQ base: rewrite the ZMQ ports and
 # add a distinct PCI, gnb_id and node name so the two cells are independent.
 #
+# The base is the 4T4R rank-1 fixture, so each cell carries FOUR antennas in
+# both directions and each srsUE keeps one: per UE the downlink is a 1x4 row
+# and the uplink a 4x1 column, still rank-1 MISO/SIMO. Everything that fixture
+# is careful about carries over unchanged and is load-bearing -- ue_dedicated
+# with DCI 0_1/1_1, CSI-RS off, and above all the pusch.max_ue_mcs cap, without
+# which UL 4R registration is a coin flip (root-caused 2026-08-17).
+#
 # The gains go to 0 for the same reason the native renderers zero them: the
 # fixture carries the B210's tx_gain/rx_gain of 75, and OCUDU's ZMQ device
 # refuses anything above 0 dB ("Channel gain must be <= 0.0 dB for
 # ZMQ-device"), which kills the cell right after the DU is created.
 gen_gnb_config() {
-  # $1 dst  $2 tx_port  $3 rx_port  $4 pci  $5 gnb_id  $6 ran_node_name
+  # $1 dst  $2 first_port  $3 pci  $4 gnb_id  $5 ran_node_name
+  #
+  # A cell takes eight consecutive ports from $2: tx on the even offsets and
+  # rx on the odd ones, port by port, which is the pairing both the fixture's
+  # device_args and the broker topology's gnbN_pM devices use. The two cells
+  # take disjoint blocks so a stale socket cannot cross between them.
   #
   # inactivity_timer goes inside the fixture's existing cu_cp block, not after
   # it: a second top-level `cu_cp:` mapping is a duplicate key, not an override.
-  awk -v tx="$2" -v rx="$3" -v pci="$4" -v gid="$5" -v nm="$6" \
+  local base="$2" args="" port
+  for port in 0 1 2 3; do
+    args+="tx_port${port}=tcp://*:$((base + port * 2)),"
+  done
+  for port in 0 1 2 3; do
+    args+="rx_port${port}=tcp://host.docker.internal:$((base + port * 2 + 1)),"
+  done
+  args+="base_srate=23.04e6"
+  awk -v args="${args}" -v pci="$3" -v gid="$4" -v nm="$5" \
       -v inactivity="${ue_inactivity_seconds}" '
-    /^[[:space:]]*device_args:/ {
-      print "  device_args: tx_port=tcp://*:" tx ",rx_port=tcp://host.docker.internal:" rx ",base_srate=23.04e6"
-      next
-    }
+    /^[[:space:]]*device_args:/ { print "  device_args: " args; next }
     /^[[:space:]]*tx_gain:/ { print "  tx_gain: 0"; next }
     /^[[:space:]]*rx_gain:/ { print "  rx_gain: 0"; next }
     { print }
     /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
     END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
-  ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml" >"$1"
+  ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
 }
-gen_gnb_config "${gnb0_config}" 3000 3001 1 411 gnb0
-gen_gnb_config "${gnb1_config}" 3002 3003 2 412 gnb1
+gen_gnb_config "${gnb0_config}" 3000 1 411 gnb0
+gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
 
 awk '
   { print }
@@ -414,8 +431,14 @@ ${fivegc_ports}
 YAML
 cat >>"${compose_override}" <<'YAML'
   gnb:
+    # One published port per transmit antenna: these are the four the cell
+    # binds, and the broker connects in to each. The receive ports are dialled
+    # out to host.docker.internal and need no mapping.
     ports:
       - "3000:3000"
+      - "3002:3002"
+      - "3004:3004"
+      - "3006:3006"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     build:
@@ -442,7 +465,10 @@ cat >>"${compose_override}" <<'YAML'
       metrics:
         ipv4_address: 172.19.1.4
     ports:
-      - "3002:3002"
+      - "3010:3010"
+      - "3012:3012"
+      - "3014:3014"
+      - "3016:3016"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
