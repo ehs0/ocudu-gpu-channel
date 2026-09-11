@@ -75,11 +75,21 @@ ue_keepalive_seconds="${OCUDU_MGNB_UE_KEEPALIVE_SECONDS:-0}"
 # mode; see where topology_name is resolved for why the two differ.
 topology_name="${OCUDU_MGNB_TOPOLOGY:-}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
-# srsUE launch stagger: the two UEs camp on different cells so they do not
-# collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
-# any startup race. 0 disables it.
+# srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped. The two
+# UEs were assumed not to collide on RACH because they camp on different
+# cells, and that assumption was wrong twice over -- which cell a UE camps on
+# is decided by the geometry at attach, not by the config, and both UEs
+# landed on gnb0 in every measured run; and srsRAN ZMQ radios share the
+# broker's lock-step virtual time, so two UEs started together land in the
+# same PRACH occasion whichever cell they are talking to. The distinct
+# preamble per UE below is what makes several UEs possible at all; this
+# stagger is what makes it reliable. 0 disables it.
 ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
-srsran_ref="${SRSRAN_4G_REF:-release_23_11}"
+# srsUE base: latest zhouyou-gu/srsRAN_4G master. Stock srsRAN cannot run more
+# than one UE on a cell -- proc_ra_nr.cc hardcodes preamble_index = 0 with no
+# random draw at all, so every UE sends the same preamble. master restores the
+# draw and adds the SRSUE_PRACH_PREAMBLE_INDEX override used below.
+srsran_ref="${SRSRAN_4G_REF:-master}"
 
 if [[ "${channel_mode}" != "static" && "${channel_mode}" != "sionna" ]]; then
   echo "OCUDU_MGNB_CHANNEL_MODE must be static or sionna" >&2
@@ -496,14 +506,15 @@ YAML
 
 cat >"${srsue_dockerfile}" <<'DOCKER'
 FROM ubuntu:22.04
-ARG SRSRAN_4G_REF=release_23_11
+ARG SRSRAN_4G_REPO=https://github.com/zhouyou-gu/srsRAN_4G.git
+ARG SRSRAN_4G_REF=master
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates cmake g++ gcc git iproute2 iputils-ping \
     libboost-program-options-dev libconfig++-dev libfftw3-dev \
     libmbedtls-dev libsctp-dev libzmq3-dev make net-tools pkg-config \
   && rm -rf /var/lib/apt/lists/*
-RUN git clone --depth 1 --branch "${SRSRAN_4G_REF}" https://github.com/srsran/srsRAN_4G.git /src/srsran_4g \
+RUN git clone --depth 1 --branch "${SRSRAN_4G_REF}" "${SRSRAN_4G_REPO}" /src/srsran_4g \
   && cmake -S /src/srsran_4g -B /src/srsran_4g/build -DCMAKE_BUILD_TYPE=Release \
        -DENABLE_EXPORT=ON -DENABLE_ZEROMQ=ON -DENABLE_UHD=OFF \
   && cmake --build /src/srsran_4g/build -j"$(nproc)" --target srsue \
@@ -765,14 +776,24 @@ done
 echo "cells: gnb0_up=${gnb0_up} gnb1_up=${gnb1_up}"
 
 run_srsue() {
-  # $1 container name  $2 tx port  $3 config  $4 log
+  # $1 container name  $2 tx port  $3 config  $4 log  $5 preamble index
+  #
+  # A distinct contention-based preamble per UE. Stock srsRAN hardcodes
+  # `preamble_index = 0` and `prach_occasion = 0` in proc_ra_nr.cc, so two
+  # srsUEs racing on one cell send the identical preamble in the identical
+  # occasion and the gNB merges them onto one C-RNTI -- measured here, both
+  # UEs answering as 0x4601, the second stalling and every uplink grant
+  # answered by two radios at once. The fork this image builds from restores
+  # the random draw and adds this override on top so a gate can be
+  # deterministic about which UE takes which preamble.
   docker run --rm --name "$1" --privileged --cap-add NET_ADMIN --device /dev/net/tun \
     --add-host host.docker.internal:host-gateway -p "$2:$2" \
+    -e "SRSUE_PRACH_PREAMBLE_INDEX=${5:-0}" \
     -v "$3:/config/ue.conf:ro" --entrypoint /bin/sh \
     "${srsue_image}" -lc 'mkdir -p /var/run/netns && ip netns add ue1 && exec srsue /config/ue.conf' \
     >"$4" 2>&1 &
 }
-run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log"
+run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log" 0
 ue0_pid="$!"
 # Hold ue1 until ue0 is RRC-connected (capped), then a short settle.
 if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
@@ -782,7 +803,7 @@ if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
   done
   sleep 2
 fi
-run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log"
+run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log" 1
 ue1_pid="$!"
 
 deadline=$((SECONDS + duration_seconds))
