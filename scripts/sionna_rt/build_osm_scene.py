@@ -256,6 +256,74 @@ def point_in_ring(point: tuple[float, float], ring: Sequence[tuple[float, float]
     return inside_ring
 
 
+def segments_cross(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> bool:
+    """Do segments ab and cd meet? Touching counts as meeting.
+
+    A walk that grazes a wall is a walk through it once the footprint is
+    extruded to its height, so there is no reason to be lenient here.
+    """
+
+    def turn(p, q, r) -> float:
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+
+    turns = (turn(a, b, c), turn(a, b, d), turn(c, d, a), turn(c, d, b))
+    if (turns[0] > 0.0) != (turns[1] > 0.0) and (turns[2] > 0.0) != (turns[3] > 0.0):
+        return True
+
+    def between(p, q, r) -> bool:
+        return (min(p[0], q[0]) <= r[0] <= max(p[0], q[0])
+                and min(p[1], q[1]) <= r[1] <= max(p[1], q[1]))
+
+    return any(
+        value == 0.0 and between(*points)
+        for value, points in zip(turns, ((a, b, c), (a, b, d), (c, d, a), (c, d, b)))
+    )
+
+
+def walk_enters_ring(
+    walk: Sequence[tuple[float, float]],
+    ring: Sequence[tuple[float, float]],
+) -> bool:
+    """Does the closed walk pass inside `ring` anywhere along its length?"""
+
+    if any(point_in_ring(point, ring) for point in walk):
+        return True
+    edges = zip(walk, list(walk[1:]) + [walk[0]])
+    wall_edges = list(zip(ring, list(ring[1:]) + [ring[0]]))
+    return any(
+        segments_cross(a, b, c, d)
+        for a, b in edges
+        for c, d in wall_edges
+    )
+
+
+def offset_hull(
+    hull: Sequence[tuple[float, float]], margin_m: float
+) -> list[tuple[float, float]]:
+    """The hull's corners pushed `margin_m` outward along their radials.
+
+    Every corner moves away from the centroid, so each edge of the result
+    spans a triangle that contains the edge it replaces: the whole walk clears
+    the hull, not only the corners it is made of.
+    """
+
+    cx, cy = centroid(hull)
+    walk: list[tuple[float, float]] = []
+    for x, y in hull:
+        dx, dy = x - cx, y - cy
+        distance = math.hypot(dx, dy)
+        if distance < 1e-6:
+            continue
+        scale = (distance + margin_m) / distance
+        walk.append((cx + dx * scale, cy + dy * scale))
+    return walk
+
+
 def outward_ring(
     ring: Sequence[tuple[float, float]],
     margin_m: float,
@@ -270,30 +338,33 @@ def outward_ring(
     through itself — a pedestrian would be walking through a wall. The convex
     hull cannot do that, and "walks round the outside of the building" is
     exactly what it describes.
+
+    A neighbour can stand where the offset hull wants to go. Exiling that one
+    corner along its radial until it lands in the open — what this used to do —
+    is wrong twice over: only corners were ever tested, so the two legs that
+    reach the exiled corner still cut through the neighbour, and it is the
+    exile that drags them there. On the SUTD campus that walked building_2's
+    pedestrian 138 m through building_1. A neighbour in the way instead joins
+    the hull and the walk rounds the whole cluster, which is the only closed
+    route outside all of them, and is what a pedestrian does where two
+    buildings abut. A neighbour the walk merely encircles is left alone.
     """
 
-    hull = convex_hull(list(ring))
-    if len(hull) < 3:
-        return []
-    cx, cy = centroid(hull)
-    walk: list[list[float]] = []
-    for x, y in hull:
-        dx, dy = x - cx, y - cy
-        distance = math.hypot(dx, dy)
-        if distance < 1e-6:
-            continue
-        offset = margin_m
-        # A neighbour can stand exactly where the offset hull wants to go.
-        # Walk the corner further out until it is in the open, and give up
-        # rather than run away if the whole radial is built over.
-        for _ in range(24):
-            scale = (distance + offset) / distance
-            candidate = (cx + dx * scale, cy + dy * scale)
-            if not any(point_in_ring(candidate, other) for other in obstacles):
-                break
-            offset += margin_m
-        walk.append([round(candidate[0], 2), round(candidate[1], 2), z])
-    return walk
+    pending = [list(obstacle) for obstacle in obstacles]
+    cluster = list(ring)
+    # Absorbing is the only move, so the obstacle count bounds the passes.
+    for _ in range(len(pending) + 1):
+        hull = convex_hull(cluster)
+        if len(hull) < 3:
+            return []
+        walk = offset_hull(hull, margin_m)
+        blocking = [other for other in pending if walk_enters_ring(walk, other)]
+        if not blocking:
+            return [[round(x, 2), round(y, 2), z] for x, y in walk]
+        for other in blocking:
+            cluster.extend(other)
+            pending.remove(other)
+    return []
 
 
 def stitch_rings(
