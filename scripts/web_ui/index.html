@@ -41,6 +41,8 @@
     .scene-status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#8a7f72; font-size:13px; pointer-events:none; }
     .scene-status.corner { inset:auto auto 10px 12px; color:#6b6055; font-size:11px; background:#ffffffd9; border:1px solid #c2b8ae; border-radius:7px; padding:5px 9px; }
     .dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; }
+    /* The two UE colours interleaved, as the crosstalk ray draws them. */
+    .dot-split { width:26px; height:3px; border-radius:2px; background:repeating-linear-gradient(90deg,#c0392b 0 5px,#2e7d4f 5px 10px); }
     .stats { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
     .stat { padding:12px; border:1px solid var(--line); border-radius:10px; background:#09141d; }
     .stat b { display:block; font-size:19px; font-variant-numeric:tabular-nums; } .stat span { color:var(--muted); font-size:11px; text-transform:uppercase; }
@@ -496,7 +498,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         <div class="scene-stage">
           <div id="scene3d"></div>
           <canvas id="scene" width="900" height="560" hidden></canvas>
-          <div class="scene-gainbar" id="sceneGainBar" hidden><span id="sceneGainMin">—</span><i></i><span id="sceneGainMax">—</span><span>dB per ray · hue = transmitter</span></div>
+          <div class="scene-gainbar" id="sceneGainBar" hidden><span id="sceneGainMin">—</span><i></i><span id="sceneGainMax">—</span><span>dB per ray · hue = cell</span></div>
           <div class="scene-toolbar">
             <button type="button" id="sceneRaysToggle" aria-pressed="true">Rays</button>
             <button type="button" id="sceneLabelsToggle" aria-pressed="true">Labels</button>
@@ -506,9 +508,9 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
           <div class="scene-credit" id="sceneCredit" hidden></div>
           <div class="scene-status" id="sceneStatus">Loading 3D scene…</div>
         </div>
-        <div class="legend"><span><i class="dot" style="background:#0b6fa4"></i>gnb0</span><span><i class="dot" style="background:#6b3fa0"></i>gnb1</span><span><i class="dot" style="background:#c0392b"></i>Vehicle UE</span><span><i class="dot" style="background:#2e7d4f"></i>Pedestrian UE</span><span><i class="dot" style="background:#2b5f8a"></i>Reflection point</span><span>Ray colour = UE</span></div>
+        <div class="legend"><span><i class="dot" style="background:#0b6fa4"></i>gnb0</span><span><i class="dot" style="background:#6b3fa0"></i>gnb1</span><span><i class="dot" style="background:#c0392b"></i>Vehicle UE</span><span><i class="dot" style="background:#2e7d4f"></i>Pedestrian UE</span><span><i class="dot" style="background:#2b5f8a"></i>Reflection point</span><span><i class="dot dot-split"></i>UE↔UE crosstalk</span><span>Ray colour = cell</span></div>
         <div class="legend" id="sceneMaterials" hidden></div>
-        <div class="foot">Rays take the colour of the UE on the link, and the fainter and thinner a ray is the weaker that path. Specular propagation is reciprocal, so an uplink ray retraces its downlink path exactly; each node pair is therefore drawn once, from the downlink where there is one. The two directions still differ in gain — FDD puts them on different carriers and ITU material properties are frequency dependent — so the tables below carry both. Ground cover is coloured by what OpenStreetMap says it is — water, grass, woodland, pitch — and buildings by the ITU P.2040 material the solver reflects them with. The real triangle mesh Sionna ray-traces against, plus the interaction points of the strongest rays on every link, re-read at each update. Geometry is included only in UI state and is not sent in GPU Channel control messages.</div>
+        <div class="foot">Rays take the colour of the cell on the link, and the fainter and thinner a ray is the weaker that path. Uplink and downlink of a pair are the same traced path, so the colour says which cell owns it and the scene reads as how far each cell reaches. A UE↔UE crosstalk path has no cell end and belongs to both handsets, so it keeps its own treatment: dashes that alternate between the two UE colours. Specular propagation is reciprocal, so an uplink ray retraces its downlink path exactly; each node pair is therefore drawn once, from the downlink where there is one. The two directions still differ in gain — FDD puts them on different carriers and ITU material properties are frequency dependent — so the tables below carry both. Ground cover is coloured by what OpenStreetMap says it is — water, grass, woodland, pitch — and buildings by the ITU P.2040 material the solver reflects them with. The real triangle mesh Sionna ray-traces against, plus the interaction points of the strongest rays on every link, re-read at each update. Geometry is included only in UI state and is not sent in GPU Channel control messages.</div>
       </section>
       <section class="panel">
         <h2>Timing</h2>
@@ -911,6 +913,8 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       pedestrian: ['#2e7d4f', '#6a8f2a'],
       unknown: ['#8a6d3b'],
     };
+    // Canvas pixels, the flat projection's counterpart to CROSSTALK_DASH_M.
+    const CROSSTALK_DASH_PX = 7;
     function nodeHex(id, sionna) {
       const kind = id.startsWith('gnb') ? 'gnb' : (sionna?.environment?.nodes?.[id]?.mobility || 'unknown');
       const ramp = NODE_PALETTE_2D[kind] || NODE_PALETTE_2D.unknown;
@@ -1136,10 +1140,19 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       for(const g of ['gnb0','gnb1']) for(const u of ['ue0','ue1']) if(positions[g]&&positions[u]){
         const [x1,y1]=xyz(positions[g]),[x2,y2]=xyz(positions[u]),channel=channels[`${g}>${u}:sionna_rt`];
         const gain=Number(channel?.strongest_tap_gain_db??-100),alpha=Math.max(.12,Math.min(.85,(gain+100)/80));
-        ctx.strokeStyle=nodeRgba(u,sionna,alpha);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+        // The cell's colour, matching the 3D viewer: a link is read by which
+        // cell it belongs to, not by which end holds the handset.
+        ctx.strokeStyle=nodeRgba(g,sionna,alpha);ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
       }
       if(positions.ue0&&positions.ue1){
-        const [x1,y1]=xyz(positions.ue0),[x2,y2]=xyz(positions.ue1),cross=channels['ue0>ue1:sionna_rt']||channels['ue1>ue0:sionna_rt'],gain=Number(cross?.strongest_tap_gain_db??-100),alpha=Math.max(.2,Math.min(.9,(gain+100)/80));ctx.save();ctx.setLineDash([7,5]);ctx.strokeStyle=nodeRgba('ue0',sionna,alpha);ctx.lineWidth=2.5;ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2,(y1+y2)/2-20,x2,y2);ctx.stroke();ctx.restore();
+        // Crosstalk has no gNB end and belongs to neither UE alone, so the
+        // curve is drawn once per UE in its own colour, the second pass
+        // offset by one dash into the first's gaps: one line whose dashes
+        // alternate between the two handsets.
+        const [x1,y1]=xyz(positions.ue0),[x2,y2]=xyz(positions.ue1),cross=channels['ue0>ue1:sionna_rt']||channels['ue1>ue0:sionna_rt'],gain=Number(cross?.strongest_tap_gain_db??-100),alpha=Math.max(.2,Math.min(.9,(gain+100)/80));
+        ctx.save();ctx.lineWidth=2.5;ctx.setLineDash([CROSSTALK_DASH_PX,CROSSTALK_DASH_PX]);
+        ['ue0','ue1'].forEach((id,index)=>{ctx.lineDashOffset=index*CROSSTALK_DASH_PX;ctx.strokeStyle=nodeRgba(id,sionna,alpha);ctx.beginPath();ctx.moveTo(x1,y1);ctx.quadraticCurveTo((x1+x2)/2,(y1+y2)/2-20,x2,y2);ctx.stroke()});
+        ctx.restore();
       }
 
       const mobility=sionna?.environment?.nodes||{};
@@ -1533,6 +1546,10 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       pedestrian: [0x2e7d4f, 0x6a8f2a],
       unknown: [0x8a6d3b],
     };
+    // Scene metres. Short enough that even a UE pair standing close together
+    // still shows both colours, long enough to read as dashes when they are
+    // across the campus from each other.
+    const CROSSTALK_DASH_M = 4.0;
     function nodeKind(id, sionna) {
       if (id.startsWith('gnb')) return 'gnb';
       return sionna?.environment?.nodes?.[id]?.mobility || 'unknown';
@@ -1643,37 +1660,52 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
 
       const bouncePoints = [];
       for (const channel of channels) {
-        // Coloured by the UE on the link, not by whichever end transmits: a
-        // path belongs to a handset, and with one path per pair there is no
-        // direction left for a transmitter colour to encode. A UE-to-UE pair
-        // has no gNB end, so its source stands in.
-        const ueEnd = channel.destination.startsWith('gnb') ? channel.source : channel.destination;
-        const transmitter = nodeColor(ueEnd, nodeKind(ueEnd, sionna));
+        // Coloured by the cell on the link, not by whichever end transmits:
+        // uplink and downlink of a pair are one traced path, so the colour
+        // that means anything is which cell it belongs to. Reading the scene
+        // is then "how far does each cell reach", and where two cells overlap
+        // their colours meet on the same stretch of road. A UE-to-UE path has
+        // no cell end and belongs to both handsets equally, so it keeps its
+        // own treatment: laid twice in complementary dashes, alternating
+        // between the two UE colours.
+        const gnbEnd = [channel.source, channel.destination].find(id => id.startsWith('gnb'));
+        const owners = gnbEnd === undefined
+          ? [channel.source, channel.destination]
+          : [gnbEnd];
+        const crosstalk = gnbEnd === undefined;
         for (const line of channel.path_polylines) {
           const normalized = (line.gain_db - minGain) / span;
           const points = line.points.map(point => new THREE.Vector3(point[0], point[1], point[2]));
-          const geometry = new LineGeometry();
-          geometry.setPositions(line.points.flat());
-          const material = new LineMaterial({
-            color: rayColor(transmitter, normalized),
-            // Screen-space pixels. Stronger paths are drawn thicker as well as
-            // more solid, so the carrying rays stand out at any zoom.
-            linewidth: 1.0 + 1.6 * normalized,
-            transparent: true,
-            // The weakest rays stay visible but recede, so a dense scene still
-            // reads as "these two or three carry the link". Normal blending,
-            // not additive: on a light ground additive light pushes toward
-            // white and erases the ray.
-            opacity: 0.35 + 0.6 * normalized,
-            depthWrite: false,
-            dashed: false,
+          owners.forEach((owner, index) => {
+            const geometry = new LineGeometry();
+            geometry.setPositions(line.points.flat());
+            const material = new LineMaterial({
+              color: rayColor(nodeColor(owner, nodeKind(owner, sionna)), normalized),
+              // Screen-space pixels. Stronger paths are drawn thicker as well
+              // as more solid, so the carrying rays stand out at any zoom.
+              linewidth: 1.0 + 1.6 * normalized,
+              transparent: true,
+              // The weakest rays stay visible but recede, so a dense scene
+              // still reads as "these two or three carry the link". Normal
+              // blending, not additive: on a light ground additive light
+              // pushes toward white and erases the ray.
+              opacity: 0.35 + 0.6 * normalized,
+              depthWrite: false,
+              // Equal dash and gap, the second pass offset by exactly one
+              // dash, so the two colours interleave into a single unbroken
+              // line rather than two dashed ones.
+              dashed: crosstalk,
+              dashSize: CROSSTALK_DASH_M,
+              gapSize: CROSSTALK_DASH_M,
+              dashOffset: index * CROSSTALK_DASH_M,
+            });
+            material.resolution.set(host.clientWidth || 1, host.clientHeight || 1);
+            rayMaterials.push(material);
+            const curve = new Line2(geometry, material);
+            curve.computeLineDistances();
+            curve.renderOrder = 5;
+            rayGroup.add(curve);
           });
-          material.resolution.set(host.clientWidth || 1, host.clientHeight || 1);
-          rayMaterials.push(material);
-          const curve = new Line2(geometry, material);
-          curve.computeLineDistances();
-          curve.renderOrder = 5;
-          rayGroup.add(curve);
           for (let i = 1; i < points.length - 1; i++) bouncePoints.push(points[i]);
         }
       }
