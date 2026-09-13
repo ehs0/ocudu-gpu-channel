@@ -804,7 +804,9 @@ class WebUiTests(unittest.TestCase):
         self.assertIn("label:'Other / OS'", index)
         self.assertNotIn("label:'Host CPU'", index)
         self.assertIn("const CHART_WINDOW_MS = 1000;", index)
-        self.assertIn("const CHART_POLL_MS = CHART_WINDOW_MS;", index)
+        # Strictly a fraction of the window: polling once per block made a
+        # single late poll cost the whole block.
+        self.assertIn("const CHART_POLL_MS = CHART_WINDOW_MS / 4;", index)
         self.assertIn("const CHART_HISTORY_MS = CHART_WINDOW_MS * 2;", index)
         self.assertIn("windowMs=config.windowMs||CHART_WINDOW_MS", index)
         self.assertIn("end=Math.floor(now/windowMs)*windowMs", index)
@@ -1080,6 +1082,95 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(event["warmup_started_unix_ms"], 2_000)
         self.assertEqual(event["warmup_ended_unix_ms"], 2_050)
         self.assertEqual(event["warmup_boundary_source"], "telemetry_observed")
+
+    def test_telemetry_is_plotted_at_the_broker_send_time(self) -> None:
+        """A stalled receive loop must not move where a sample is drawn.
+
+        This process shares one GIL between the receive loop, the JSONL
+        tailer and every HTTP response, so handling can lag the measurement
+        by tens of milliseconds. Stamping on arrival drew that lag as a hole
+        in a stream the Broker never interrupted.
+        """
+
+        store = StatusStore()
+        frame = {
+            "event": "telemetry",
+            "link_id": "gnb0>ue0:sionna_rt",
+            "sent_unix_ms": 5_000,
+            "seqno": 1,
+            "slot": 4,
+        }
+        # Arrival is 90 ms after the send: the stall this fixes.
+        with mock.patch("server.time.time_ns", return_value=5_090_000_000):
+            store.update_telemetry("gnb0>ue0:sionna_rt", frame)
+        row = store.snapshot()["history"]["telemetry"][-1]
+        self.assertEqual(row["observed_unix_ms"], 5_000)
+
+    def test_telemetry_without_a_send_time_falls_back_to_arrival(self) -> None:
+        """A Broker built before the field must still plot."""
+
+        store = StatusStore()
+        with mock.patch("server.time.time_ns", return_value=7_000_000_000):
+            store.update_telemetry(
+                "gnb0>ue0:sionna_rt",
+                {"event": "telemetry", "link_id": "gnb0>ue0:sionna_rt", "slot": 4},
+            )
+        row = store.snapshot()["history"]["telemetry"][-1]
+        self.assertEqual(row["observed_unix_ms"], 7_000)
+
+    def test_scene_geometry_is_latched_across_updates_that_omit_it(self) -> None:
+        """The producer sends footprints only when `scene_revision` moves.
+
+        The 2D fallback view reads them from every status snapshot, so a
+        record that omits them must inherit the last set rather than blank
+        the scene out.
+        """
+
+        store = StatusStore()
+        store.update_sionna(
+            {
+                "event": "sionna_rt_update",
+                "session_id": "scene-session",
+                "iteration": 1,
+                "scene_revision": 1,
+                "scene_geometry": {"objects": [{"id": "road", "kind": "road"}]},
+            }
+        )
+        store.update_sionna(
+            {
+                "event": "sionna_rt_update",
+                "session_id": "scene-session",
+                "iteration": 2,
+                "scene_revision": 1,
+            }
+        )
+        sionna = store.snapshot()["sionna"]
+        self.assertEqual(sionna["iteration"], 2)
+        self.assertEqual(sionna["scene_geometry"]["objects"][0]["kind"], "road")
+
+        # A new revision replaces it, and a new session forgets it.
+        store.update_sionna(
+            {
+                "event": "sionna_rt_update",
+                "session_id": "scene-session",
+                "iteration": 3,
+                "scene_revision": 2,
+                "scene_geometry": {"objects": [{"id": "block", "kind": "building"}]},
+            }
+        )
+        self.assertEqual(
+            store.snapshot()["sionna"]["scene_geometry"]["objects"][0]["kind"],
+            "building",
+        )
+        store.update_sionna(
+            {
+                "event": "sionna_rt_update",
+                "session_id": "other-session",
+                "iteration": 1,
+                "scene_revision": 1,
+            }
+        )
+        self.assertIsNone(store.snapshot()["sionna"].get("scene_geometry"))
 
     def test_resource_sample_combines_gpu_host_and_pcie_metrics(self) -> None:
         class FakeHostSampler:

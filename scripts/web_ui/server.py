@@ -1598,6 +1598,7 @@ class StatusStore:
         self._sionna_runtime: dict[str, Any] | None = None
         self._sionna_runtime_seen: float | None = None
         self._sionna_session_id: Any = None
+        self._scene_geometry: Any = None
         self._gpu_usage: dict[str, Any] | None = None
         self._gpu_history: list[dict[str, Any]] = []
         self._telemetry_history: list[dict[str, Any]] = []
@@ -1690,7 +1691,19 @@ class StatusStore:
 
     def update_telemetry(self, link_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
-            observed_unix_ms = time.time_ns() // 1_000_000
+            # Prefer the Broker's own send time. This process is a single
+            # GIL shared by the receive loop, the JSONL tailer and every
+            # HTTP response, so the moment a frame is handled here can lag
+            # the moment it was measured by tens of milliseconds -- which a
+            # chart drawn on arrival times renders as a hole in a stream
+            # that was never interrupted. Older Brokers do not send the
+            # field, so arrival time stays the fallback.
+            sent_unix_ms = payload.get("sent_unix_ms")
+            observed_unix_ms = (
+                sent_unix_ms
+                if isinstance(sent_unix_ms, int) and not isinstance(sent_unix_ms, bool)
+                else time.time_ns() // 1_000_000
+            )
             self._telemetry[link_id] = payload
             self._telemetry_seen[link_id] = time.monotonic()
             slot_processing = payload.get("slot_processing")
@@ -1780,8 +1793,21 @@ class StatusStore:
                     self._warmup_targets.clear()
                     self._sionna = None
                     self._sionna_seen = None
+                    self._scene_geometry = None
                 self._sionna_session_id = session_id
             if payload.get("event") == "sionna_rt_update":
+                # The producer sends the ~70 KB footprints only on the
+                # updates where `scene_revision` moved, so the last set is
+                # latched here and re-attached to every record that omits
+                # them. Without this the 2D fallback view -- the one used
+                # when no triangle mesh sidecar exists, which is the case
+                # for an external channel source -- would blank out on
+                # every update but the first.
+                geometry = payload.get("scene_geometry")
+                if geometry is not None:
+                    self._scene_geometry = geometry
+                elif self._scene_geometry is not None:
+                    payload = {**payload, "scene_geometry": self._scene_geometry}
                 self._sionna = payload
                 self._sionna_seen = time.monotonic()
                 iteration = payload.get("iteration")

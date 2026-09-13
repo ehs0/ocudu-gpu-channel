@@ -1426,6 +1426,18 @@ void ControlServer::run_telemetry_loop()
              static_cast<double>(ts.nominal_slot_count)) * 100.0
           : 0.0;
 
+      // When this frame was produced, so a subscriber plots the sample at
+      // the instant it was measured rather than at the instant it managed
+      // to read it. The web UI is a single-threaded-by-GIL Python process
+      // whose HTTP and JSONL work routinely stalls its receive loop for
+      // tens of milliseconds; stamping on arrival turned those stalls into
+      // holes in charts of a stream that this end emits with a worst-case
+      // inter-frame gap of ~3 ms.
+      const auto sent_unix_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch())
+              .count();
+
       // Build the JSON frame. link_id as topic prefix → subscribers
       // filter via setsockopt(ZMQ_SUBSCRIBE, "ue0-gnb0", …). Frame
       // body is the prefix followed by a space and the JSON payload.
@@ -1436,6 +1448,7 @@ void ControlServer::run_telemetry_loop()
         << "\"backend\":\""
         << json_escape(config_.backend_name.empty() ? "unknown" : config_.backend_name)
         << "\","
+        << "\"sent_unix_ms\":" << static_cast<long long>(sent_unix_ms) << ","
         << "\"process_id\":" << static_cast<long long>(::getpid()) << ","
         << "\"slot\":" << ts.slot << ","
         << "\"seqno\":" << ts.live_seqno << ","

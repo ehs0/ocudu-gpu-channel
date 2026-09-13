@@ -596,7 +596,13 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     // every redraw; keeping several intervals in the response tolerates a
     // delayed poll without leaving the new block empty.
     const CHART_WINDOW_MS = 1000;
-    const CHART_POLL_MS = CHART_WINDOW_MS;
+    // Deliberately a fraction of the window, not equal to it. When the two
+    // matched, each block was fetched exactly once: a single late or dropped
+    // poll meant a whole second was drawn stale or skipped outright, and the
+    // block that did arrive appeared all at once. Polling four times per
+    // block redraws the same interval as it fills, and a lost poll costs
+    // 250 ms of freshness rather than an entire block.
+    const CHART_POLL_MS = CHART_WINDOW_MS / 4;
     const STATUS_POLL_MS = 500;
     // The Sionna bridge publishes at --update-hz (10 in the native gates), but
     // render() rebuilds every card and table in the page and cannot run that
