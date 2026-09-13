@@ -10,6 +10,7 @@
 // Plan and rationale: docs/plans/device-channel-pipeline.md.
 
 #include "ocudu_gpu_channel/device_channel.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -579,8 +580,10 @@ void refresh_all_taps_from_live(DeviceLinkState& s, int n_taps, const TapSpec* t
   }
   if (n_taps > kDeviceMaxTaps) n_taps = kDeviceMaxTaps;
   s.n_taps = n_taps;
+  double max_delay = 0.0;
   for (int k = 0; k < n_taps; ++k) {
     const TapSpec& t = taps[k];
+    max_delay = std::max(max_delay, t.delay_samples);
     const double tau_int = std::floor(t.delay_samples);
     s.tap_delay_int[k] = static_cast<int>(tau_int);
     s.tap_frac[k]      = static_cast<float>(t.delay_samples - tau_int);
@@ -601,6 +604,9 @@ void refresh_all_taps_from_live(DeviceLinkState& s, int n_taps, const TapSpec* t
       s.tap_rayleigh_factor[k] = 1.0F;
     }
   }
+  s.delay_line_size = std::min(
+      kDeviceMaxDelayLine,
+      static_cast<int>(std::ceil(max_delay)) + kTdlFracFilterTaps);
   // Zero the unused tail so the kernel's read-from-the-end safety on a
   // shorter profile doesn't read whatever was left from the previous
   // (longer) profile.

@@ -4,6 +4,8 @@
 
 ## Repository State
 
+- Current execution (2026-09-13): `integration/sionna-history-fix` merges main `f51c3fd` with contributor `066a702` in an isolated worktree. Earlier state notes below are historical. The original checkout and its uncommitted edits are preserved.
+
 - Branch: `rank1-miso-simo`, branched from `a801155` and merged with upstream `main` at the
   documentation-publication checkpoint. It carries the rank-1 MISO/SIMO implementation described below.
 - `main` and `origin/main` are aligned at the documentation publication checkpoint containing the MIMO/Sionna assessment and workspace-maintenance changes.
@@ -27,6 +29,8 @@
 - The project source, tests, examples, deployment scripts, and primary technical reference remain in their existing locations.
 
 ## Completed Changes
+
+- [Integration] Preserved contributor commit ancestry with a normal merge; combined main's network/srsUE settings with the contribution's multi-antenna/Sionna launcher. Preserved the contributor's full progress record in `archive/progress/AGENT_PROGRESS-ehs0-066a702.md`. The requested history-preservation fix and GPU validation follow this merge as a separate commit.
 
 - [Research/MIMO] Produced a source-backed HTML assessment of OCUDU MIMO, the CUDA-accelerated OCUDU fork, srsUE NR limitations, the local project gap, and an initial 2x2 matrix-TDL integration path; the later rank-1 decision below supersedes that initial recommendation.
 - [Research/Sionna] Extended the assessment with a source-backed Sionna RT 2.0.1 bridge and added `docs/plans/sionna-live-channel.md`: Sionna remains an out-of-process producer; the proposed broker consumes buffered sparse CIR geometry epochs and complex coefficient horizons by absolute IQ sample; geometry changes may reset delay history while coefficient-only updates preserve it.

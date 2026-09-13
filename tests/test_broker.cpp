@@ -17,8 +17,11 @@
 #include "ocudu_gpu_channel/config.h"
 #include "ocudu_gpu_channel/iq.h"
 #include "ocudu_gpu_channel/pacing.h"
+#include "ocudu_gpu_channel/runtime_control.h"
+#include "ocudu_gpu_channel/timing_metrics.h"
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -44,6 +47,41 @@ void set_timeouts(void* socket)
   zmq_setsockopt(socket, ZMQ_RCVTIMEO, &timeout, sizeof(timeout));
   zmq_setsockopt(socket, ZMQ_SNDTIMEO, &timeout, sizeof(timeout));
   zmq_setsockopt(socket, ZMQ_LINGER, &linger, sizeof(linger));
+}
+
+void scenario_nominal_timing_crosses_arbitrary_fragment_boundaries()
+{
+  ocg::ReceiverTimingAccumulator timing(23040, 23040000);
+  timing.observe(1, 80.0);
+  timing.observe(23038, 100.0);
+  timing.observe(10000, 120.0);
+  timing.observe(23041, 180.0);
+
+  require(timing.calls.count == 4, "nominal timing lost processing calls");
+  require(timing.nominal_slots.count == 2,
+          "arbitrary fragments did not reconstruct two complete nominal slots");
+  require(timing.pending_samples == 10000,
+          "cross-boundary fragment remainder was not retained for the next slot");
+  require(std::abs(timing.nominal_slots.max_us - 221.87) < 0.02,
+          "fragment call time was not apportioned by overlapping sample count");
+  require(std::abs(timing.pending_estimated_us - 78.12) < 0.02,
+          "pending fragment time estimate does not preserve the call-time remainder");
+  require(timing.fragment_calls == 4, "fragment calls were not counted separately");
+  require(timing.fragment_samples == 56080, "fragment samples were not accumulated");
+  require(timing.fragment_min() == 1 && timing.fragment_max_samples == 23041,
+          "fragment sample-size range is incorrect");
+  require(timing.fragmented_nominal_slots == 2,
+          "reconstructed slots touched by fragments were not counted");
+  require(timing.nominal_slots.deadline_misses == 0,
+          "sub-slot call deadlines leaked into nominal-slot verdicts");
+
+  ocg::ReceiverTimingAccumulator real_miss(23040, 23040000);
+  real_miss.observe(23040, 1100.0);
+  require(real_miss.nominal_slots.count == 1 &&
+              real_miss.nominal_slots.deadline_misses == 1,
+          "a real full-slot compute deadline miss was hidden");
+  require(real_miss.fragment_calls == 0,
+          "an aligned nominal call was incorrectly classified as a fragment");
 }
 
 // Synthetic device TX: a REP server that answers every pull with a batch of IQ.
@@ -147,6 +185,7 @@ void scenario_loopback()
 
   ocg::Broker broker(config);
   const auto stats = broker.run(std::chrono::milliseconds(800));
+  const auto control_links = broker.collect_control_links();
 
   stop.store(true);
   for (auto& peer : peers) {
@@ -168,6 +207,35 @@ void scenario_loopback()
   require(stats.rx_requests > 0, "broker served no RX requests");
   require(gnb_received.load() > 0, "gnb0 sink received no samples");
   require(ue_received.load() > 0, "ue0 sink received no samples");
+  require(control_links.size() == 2, "broker did not expose both link telemetry controls");
+  for (const auto& [link_id, ctl] : control_links) {
+    const auto telemetry = ocg::read_telemetry_snapshot(*ctl);
+    require(telemetry.processed_samples > 0, "slot timing reports no processed samples");
+    require(telemetry.sample_rate_hz == 23040000, "slot timing reports the wrong sample rate");
+    require(telemetry.slot_deadline_us > 0.0, "slot timing reports no deadline");
+    require(telemetry.channel_process_us > 0.0, "slot timing reports no channel process time");
+    require(telemetry.slot_process_count > 0,
+            "slot timing reports no cumulative processed-slot count");
+    require(telemetry.slot_deadline_miss_count <= telemetry.slot_process_count,
+            "slot timing cumulative deadline misses exceed processed slots");
+    require(telemetry.slot_process_max_us >= telemetry.channel_process_us,
+            "slot timing cumulative maximum is below the latest sample");
+    require(telemetry.slot_process_p95_us > 0.0, "slot timing reports no cumulative p95");
+    require(telemetry.slot_process_p99_us >= telemetry.slot_process_p95_us,
+            "slot timing cumulative p99 is below p95");
+    require(telemetry.nominal_slot_samples == config.runtime.batch_samples,
+            "nominal timing reports the wrong configured slot size");
+    require(telemetry.nominal_slot_count > 0,
+            "nominal timing reports no reconstructed slots");
+    require(telemetry.nominal_deadline_miss_count <= telemetry.nominal_slot_count,
+            "nominal timing deadline misses exceed completed slots");
+    const double expected_deadline =
+        static_cast<double>(telemetry.processed_samples) * 1'000'000.0 /
+        static_cast<double>(telemetry.sample_rate_hz);
+    require(std::abs(telemetry.slot_deadline_us - expected_deadline) < 1.0e-6,
+            "slot deadline is not derived from the actual IQ window");
+    (void)link_id;
+  }
   // rx_starvations is a soft real-time signal: it depends on host scheduling,
   // so it is reported here but asserted only by the strict-realtime smoke run
   // on a quiet machine, not by this loopback unit test.
@@ -409,6 +477,7 @@ void scenario_pacer_drops_unrecoverable_debt()
 
 int main()
 {
+  scenario_nominal_timing_crosses_arbitrary_fragment_boundaries();
   scenario_pacer_drops_unrecoverable_debt();
   scenario_loopback();
   scenario_multi_ue_lockstep();

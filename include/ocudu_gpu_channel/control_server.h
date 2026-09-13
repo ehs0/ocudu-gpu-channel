@@ -61,6 +61,12 @@ struct ControlServerConfig {
   // receives everything.
   std::string telemetry_endpoint;
   double      telemetry_rate_hz = 20.0;
+
+  // Human-readable data-plane backend selected by the owning broker
+  // ("cuda" or "cpu"). Returned in commit acknowledgements and telemetry
+  // so observers can distinguish control acceptance from CUDA application.
+  // Empty preserves the standalone/test-server "unknown" state.
+  std::string backend_name;
 };
 
 class ControlServer {
@@ -110,7 +116,7 @@ public:
   // ControlServer instance for the duration between batch_begin and
   // batch_commit/batch_abort.
   struct StagedOp {
-    enum class Kind { Scalar, ProfileSwap };
+    enum class Kind { Scalar, ProfileSwap, MatrixProfileSwap };
     Kind        kind = Kind::Scalar;
     std::string link_id;
     // Scalar fields (when kind == Scalar)
@@ -118,6 +124,7 @@ public:
     double      value = 0.0;
     // Profile fields (when kind == ProfileSwap)
     ProfileShadow profile;
+    MatrixProfileShadow matrix_profile;
   };
   struct StagedBatch {
     std::vector<StagedOp> ops;
@@ -130,7 +137,8 @@ public:
   //
   // v2: dispatches on the `type` field of the JSON envelope. Defaults to
   // "scalar" for v1 back-compat. Currently recognised types: "scalar",
-  // "profile_swap", "batch_begin", "batch_commit", "batch_abort".
+  // "profile_swap", "matrix_profile_swap", "batch_begin", "batch_commit",
+  // "batch_abort".
   std::string handle_message(const std::string& request_body);
 
 private:

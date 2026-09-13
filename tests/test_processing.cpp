@@ -1325,6 +1325,96 @@ int main()
 #endif
   }
 
+  // ---- Dynamic MISO matrix profile: one physical-link snap, all lanes ----
+  {
+    ocg::TopologyConfig cfg;
+    cfg.runtime.backend = ocg::Backend::Cpu;
+    cfg.runtime.batch_samples_auto = false;
+    cfg.runtime.batch_samples = 8;
+    cfg.runtime.queue_samples = 64;
+    int endpoint = 3600;
+    for (const char* id : {"gnb0", "gnb1", "ue0"}) {
+      ocg::DeviceConfig device;
+      device.id = id;
+      device.sample_rate_hz = 23040000;
+      device.tx_endpoint = "tcp://127.0.0.1:" + std::to_string(endpoint++);
+      device.rx_endpoint = "tcp://127.0.0.1:" + std::to_string(endpoint++);
+      cfg.devices.push_back(device);
+    }
+    ocg::RadioNodeConfig gnb;
+    gnb.id = "gnb";
+    gnb.tx_ports = {"gnb0", "gnb1"};
+    gnb.rx_ports = {"gnb0", "gnb1"};
+    ocg::RadioNodeConfig ue;
+    ue.id = "ue";
+    ue.tx_ports = {"ue0"};
+    ue.rx_ports = {"ue0"};
+    cfg.radio_nodes = {gnb, ue};
+    cfg.links = {{.from = "gnb", .to = "ue", .model = "dynamic"},
+                 {.from = "ue", .to = "gnb", .model = "dynamic"}};
+    ocg::ModelConfig model;
+    model.id = "dynamic";
+    model.chain.push_back({.type = ocg::ModelStepType::Tdl,
+                           .params = {},
+                           .taps = {{.delay_samples = 0.0,
+                                    .gain_db = 0.0,
+                                    .phase_rad = 0.0}},
+                           .taps_declared = true});
+    cfg.models.emplace(model.id, model);
+    require(ocg::validate_config(cfg).empty(), "dynamic 2x1 topology validates");
+    const auto resolved = ocg::resolve_topology(cfg);
+
+    ocg::IqBuffer tx0(8, ocg::IqSample{1.0F, 0.0F});
+    ocg::IqBuffer tx1(8, ocg::IqSample{0.0F, 1.0F});
+    std::vector<ocg::SuperpositionInput> lanes;
+    for (const auto& lane : resolved.lanes) {
+      if (lane.dst_node != "ue") continue;
+      lanes.push_back({.link_key = lane.key,
+                       .model = ocg::find_model(cfg, lane.model_id),
+                       .samples = lane.tx_port == 0
+                           ? std::span<const ocg::IqSample>(tx0)
+                           : std::span<const ocg::IqSample>(tx1),
+                       .rx_port = lane.rx_port,
+                       .tx_port = lane.tx_port});
+    }
+    ocg::CpuChannelProcessor cpu;
+    cpu.prepare(cfg);
+    ocg::IqBuffer output(8);
+    cpu.process_superposition("ue", lanes, nullptr, 23040000, output);
+    require(std::abs(output[0].i - 1.0F) < 1e-6F &&
+            std::abs(output[0].q - 1.0F) < 1e-6F,
+            "startup 2x1 profile passes both lanes");
+
+    auto controls = cpu.collect_control_links();
+    auto control_it = controls.find("gnb>ue:dynamic");
+    require(control_it != controls.end(), "dynamic physical link is on the control surface");
+    auto& control = *control_it->second;
+    ocg::MatrixProfileShadow matrix{};
+    matrix.nt = 2;
+    matrix.nr = 1;
+    matrix.lane_count = 2;
+    matrix.lanes[0].n_taps = 1;
+    matrix.lanes[0].taps[0] = {.delay_samples = 0.0,
+                               .gain_db = -100.0,
+                               .phase_rad = 0.0};
+    matrix.lanes[1].n_taps = 1;
+    matrix.lanes[1].taps[0] = {.delay_samples = 0.0,
+                               .gain_db = 0.0,
+                               .phase_rad = 0.0};
+    control.shadow_matrix_profile = matrix;
+    control.matrix_profile_pending = true;
+    control.profile_pending = false;
+    control.seqno.fetch_add(1, std::memory_order_release);
+
+    cpu.process_superposition("ue", lanes, nullptr, 23040000, output);
+    require(std::abs(output[0].i) < 2e-5F &&
+            std::abs(output[0].q - 1.0F) < 1e-6F,
+            "one matrix snap applies distinct lane profiles in the same slot");
+    const auto telemetry = ocg::read_telemetry_snapshot(control);
+    require(telemetry.matrix_profile_active && telemetry.nt == 2 && telemetry.nr == 1,
+            "telemetry reports the active matrix and prepared dimensions");
+  }
+
   // ---- M1.7: asymmetric dimensions and the 1x1 bit-exact gate --------------
   //
   // Builds a Nt x Nr topology with a chosen matrix, runs one slot, and returns
