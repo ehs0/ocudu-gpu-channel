@@ -54,6 +54,75 @@ from server import (  # noqa: E402
 
 
 class WebUiTests(unittest.TestCase):
+    def test_preserved_matrix_history_has_no_ack_invented_warmup(self) -> None:
+        record = {
+            "event": "sionna_rt_update", "session_id": "preserve", "iteration": 1,
+            "control_ack_unix_ms": 1000,
+            "channels": [{"link_id": "link"}],
+            "control_reply": {
+                "ok": True, "backend": "cuda", "link_count": 1,
+                "links": [{"link_id": "link", "seqno": 4, "warmup_until_slot": 99}],
+            },
+        }
+        telemetry = {
+            "seqno": 4, "slot": 10, "profile_active": True, "backend": "cuda",
+            "warmup_until_slot": 0,
+            # Latched boundaries describe an earlier reset, not this update.
+            "warmup_event_seq": 1, "warmup_profile_seqno": 3,
+            "warmup_begin_unix_ns": 800_000_000, "warmup_end_unix_ns": 900_000_000,
+        }
+        self.assertTrue(delivery_status(record, {"link": telemetry})["backend_usable"])
+        for telemetry_first in (False, True):
+            with self.subTest(telemetry_first=telemetry_first):
+                store = StatusStore()
+                if telemetry_first:
+                    store.update_telemetry("link", telemetry)
+                store.update_sionna(record)
+                if not telemetry_first:
+                    store.update_telemetry("link", telemetry)
+                store.update_gpu_usage({"sampled_unix_ms": 1050, "processes": {}})
+                event = store.snapshot()["gpu_usage"]["iterations"][-1]
+                self.assertFalse(event["warmup_expected"])
+                self.assertIsNone(event["warmup_started_unix_ms"])
+                self.assertIsNone(event["warmup_ended_unix_ms"])
+
+    def test_ack_alone_does_not_create_a_warmup_interval(self) -> None:
+        store = StatusStore()
+        store.update_sionna({
+            "event": "sionna_rt_update", "session_id": "pending", "iteration": 0,
+            "control_ack_unix_ms": 1000,
+            "control_reply": {"links": [{"link_id": "link", "seqno": 2,
+                                          "warmup_until_slot": 99}]},
+        })
+        store.update_gpu_usage({"sampled_unix_ms": 1050, "processes": {}})
+        event = store.snapshot()["gpu_usage"]["iterations"][-1]
+        self.assertIsNone(event["warmup_started_unix_ms"])
+        self.assertIsNone(event["warmup_ended_unix_ms"])
+
+    def test_mixed_reset_and_preserving_links_use_observed_reset_only(self) -> None:
+        store = StatusStore()
+        record = {
+            "event": "sionna_rt_update", "session_id": "mixed", "iteration": 1,
+            "control_ack_unix_ms": 1000,
+            "control_reply": {"links": [
+                {"link_id": link, "seqno": 4, "warmup_until_slot": 99}
+                for link in ("preserved", "reset")
+            ]},
+        }
+        store.update_sionna(record)
+        observed = {"seqno": 4, "slot": 12, "profile_active": True,
+                    "warmup_until_slot": 0, "warmup_event_seq": 2}
+        store.update_telemetry("preserved", dict(observed, warmup_profile_seqno=3))
+        store.update_telemetry("reset", dict(
+            observed, warmup_profile_seqno=4,
+            warmup_begin_unix_ns=1_010_000_000, warmup_end_unix_ns=1_020_000_000,
+        ))
+        store.update_gpu_usage({"sampled_unix_ms": 1050, "processes": {}})
+        event = store.snapshot()["gpu_usage"]["iterations"][-1]
+        self.assertEqual(event["warmup_started_unix_ms"], 1010)
+        self.assertEqual(event["warmup_ended_unix_ms"], 1020)
+        self.assertEqual(event["warmup_boundary_source"], "backend")
+
     def test_telemetry_topic_and_json_are_checked(self) -> None:
         frame = (
             'gnb0>ue0:sionna_rt '
@@ -324,7 +393,8 @@ class WebUiTests(unittest.TestCase):
         self.assertGreaterEqual(DEFAULT_HISTORY_WINDOW_MS, chart_window_ms)
         self.assertEqual(SIONNA_JSONL_POLL_SECONDS, 0.02)
 
-    def test_slow_nvml_queries_stay_off_the_fast_sampling_path(self) -> None:
+    @mock.patch("server.time.monotonic", return_value=100.0)
+    def test_slow_nvml_queries_stay_off_the_fast_sampling_path(self, _clock) -> None:
         """The 10 ms cadence only works if the ~21 ms calls are gated.
 
         nvmlDeviceGetPcieThroughput integrates over a fixed ~20 ms driver
@@ -383,10 +453,9 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(pcie[0]["gpu_util_percent"], 55.0)
 
         # Past the interval, the queries run again.
-        sampler._pcie_updated -= PCIE_REFRESH_INTERVAL_SECONDS
-        sampler._process_utilization_updated -= (
-            PROCESS_UTILIZATION_INTERVAL_SECONDS
-        )
+        _clock.return_value += max(
+            PCIE_REFRESH_INTERVAL_SECONDS, PROCESS_UTILIZATION_INTERVAL_SECONDS
+        ) + 0.01
         sampler.sample(targets)
         self.assertEqual(calls["pcie"], 4)
         self.assertEqual(calls["utilization"], 2)
@@ -1014,7 +1083,7 @@ class WebUiTests(unittest.TestCase):
         self.assertEqual(event["started_unix_ms"], 1_000)
         self.assertEqual(event["ended_unix_ms"], 1_250)
         self.assertEqual(event["channel_arrived_unix_ms"], 1_200)
-        self.assertEqual(event["warmup_started_unix_ms"], 1_200)
+        self.assertIsNone(event["warmup_started_unix_ms"])
         self.assertIsNone(event["warmup_ended_unix_ms"])
 
         with mock.patch("server.time.time_ns", return_value=1_300_000_000):
@@ -1064,6 +1133,17 @@ class WebUiTests(unittest.TestCase):
         store.update_gpu_usage(
             {"sampled_unix_ms": 2_010, "processes": {}, "system": {}, "pcie": {}}
         )
+        # Legacy telemetry has no backend timestamps. Its interval starts
+        # only when warming is observed, never at the estimated control ACK.
+        with mock.patch("server.time.time_ns", return_value=2_020_000_000):
+            store.update_telemetry(
+                "legacy-link",
+                {
+                    "event": "telemetry", "link_id": "legacy-link",
+                    "seqno": 3, "slot": 7, "profile_active": True,
+                    "warmup_until_slot": 8,
+                },
+            )
         with mock.patch("server.time.time_ns", return_value=2_050_000_000):
             store.update_telemetry(
                 "legacy-link",
@@ -1077,7 +1157,7 @@ class WebUiTests(unittest.TestCase):
                 },
             )
         event = store.snapshot()["gpu_usage"]["iterations"][-1]
-        self.assertEqual(event["warmup_started_unix_ms"], 2_000)
+        self.assertEqual(event["warmup_started_unix_ms"], 2_020)
         self.assertEqual(event["warmup_ended_unix_ms"], 2_050)
         self.assertEqual(event["warmup_boundary_source"], "telemetry_observed")
 

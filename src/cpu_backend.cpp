@@ -490,7 +490,7 @@ void CpuChannelProcessor::process_superposition(const std::string& dst_key,
           if (outcome.values_changed) {
             it->second.live = state.link->live;
           }
-          if (outcome.profile_activated || outcome.matrix_profile_activated) {
+          if (outcome.history_reset_required) {
             if (!it->second.steps.empty()) {
               const ProfileShadow* profile = nullptr;
               if (state.link->live_matrix_profile_active) {

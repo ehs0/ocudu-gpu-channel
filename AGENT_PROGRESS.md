@@ -5,6 +5,7 @@
 ## Repository State
 
 - Current execution (2026-09-13): `integration/sionna-history-fix` merges main `f51c3fd` with contributor `066a702` in an isolated worktree. Earlier state notes below are historical. The original checkout and its uncommitted edits are preserved.
+- Minimum history fix is complete after normal merge `3f4c234`; validation and scope are recorded in `docs/sionna-matrix-history.md`. This branch has not been published or merged into main.
 
 - Branch: `rank1-miso-simo`, branched from `a801155` and merged with upstream `main` at the
   documentation-publication checkpoint. It carries the rank-1 MISO/SIMO implementation described below.
@@ -30,6 +31,8 @@
 
 ## Completed Changes
 
+- [History fix, 2026-09-13] Matrix gain/phase and identical updates preserve IQ history across all antenna lanes on CPU/CUDA. Exact non-coefficient comparisons determine a shared reset result; scalar behavior and control formats remain unchanged. Backend zero warmup is authoritative in the UI and ACKs no longer invent reset intervals.
+- [Validation, 2026-09-13] Demonstrated the lost delayed echo before the fix. Afterward, 12/12 CTest and 73/73 Python tests passed locally and on RTX 5090; all nine current GPU sequence stages passed; Compute Sanitizer found zero errors in the five-shape history regression. Tests and builds used isolated validation directories. Made the NVML timing fixture deterministic and restricted the remote build-directory exclusion so source `build_osm_scene.py` is copied.
 - [Integration] Preserved contributor commit ancestry with a normal merge; combined main's network/srsUE settings with the contribution's multi-antenna/Sionna launcher. Preserved the contributor's full progress record in `archive/progress/AGENT_PROGRESS-ehs0-066a702.md`. The requested history-preservation fix and GPU validation follow this merge as a separate commit.
 
 - [Research/MIMO] Produced a source-backed HTML assessment of OCUDU MIMO, the CUDA-accelerated OCUDU fork, srsUE NR limitations, the local project gap, and an initial 2x2 matrix-TDL integration path; the later rank-1 decision below supersedes that initial recommendation.
@@ -147,6 +150,7 @@ the results are a property of the emulator rather than of one machine.
 
 ## Blockers and Risks
 
+- [Current integration] CUDA delay capacity remains a separate merge blocker: control accepts up to 1023 samples while the device delay line is 128 samples including fractional-filter requirements. Geometry changes still reset. Full live-radio/Sionna qualification is outside this minimum fix; earlier completed gate records below do not certify this integration.
 - No active blocker is recorded for the completed report and archive work.
 - Rank-1 multi-port implementation is done on this branch (R0–R3 below); the assessment report's
   blueprint status applies to `main`, not to this branch. The downlink live gate still must verify that the selected OCUDU build supplies a usable fixed rank-1 multi-port PDSCH path without relying on unsupported srsUE PMI feedback.
@@ -159,6 +163,7 @@ the results are a property of the emulator rather than of one machine.
 
 ## Next Resume Point
 
+- [Current integration] The requested minimum fix is implemented and tested in `/Users/charles_gu/Documents/GitHub/ocudu-sionna-history-fix`. Review the separate fix commit after merge `3f4c234`. Main readiness remains blocked by the separately identified CUDA delay-capacity issue; no broader redesign or main publication has been performed. Older follow-ups below describe earlier workstreams.
 - The rank-1 critical path is complete on this branch: multi-port transport, deterministic 2×1 DL
   row and 1×2 UL column, and the 4×1/1×4 extension all pass live against srsUE. Remaining rank-1
   follow-ups are 8-port re-measurement and spatial-correlation/CDL live runs.

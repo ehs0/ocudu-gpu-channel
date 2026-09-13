@@ -981,11 +981,21 @@ public:
             throw std::runtime_error("matrix profile lane index is outside the active matrix");
           }
           const auto& lane_profile = matrix.lanes[lane_index];
-          refresh_all_taps_from_live(*h_state, lane_profile.n_taps,
-                                     lane_profile.taps);
-          if (outcome.matrix_profile_activated) {
+          if (outcome.history_reset_required) {
+            refresh_all_taps_from_live(*h_state, lane_profile.n_taps,
+                                       lane_profile.taps);
             for (int i = 0; i < kDeviceMaxDelayLine; ++i) {
               h_state->delay_line[i] = IqSample{};
+            }
+          } else {
+            // The shared link decision guarantees an unchanged layout. Keep
+            // the device-owned history, its size, and interpolation state.
+            for (int tap = 0; tap < lane_profile.n_taps; ++tap) {
+              const auto& value = lane_profile.taps[tap];
+              h_state->tap_gain_amp[tap] = static_cast<float>(
+                  std::pow(10.0, value.gain_db / 20.0));
+              h_state->tap_cos_phi[tap] = static_cast<float>(std::cos(value.phase_rad));
+              h_state->tap_sin_phi[tap] = static_cast<float>(std::sin(value.phase_rad));
             }
           }
         } else if (link.live_profile_active) {

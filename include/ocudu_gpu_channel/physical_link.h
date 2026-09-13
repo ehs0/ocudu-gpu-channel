@@ -191,6 +191,7 @@ struct LinkSnapOutcome {
   bool values_changed = false;
   bool profile_activated = false;
   bool matrix_profile_activated = false;
+  bool history_reset_required = false;
   // M4.4: the link's mixing matrix was replaced this slot, so a backend that
   // keeps a device-side copy has to upload it before the slot's kernels run.
   bool correlation_changed = false;
@@ -216,6 +217,7 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
 
   bool profile_activated = false;
   bool matrix_profile_activated = false;
+  bool history_reset_required = false;
   std::uint64_t warmup_begin_unix_ns = 0;
   std::uint64_t warmup_end_unix_ns = 0;
   const auto wall_clock_unix_ns = [] {
@@ -228,6 +230,7 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
         link.live_profile_active = true;
         link.live_matrix_profile_active = false;
         profile_activated = true;
+        history_reset_required = true; // Preserve scalar profile_swap semantics.
         // v3.1: force on a chain with no leading tdl stores the profile, but
         // the per-sample chain never reaches a Tdl branch. Say so.
         if (!link.chain_has_leading_tdl) {
@@ -240,12 +243,16 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
   }
   if (values_changed && link.control.matrix_profile_pending) {
     if (link.chain_has_leading_tdl || link.control.shadow_matrix_profile.lanes[0].force) {
+      const bool preserve_history = link.live_matrix_profile_active &&
+          matrix_history_compatible(link.live_matrix_profile,
+                                    link.control.shadow_matrix_profile);
       if (snap_matrix_profile_from_shadow(link.live_matrix_profile, link.control)) {
         link.live_matrix_profile_active = true;
         // A full matrix supersedes a prior scalar profile. Keeping both active
         // would make lane selection depend on backend implementation details.
         link.live_profile_active = false;
         matrix_profile_activated = true;
+        history_reset_required = !preserve_history;
       }
     }
   }
@@ -270,7 +277,7 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
     correlation_changed = true;
   }
 
-  if (profile_activated || matrix_profile_activated) {
+  if (history_reset_required) {
     // v2.2 W1: size the warmup window from the leading tdl's ring length. The
     // rings are zeroed by the caller, one per lane.
     std::size_t dl_size = static_cast<std::size_t>(
@@ -338,6 +345,7 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
   return LinkSnapOutcome{.values_changed = values_changed,
                          .profile_activated = profile_activated,
                          .matrix_profile_activated = matrix_profile_activated,
+                         .history_reset_required = history_reset_required,
                          .correlation_changed = correlation_changed};
 }
 

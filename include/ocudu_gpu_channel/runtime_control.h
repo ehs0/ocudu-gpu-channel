@@ -146,6 +146,30 @@ struct MatrixProfileShadow {
   ProfileShadow lanes[kMaxCorrelatedLanes]{};
 };
 
+// Only gain/phase changes can reuse a matrix's input history. Compare named
+// fields (not POD bytes/padding), and do not hide delay changes with a tolerance.
+inline bool matrix_history_compatible(const MatrixProfileShadow& before,
+                                      const MatrixProfileShadow& after)
+{
+  if (before.nt != after.nt || before.nr != after.nr ||
+      before.lane_count != after.lane_count) return false;
+  for (int lane = 0; lane < before.lane_count; ++lane) {
+    const auto& a = before.lanes[lane];
+    const auto& b = after.lanes[lane];
+    if (a.n_taps != b.n_taps || a.fading_enabled != b.fading_enabled ||
+        a.fading_f_d_max_hz != b.fading_f_d_max_hz ||
+        a.fading_spectrum != b.fading_spectrum ||
+        a.fading_grid_us != b.fading_grid_us || a.force != b.force) return false;
+    for (int tap = 0; tap < a.n_taps; ++tap) {
+      const auto& x = a.taps[tap];
+      const auto& y = b.taps[tap];
+      if (x.delay_samples != y.delay_samples || x.is_los != y.is_los ||
+          x.los_k_db != y.los_k_db || x.los_angle_rad != y.los_angle_rad) return false;
+    }
+  }
+  return true;
+}
+
 // One BrokerLinkControl per emulator link. The shadow buffer is initialised
 // in prepare() to mirror the per-link YAML state; the seqno starts at 0 so
 // the first server-thread snap on the first slot is a no-op (live already

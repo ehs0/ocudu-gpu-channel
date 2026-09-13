@@ -1250,7 +1250,8 @@ def delivery_status(
             applied_count += 1
         observed_slot = observed.get("slot")
         warmup_until_slot = observed.get("warmup_until_slot")
-        if not isinstance(warmup_until_slot, int) or warmup_until_slot <= 0:
+        # A reported zero is authoritative: this update may preserve history.
+        if not isinstance(warmup_until_slot, int):
             warmup_until_slot = acknowledged_warmup.get(link_id, 0)
         warming_up = (
             applied
@@ -1627,6 +1628,7 @@ class StatusStore:
         completed: list[tuple[Any, Any]] = []
         for key, targets in self._warmup_targets.items():
             ready = True
+            legacy_warming = False
             begin_times: dict[str, float] = {}
             end_times: dict[str, float] = {}
             begin_slots: dict[str, int] = {}
@@ -1653,6 +1655,16 @@ class StatusStore:
                     if isinstance(end_slot, int):
                         end_slots[link_id] = end_slot
                 if (
+                    not isinstance(payload.get("warmup_event_seq"), int)
+                    and isinstance(payload.get("seqno"), int)
+                    and payload["seqno"] >= expected_seqno
+                    and payload.get("profile_active") is True
+                    and isinstance(slot, int)
+                    and isinstance(warmup_until_slot, int)
+                    and slot < warmup_until_slot
+                ):
+                    legacy_warming = True
+                if (
                     not isinstance(payload.get("seqno"), int)
                     or payload["seqno"] < expected_seqno
                     or payload.get("profile_active") is not True
@@ -1673,17 +1685,25 @@ class StatusStore:
                     event["warmup_begin_slots"] = begin_slots
                 if end_slots:
                     event["warmup_end_slots"] = end_slots
-                if len(begin_times) == len(targets):
+                # Some links in a batch can preserve history while others
+                # reset. Draw only resets actually observed for this update.
+                if begin_times:
                     event["warmup_started_unix_ms"] = min(begin_times.values())
+                    event["warmup_boundary_source"] = "backend"
+                elif legacy_warming and event.get("warmup_started_unix_ms") is None:
+                    event["warmup_started_unix_ms"] = observed_unix_ms
+                    event["warmup_boundary_source"] = "telemetry_observed"
             if not ready:
                 continue
             if event is not None and event.get("warmup_ended_unix_ms") is None:
-                if len(end_times) == len(targets):
+                if end_times:
                     event["warmup_ended_unix_ms"] = max(end_times.values())
                     event["warmup_boundary_source"] = "backend"
-                else:
+                elif event.get("warmup_started_unix_ms") is not None:
                     event["warmup_ended_unix_ms"] = observed_unix_ms
                     event["warmup_boundary_source"] = "telemetry_observed"
+                else:
+                    event["warmup_expected"] = False
             completed.append(key)
         for key in completed:
             self._warmup_targets.pop(key, None)
@@ -1835,13 +1855,9 @@ class StatusStore:
                             else ended_unix_ms
                         ),
                         "warmup_expected": bool(warmup_targets),
-                        "warmup_started_unix_ms": (
-                            control_ack_unix_ms
-                            if warmup_targets
-                            and isinstance(control_ack_unix_ms, int)
-                            else ended_unix_ms if warmup_targets else None
-                        ),
-                        "warmup_ended_unix_ms": None if warmup_targets else None,
+                        # ACKs acknowledge delivery, not a history reset.
+                        "warmup_started_unix_ms": None,
+                        "warmup_ended_unix_ms": None,
                         "timing_ms": (
                             dict(timing) if isinstance(timing, dict) else {}
                         ),
