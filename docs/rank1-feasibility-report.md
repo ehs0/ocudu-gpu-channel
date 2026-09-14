@@ -211,7 +211,64 @@ Feasibility 평가에서 가장 중요한 부분은 "되긴 되는데, **어떤 
 | 독립 행렬 checker | `scripts/native/verify-mimo-matrix-capture.py` (H는 토폴로지에서 읽고 브로커 출력은 신뢰하지 않음) |
 | 위상 스윕 단위테스트 (뮤테이션 검증) | `tests/test_processing.cpp` R1 절 |
 | 작업·규명 전체 서사 (원인 규명, 기각 가설 포함) | `AGENT_PROGRESS.md` "Rank-1 Workstream" 절 |
-| 로드맵·상태·측정 라벨 | `RANK1_MILESTONES.md` |
+| 로드맵·상태·측정 라벨 | [RANK1_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md) |
 | 커밋 이력 | `rank1-miso-simo` 브랜치, 포크 기점 `34f669e` 이후 (R0–R2: `06d27d1`, R3 규명: `4d98e2a`, 게이트 통합: `e31fe51`, oracle: `e630bba`). 공개 브랜치는 upstream `216a28b` 위로 graft되었으므로, 이 해시가 정본이다 — 포크 이전 사설 트리의 해시는 공개 브랜치에 존재하지 않는다. |
 
 *본 문서의 모든 주장은 위 산출물에서 재현 가능하다. 여기 없는 것은 주장하지 않는다.*
+
+## Historical design and measurement context
+
+This supplement preserves the useful constraints from the retired development
+notes. It describes the August 2026 experiments, not new release qualification.
+The exact source snapshots below retain detailed milestone acceptance criteria,
+source references, rejected hypotheses and original measurements:
+
+- [hyunsoo_code_explain.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/hyunsoo_code_explain.md)
+- [HANDOVER.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/HANDOVER.md)
+- [MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md)
+- [RANK1_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md)
+
+- One producer owns each destination RadioNode's common input window and advances
+  all sibling cursors together. Partial progress is necessary: waiting for a full
+  batch can deadlock lock-step radios. Per-port reply workers wait for available
+  output; they must not fabricate samples.
+- Headerless cf32 IQ carries no timestamps. Equal sequence indices across TX
+  ports therefore require aligned stream origins and no dropped samples. Matching
+  timing offsets, explicit port ordering and marker tests check the deployment
+  assumptions; a shared producer alone cannot establish physical-time alignment.
+- The historical libzmq 4.3.5 investigation found lost REP replies with bounded
+  `ZMQ_SNDHWM=4`; data-plane REP uses `ZMQ_SNDHWM=0`, while REQ remains bounded.
+- PhysicalLink owns joint matrix/fading state and channel time. SISO remains the
+  one-row/one-column case of the common processing interface. M6 rank-2 and M7
+  massive-MIMO roadmap items are not evidence of completed radio qualification.
+- The srsUE rank-1 fixtures require dedicated DCI 0_1/1_1, disabled CSI-RS and MAC
+  pcap, and the documented uplink MCS cap (`pusch.max_ue_mcs: 9`). The August
+  4R investigation linked intermittent registration to overly aggressive UL MCS.
+  Silent DL branches must be declared in wire scoring; synthetic multi-branch
+  tests and oracle-weight experiments do not establish closed-loop precoding.
+
+The August 17 latency measurements used Intel Core Ultra 9 285K + RTX 5090,
+23.04 MS/s, 23,040-sample nominal batches, CUDA, fixed_mimo (one tap) + TDL,
+and 60-second Docker live gates. The histogram resolution was 5 µs:
+
+| Configuration | Receiver | Samples (slots) | p50 µs | p95 µs | p99 µs | p99.9 µs |
+|---|---|---:|---:|---:|---:|---:|
+| 2×1 | gnb0 | 57,753 | 80 | 135 | 205 | 340 |
+| 2×1 | ue0 | 54,794 | 75 | 150 | 230 | 380 |
+| 4×1 | gnb0 | 54,439 | 115 | 200 | 285 | 675 |
+| 4×1 | ue0 | 54,284 | 120 | 210 | 310 | 650 |
+
+Both configurations reached the 5 ms overflow bucket: these percentiles do not
+prove every deadline was met. Earlier heartbeat-only n=18 estimates and their
+hardware labels were superseded. The original notes do not establish the cause
+of the maximum-latency outliers.
+
+The August 19 two-UE gates measured max uplink |y−ΣHx| of
+4.54e-05 / 4.53e-05 for 2R and 6.76e-05 / 5.33e-05 / 2.91e-05 / 3.99e-05
+for 4R. Removing either contributor link raised error to 91.3–236.9. These
+are two single-layer users, not same-PRB MU-MIMO. The original oracle experiment
+reported port0-only −0.54 dB versus MRT (predicted −0.53), naive replication
+−1.24 dB, and a predicted −38.7 dB anti-aligned null that prevented cell search.
+They do not imply UE-feedback-based beam control. See the original snapshots
+for their fixture-specific conditions and the [current guide](sionna-integration.md)
+for later moving-connectivity and strict real-time failures.

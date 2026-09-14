@@ -1,6 +1,6 @@
 # M5 — 라이브 통합 상세 설계
 
-상위 문서: [`MIMO_MILESTONES.md`](../../MIMO_MILESTONES.md) · 선행: [`m4-physical-link-runtime-control.md`](m4-physical-link-runtime-control.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 선행: [`m4-physical-link-runtime-control.md`](m4-physical-link-runtime-control.md)
 
 **M5는 새 기계장치를 만들지 않는다.** M1~M4가 만든 다중포트 채널을 **실제 OCUDU gNB**에 물리고, 그것이 도는 것을 기록하는 마일스톤이다. 그래서 이 문서의 대부분은 "무엇을 만들 것인가"가 아니라 **"이미 있는 것을 어디서 가져와 무엇에 맞출 것인가"**다.
 
@@ -10,7 +10,7 @@
 
 ### 1.1 범위는 이미 정해져 있고, 절반은 끝나 있다
 
-`MIMO_MILESTONES.md` M5가 두 단계를 지정한다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M5가 두 단계를 지정한다.
 
 1. **1×1 라이브 회귀** (M0 직후 한 번, M4 이후 다시) → **완료**. M4 직후 재실행했고 `20260815T103840Z` `status=passed`(rrc/pdu/ping 전부 1).
 2. **멀티포트 OCUDU gNB ↔ 합성 2-port peer** → 남은 것은 이것 하나다.
@@ -29,7 +29,7 @@
 | `examples/native/ocudu/gnb_zmq_b210_fdd_2port_no_core.yaml` | audit 트리 |
 | `examples/native/topology.ocudu.mimo-2port-transport.cuda.yaml` | audit 트리 |
 
-세 가지 모두 `MIMO_MILESTONES.md` §3이 **"살림"**으로 지정한 자산이다(버릴 것은 `RadioNodeCoordinator`, 평행 API, 전용 커널 쪽이었다).
+세 가지 모두 [MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) §3이 **"살림"**으로 지정한 자산이다(버릴 것은 `RadioNodeCoordinator`, 평행 API, 전용 커널 쪽이었다).
 
 ### 1.3 스키마가 그 사이에 달라졌다
 

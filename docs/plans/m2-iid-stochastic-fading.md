@@ -1,6 +1,6 @@
 # M2 — IID 확률적 페이딩 상세 설계
 
-상위 문서: [`MIMO_MILESTONES.md`](../../MIMO_MILESTONES.md) · 선행: [`m1-dimensions-and-fixed-matrix.md`](m1-dimensions-and-fixed-matrix.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 선행: [`m1-dimensions-and-fixed-matrix.md`](m1-dimensions-and-fixed-matrix.md)
 
 **M2의 목표는 상관이 아니다. lane마다 독립인(IID) 페이딩을 정확히 만들고, 그 소유권을 physical link에 두는 것이다.** 이 마일스톤이 끝난 시점에 각 lane은 자기 Jakes realization을 갖고, lane 간 교차상관은 0이며, 절대시간은 lane이 아니라 physical link가 소유한다.
 
@@ -27,7 +27,7 @@ const std::uint64_t fading_seed = hash(link_key_value + ":fading:0");
 
 ### 1.2 physical link가 시드의 소유자가 아니다
 
-`MIMO_MILESTONES.md`는 **PhysicalLink = 공동 H / RNG / 절대시간 / correlation의 소유자**로 정의한다. 지금은 lane이 각자 독립 해시를 갖는다. M3에서 lane 간 상관을 주려면 **하나의 링크 시드에서 lane들을 파생**시켜야 한다 — 독립 해시 N개로는 상관 구조를 표현할 수 없다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md)는 **PhysicalLink = 공동 H / RNG / 절대시간 / correlation의 소유자**로 정의한다. 지금은 lane이 각자 독립 해시를 갖는다. M3에서 lane 간 상관을 주려면 **하나의 링크 시드에서 lane들을 파생**시켜야 한다 — 독립 해시 N개로는 상관 구조를 표현할 수 없다.
 
 ### 1.3 절대시간이 lane마다 따로 누적된다
 
@@ -70,7 +70,7 @@ CUDA 쪽은 `DeviceLinkState::slot_start_samples`가 커널이 읽는 필드다.
 
 ### 2.3 `apply_channel_kernel` 무수정
 
-`MIMO_MILESTONES.md` §2 M2가 명시한 대로 페이딩 커널 본문은 손대지 않는다. M2는 **파라미터 파생과 시간 소유권**만 바꾼다. 커널이 읽는 `tap_alpha` / `tap_phi` / `slot_start_samples`의 *값*이 달라질 뿐이다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) §2 M2가 명시한 대로 페이딩 커널 본문은 손대지 않는다. M2는 **파라미터 파생과 시간 소유권**만 바꾼다. 커널이 읽는 `tap_alpha` / `tap_phi` / `slot_start_samples`의 *값*이 달라질 뿐이다.
 
 이 제약이 M2를 단독 검증 가능하게 만든다 — 통계 게이트가 실패하면 원인은 파생식이지 커널이 아니다.
 
@@ -89,7 +89,7 @@ CUDA 쪽은 `DeviceLinkState::slot_start_samples`가 커널이 읽는 필드다.
 
 ## 4. Exit 게이트
 
-`MIMO_MILESTONES.md` M2와 동일하며, 판정 방법을 명시한다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M2와 동일하며, 판정 방법을 명시한다.
 
 1. **lane별 자기상관이 `J₀(2π f_d τ)`와 일치** — ~~기존 Bessel 테스트 방식을 재사용하고 허용오차 ±0.15. 각 lane을 독립적으로 판정한다.~~
 

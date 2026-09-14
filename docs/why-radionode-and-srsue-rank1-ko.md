@@ -1,7 +1,7 @@
 # RadioNode 단이 필요한 이유와 srsUE의 MIMO 한계
 
 기준 문서: [`docs/plans/m0-single-engine-refactor.md`](plans/m0-single-engine-refactor.md)
-상위 문서: [`MIMO_MILESTONES.md`](../MIMO_MILESTONES.md) · 미션: [`AGENT_GOAL.md`](../AGENT_GOAL.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 미션: [`AGENT_GOAL.md`](../AGENT_GOAL.md)
 
 M0 설계 문서를 읽을 때 반복해서 나오는 두 질문에 답한다.
 
@@ -16,7 +16,7 @@ M0 설계 문서를 읽을 때 반복해서 나오는 두 질문에 답한다.
 
 ### 1.1 기존 `Device`가 무엇인지부터
 
-`MIMO_MILESTONES.md` §0의 3줄 정의가 전부다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) §0의 3줄 정의가 전부다.
 
 ```text
 Device       = ZMQ transport port (소켓 + TX ring). 순수 전송 단위.
@@ -162,7 +162,7 @@ M0의 목적은 MIMO가 아니라 **브로커 스레드 구조 전환만 단독�
 | 한 srsUE NR 세션의 true rank-2 2×2 복호 증명 | **불가** |
 | srsUE 두 프로세스를 한 2-port UE로 간주 | **불가** |
 
-따라서 `MIMO_MILESTONES.md` M5의 "명시적 비게이트"가 나온다. 이 UE는 rank-2 acceptance gate가 될 수 없다. 대신:
+따라서 [MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M5의 "명시적 비게이트"가 나온다. 이 UE는 rank-2 acceptance gate가 될 수 없다. 대신:
 
 - **행렬 정확성**은 합성 2-port peer(`apps/ocudu_mimo_transport_peer.cpp`)로 검증한다 — M1의 identity `H` / swap `H` / known `H` 해석해 일치 + marker 테스트.
 - **라이브 회귀**는 srsUE 1×1로 계속 돌린다 (M0 직후 1회, M4 이후 1회).

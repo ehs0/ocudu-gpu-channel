@@ -1,6 +1,6 @@
 # M1 — 차원 도입 + 고정 행렬 상세 설계
 
-상위 문서: [`MIMO_MILESTONES.md`](../../MIMO_MILESTONES.md) · 선행: [`m0-single-engine-refactor.md`](m0-single-engine-refactor.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 선행: [`m0-single-engine-refactor.md`](m0-single-engine-refactor.md)
 
 **M1의 목표는 확률적 페이딩이 아니다. 차원을 도입하고, 결정론적 고정 행렬 하나를 정확히 적용하는 것이다.** 이 마일스톤이 끝난 시점에 `Nt`/`Nr`가 1보다 클 수 있고, `y = Hx`가 해석적 기대값과 정확히 일치해야 하며, 1×1 레거시 출력은 M0과 bit-exact여야 한다.
 
@@ -202,10 +202,10 @@ M1.4의 **1×1 bit-exact**가 이 마일스톤의 안전망이다. 여기서 어
 
 ## 7. Exit 게이트
 
-`MIMO_MILESTONES.md` M1과 동일하며, 여기서는 각 항목의 판정 방법을 명시한다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M1과 동일하며, 여기서는 각 항목의 판정 방법을 명시한다.
 
 1. **합성 2-port peer**: identity `H` → 입력 그대로 통과. swap `H` → 행 교환. known `H` → 해석적 기대값과 **정확히** 일치 (고정 행렬이므로 확률 없음).
-2. **marker 테스트** (`MIMO_MILESTONES.md` §1.3): 포트 0에만 구별 가능한 패턴을 주입하고, 지정된 lane에서만 나타나는지 확인. **포트 swap과 원점 skew를 동시에 잡는다** — 이 두 개는 단위 테스트로는 구분되지 않는 실패 모드다.
+2. **marker 테스트** ([MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) §1.3): 포트 0에만 구별 가능한 패턴을 주입하고, 지정된 lane에서만 나타나는지 확인. **포트 swap과 원점 skew를 동시에 잡는다** — 이 두 개는 단위 테스트로는 구분되지 않는 실패 모드다.
 3. **CPU ↔ CUDA parity** 1e-3.
 4. **1×1 레거시 bit-exact vs M0.**
 5. **비대칭 차원** 2×1, 1×2 단위 테스트.
@@ -218,4 +218,4 @@ M1.4의 **1×1 bit-exact**가 이 마일스톤의 안전망이다. 여기서 어
 
 M0에서 확인된 대로 이 환경에서는 multi-UE 라이브 attach가 불가능하다(unprivileged LXC + lock-step 가상시간의 지터 부재; `AGENT_PROGRESS.md` M0 섹션 참조). M1의 exit 게이트는 **전부 합성·단위 테스트로 판정 가능하도록** 설계되어 있으므로 이 제약에 걸리지 않는다.
 
-다만 `MIMO_MILESTONES.md` M5의 라이브 게이트는 여전히 미해결 부채로 남아 있고, M1이 그 부채를 줄여주지 않는다는 점을 분명히 해 둔다.
+다만 [MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M5의 라이브 게이트는 여전히 미해결 부채로 남아 있고, M1이 그 부채를 줄여주지 않는다는 점을 분명히 해 둔다.

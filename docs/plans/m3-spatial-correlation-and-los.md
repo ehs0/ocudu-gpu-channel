@@ -1,6 +1,6 @@
 # M3 — 공간 상관 + coherent LOS 상세 설계
 
-상위 문서: [`MIMO_MILESTONES.md`](../../MIMO_MILESTONES.md) · 선행: [`m2-iid-stochastic-fading.md`](m2-iid-stochastic-fading.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 선행: [`m2-iid-stochastic-fading.md`](m2-iid-stochastic-fading.md)
 
 **M3의 목표는 lane 간 관계를 선언한 것과 일치시키는 것이다.** M2는 lane마다 독립인 realization을 정확히 만들고 그 소유권을 physical link에 두었다. M3은 그 위에 관계를 얹는다 — 산란 성분에는 2차 통계(상관 행렬 `R`), LOS 성분에는 결정론적 위상 관계. 이 마일스톤이 끝난 시점에 한 물리 링크의 lane 벡터는 선언한 `R`을 공분산으로 갖고, LOS 지배 구간에서 포트 간 위상차가 선언한 행렬과 일치한다.
 
@@ -35,7 +35,7 @@ M2가 확률 생성기를 상관 없이 단독 검증했으므로, 여기서 통
 
 ### 1.4 LOS 위상이 lane마다 독립 draw다
 
-`prepare_tdl_fading_state`(`delay.h`)가 tap마다 `tap_phi_los`를 그 lane의 RNG에서 뽑는다. 즉 오늘의 LOS는 lane 간 위상 관계가 **무작위**다. coherent LOS는 정확히 이것을 금지한다("lane마다 LOS 위상을 독립 draw하지 않는다", `MIMO_MILESTONES.md` M3).
+`prepare_tdl_fading_state`(`delay.h`)가 tap마다 `tap_phi_los`를 그 lane의 RNG에서 뽑는다. 즉 오늘의 LOS는 lane 간 위상 관계가 **무작위**다. coherent LOS는 정확히 이것을 금지한다("lane마다 LOS 위상을 독립 draw하지 않는다", [MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M3).
 
 ### 1.5 시드와 시간의 소유권은 이미 물리 링크에 있다
 
@@ -104,7 +104,7 @@ E[h hᴴ] = R_rx ⊗ R_tx        (선언한 tx 블록을 transpose도 conjugate�
 
 ### 2.4 coherent LOS
 
-`MIMO_MILESTONES.md` M3의 합성식:
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M3의 합성식:
 
 ```
 H_ℓ = sqrt(P_ℓ/(K+1))·H_NLOS,corr + sqrt(P_ℓ·K/(K+1))·H_LOS,coh
@@ -175,7 +175,7 @@ H_ℓ = sqrt(P_ℓ/(K+1))·H_NLOS,corr + sqrt(P_ℓ·K/(K+1))·H_LOS,coh
 
 ## 5. Exit 게이트
 
-`MIMO_MILESTONES.md` M3과 동일하며, 판정 방법을 명시한다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M3과 동일하며, 판정 방법을 명시한다.
 
 | 게이트 | 판정 |
 |---|---|

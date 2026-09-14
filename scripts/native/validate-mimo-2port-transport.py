@@ -570,6 +570,7 @@ def main() -> int:
     require(len(gpu_samples) > 0, "broker emitted no event=gpu_timings samples")
     require(len(process_samples) > 0, "broker emitted no event=cpu_stage_timings samples")
     # The typical slot is what the real-time claim rests on, and it is gated.
+    # Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md
     # The observed maximum is recorded and NOT gated: `MIMO_MILESTONES.md` S4
     # settled that the tail on this host is scheduling / IRQ / driver submit-or-
     # sync, not the MIMO compute path, and classified an observed-max miss as an

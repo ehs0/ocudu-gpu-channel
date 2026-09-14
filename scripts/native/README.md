@@ -43,7 +43,7 @@ gNB, srsUE, Open5GS, MongoDB, and user-space runtime libraries described by
 Provision it without sudo or Docker from the repository root:
 
 ```bash
-export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+export OCUDU_NATIVE_ROOT="$HOME/ocudu-native-workspace"
 ./scripts/native/bootstrap-workspace.sh \
   --root "$OCUDU_NATIVE_ROOT" --jobs "$(nproc)"
 ```
@@ -54,7 +54,7 @@ Open5GS module used by the live gate. To validate an existing workspace without
 downloading or rebuilding it:
 
 ```bash
-export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+export OCUDU_NATIVE_ROOT="$HOME/ocudu-native-workspace"
 ./scripts/native/bootstrap-workspace.sh \
   --verify-only --root "$OCUDU_NATIVE_ROOT"
 ```
@@ -76,9 +76,9 @@ the same path to the runtime namespace.
 From the repository root:
 
 ```bash
-export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
+export OCUDU_NATIVE_ROOT="$HOME/ocudu-native-workspace"
 # This host's installed CUDA compiler. Override it if CUDA is elsewhere.
-export CUDACXX=/opt/conda/envs/torch/bin/nvcc
+export CUDACXX="$(command -v nvcc)"
 export OCUDU_NATIVE_GPU_DEVICE=0
 
 ./scripts/native/run-ocudu-legacy-1x1.sh
@@ -120,8 +120,8 @@ low-rate Sionna RT controller and the read-only Web UI; it does not enable a
 multi-antenna topology. Only one terminal is required:
 
 ```bash
-export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
-export CUDACXX=/opt/conda/envs/torch/bin/nvcc
+export OCUDU_NATIVE_ROOT="$HOME/ocudu-native-workspace"
+export CUDACXX="$(command -v nvcc)"
 export OCUDU_NATIVE_GPU_DEVICE=0
 
 ./scripts/native/run-ocudu-sionna-1x1.sh
@@ -153,7 +153,7 @@ Optional settings are `OCUDU_NATIVE_WEB_PORT` (default `8080`),
 restricted to loopback. A remote browser can use SSH port forwarding:
 
 ```bash
-ssh -L 8080:127.0.0.1:8080 ubuntu@GPU_HOST
+ssh -L 8080:127.0.0.1:8080 YOUR_USER@GPU_HOST
 ```
 
 ### Keeping the RAN KPI panel populated
@@ -205,10 +205,10 @@ default scenario resolves to 4 gNB TX ports, 4 gNB RX ports, and a one-port UE
 (4x1 DL MISO and 1x4 UL SIMO):
 
 ```bash
-export OCUDU_NATIVE_ROOT=/home/ubuntu/ocudu-native-workspace
-export CUDACXX=/opt/conda/envs/torch/bin/nvcc
+export OCUDU_NATIVE_ROOT="$HOME/ocudu-native-workspace"
+export CUDACXX="$(command -v nvcc)"
 export OCUDU_NATIVE_GPU_DEVICE=0
-export OCUDU_NATIVE_SIONNA_PYTHON=/home/ubuntu/OCUDU/venvs/sionna/bin/python
+export OCUDU_NATIVE_SIONNA_PYTHON="$HOME/venvs/sionna/bin/python"
 
 ./scripts/native/run-ocudu-sionna-rank1.sh
 ```
@@ -241,3 +241,33 @@ each direction before the gNB and srsUE start. Readiness is reported as
   `OCUDU_NATIVE_GPU_DEVICE`.
 - `workspace lock` or revision mismatch: use the pinned native workspace; the
   gate fails closed instead of silently using different RAN/core binaries.
+
+## Shutdown and troubleshooting the Sionna 1×1 run
+
+Press Ctrl-C once in the launch terminal and allow cleanup to finish. The
+supervisor retains the run lock, closes that descriptor in child processes,
+and signals the inner runner before stopping its namespace supervisor. The
+inner runner stops its process groups and removes its temporary namespace
+and TUN state. Normal shutdown releases the lock and closes the Web port.
+
+If `another native 1x1 run is active` appears after an interrupted run, inspect
+the lock before starting another instance; a remaining process may still own it:
+
+```bash
+fuser scripts/native/run-ocudu-legacy-1x1.sh 2>/dev/null || true
+flock -n scripts/native/run-ocudu-legacy-1x1.sh -c 'echo native_lock=free'
+```
+
+For an inaccessible dashboard, check the printed URL, the configured
+`OCUDU_NATIVE_WEB_PORT`, and the SSH forwarding port. An HTTP response alone
+is not proof of radio attachment: check `native_sionna_1x1_live_ready` and the
+run's RRC, PDU and ping evidence. For a CUDA probe failure, inspect
+`nvidia-smi`, `"$CUDACXX" --version`, and the selected GPU index. A missing
+TUN device or blocked `unshare` requires a suitable host/container environment.
+
+The report directory contains `live-ready.json`, `web-ui-status.json`,
+`attach-summary.json`, and `source-evidence.json`; the log directory contains
+`sionna-status.jsonl`. Workspace verification checks pinned dependencies and
+binaries, not radio connectivity. See the
+[current Sionna guide](../../docs/sionna-integration.md) for matrix updates,
+telemetry freshness, multi-gNB metrics and the separate UE recovery results.

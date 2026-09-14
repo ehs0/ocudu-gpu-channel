@@ -4,6 +4,7 @@
 # degrades with intermittent epre=-inf PUSCH occasions at the gNB and
 # registration cannot complete (R3 bisection, 2026-08-17); the emulator-side
 # 1x4/4x1 vectors are proven clean synthetically, so the block sits in the
+# Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md
 # gNB's 4-port ZMQ receive path and is an open item in RANK1_MILESTONES.md.
 # The three R2 adaptations (ue_dedicated/DCI 0_1+1_1, CSI-RS off, MAC pcap
 # off) carry over unchanged and remain load-bearing.

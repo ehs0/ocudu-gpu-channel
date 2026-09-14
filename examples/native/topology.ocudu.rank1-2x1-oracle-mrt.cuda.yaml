@@ -10,6 +10,7 @@
 # anti-matched deep null fails cell search outright. Recipe + numbers:
 # AGENT_PROGRESS.md "[Oracle precoding]" entry.
 # Rank-1 asymmetric fixture: a 2-port OCUDU gNB radio node against a 1-port
+# Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md
 # srsUE radio node (R0/R2 of RANK1_MILESTONES.md).
 #
 # Downlink is a 1x2 row vector -- both gNB transmit ports combine through

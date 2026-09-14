@@ -1,3 +1,4 @@
+# Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md
 # Native rank-1 MISO/SIMO gNB fixture (R2 of RANK1_MILESTONES.md): the
 # legacy B210 FDD srsUE cell raised to 2T2R, with the three adaptations the
 # R2 controls established -- each one measured, none optional:

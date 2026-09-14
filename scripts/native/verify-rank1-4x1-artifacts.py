@@ -27,6 +27,7 @@ COUNTER_NAMES = (
 )
 # The superseded MIMO attempt routed every slot through a RadioNodeCoordinator
 # and this verifier asserted on its group_prepares / group_commits /
+# Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md
 # group_aborts / partial_group_aborts counters. MIMO_MILESTONES.md section 0.2
 # discards that coordinator outright -- the producer model gives the same
 # cursor-alignment invariant structurally, with one thread per node instead of

@@ -3,6 +3,7 @@
 # proven 2x1 column as R2. gnb0 deliberately declares tx_ports 4 but
 # rx_ports 2 -- see the 4T2R gNB fixture header for why UL stays at two.
 # Rank-1 asymmetric fixture: a 2-port OCUDU gNB radio node against a 1-port
+# Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/RANK1_MILESTONES.md
 # srsUE radio node (R0/R2 of RANK1_MILESTONES.md).
 #
 # Downlink is a 1x2 row vector -- both gNB transmit ports combine through

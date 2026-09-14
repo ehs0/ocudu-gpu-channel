@@ -1,6 +1,6 @@
 # M4 — physical link 단위 runtime control 상세 설계
 
-상위 문서: [`MIMO_MILESTONES.md`](../../MIMO_MILESTONES.md) · 선행: [`m3-spatial-correlation-and-los.md`](m3-spatial-correlation-and-los.md) · 기존 컨트롤 플레인: [`runtime-mutable-channel.md`](runtime-mutable-channel.md) (v1) / [`-v2`](runtime-mutable-channel-v2.md) / [`-v3`](runtime-mutable-channel-v3.md)
+상위 문서: [`MIMO_MILESTONES.md`](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) · 선행: [`m3-spatial-correlation-and-los.md`](m3-spatial-correlation-and-los.md) · 기존 컨트롤 플레인: [`runtime-mutable-channel.md`](runtime-mutable-channel.md) (v1) / [`-v2`](runtime-mutable-channel-v2.md) / [`-v3`](runtime-mutable-channel-v3.md)
 
 **M4의 목표는 채널을 바꾸는 단위를 lane에서 physical link로 올리는 것이다.** Phase 3이 만든 shadow + atomic seqno + 슬롯 경계 snap은 그대로 쓴다. 바뀌는 것은 **그것이 몇 개 있고 누가 소유하느냐**다. M0이 커서를, M2가 시드와 시간을, M3이 확률 생성기를 물리 링크로 올린 것과 같은 이동이며, 이유도 같다: **lane마다 하나씩 있으면 lane마다 다를 수 있다.**
 
@@ -121,7 +121,7 @@ M4.2의 게이트가 M3.3과 같은 형태인 것에 주의 — **소유권 이�
 
 ## 4. Exit 게이트
 
-`MIMO_MILESTONES.md` M4와 동일하며 판정 방법을 명시한다.
+[MIMO_MILESTONES.md](https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md) M4와 동일하며 판정 방법을 명시한다.
 
 | 게이트 | 판정 |
 |---|---|

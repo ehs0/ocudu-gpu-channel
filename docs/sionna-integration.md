@@ -224,3 +224,17 @@ Geometry-change resets, unsupported dynamic matrices on host staging,
 intermittent moving traffic, incomplete UE mobility procedures and that
 real-time failure remain explicit limits. No threshold relaxation, scheduling
 change or new runtime qualification accompanies this documentation update.
+
+## Native launch and historical design notes
+
+For Docker-free 1×1 and rank-1 launch commands, remote dashboard access,
+shutdown and troubleshooting, use the [native runtime guide](../scripts/native/README.md).
+The native 1×1 launcher defaults to a requested 10 Hz Sionna update rate;
+other launchers have their own defaults, and the achieved rate depends on
+ray-tracing and control latency. The dashboard is a read-only observer:
+RRC/PDU logs and restored traffic establish UE connectivity, not CUDA readiness.
+
+The root contributor explanation, handover and milestone notes were retired
+from the release checkout. Their original contents and authorship remain in
+Git. Historical design and measurement context is collected in the
+[rank-1 report supplement](rank1-feasibility-report.md#historical-design-and-measurement-context).

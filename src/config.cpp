@@ -847,6 +847,7 @@ std::vector<std::string> validate_config(const TopologyConfig& config)
 
       // A node owns one sample epoch, so its ports must agree on rate; and the
       // sibling TX-start offsets must agree or the ports' sequence indices do
+      // Historical reference: https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/5ffd73ea4afa2295b9a588b0b03a411329e81d9b/MIMO_MILESTONES.md
       // not denote the same PHY instant (MIMO_MILESTONES.md section 1.3).
       const DeviceConfig* reference = nullptr;
       for (const auto& port : claimed) {
