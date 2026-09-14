@@ -1204,10 +1204,23 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     // bounded history slice — at 500 Hz telemetry the unbounded retained
     // buffer would otherwise dominate the response.
     let statusInFlight=false,chartsInFlight=false;
+    function markStatusUnavailable(){
+      if(lastStatus){
+        const old=lastStatus,delivery=old.delivery||{};
+        const links=(delivery.links||[]).map(link=>({...link,fresh:false,stale:true,applied:false,usable:false,warming_up:false}));
+        const ages=Object.fromEntries(Object.keys(old.telemetry||{}).map(key=>[key,null]));
+        render({...old,feeds:{...old.feeds,telemetry_connected:false,telemetry_link_count:0,telemetry_age_seconds:ages},
+          delivery:{...delivery,state:'stale_backend_telemetry',backend_applied:false,backend_applied_links:0,
+            backend_usable:false,backend_usable_links:0,warmup_links:0,stale_links:links.length,links}});
+      }
+      setPill($('telemetryPill'),false,'UI feed error');
+      setPill($('backendPill'),false,'Backend status unavailable');
+      setPill($('sionnaPill'),false,'Sionna status unknown');
+    }
     async function poll(){
       if(statusInFlight)return; statusInFlight=true;
-      try{const r=await fetch(`/api/status?history_ms=${CHART_HISTORY_MS}`,{cache:'no-store'});if(!r.ok)throw Error(r.status);render(await r.json())}
-      catch(e){setPill($('telemetryPill'),false,'UI feed error')}
+      try{const r=await fetch(`/api/status?history_ms=${CHART_HISTORY_MS}`,{cache:'no-store',signal:AbortSignal.timeout(2000)});if(!r.ok)throw Error(r.status);render(await r.json())}
+      catch(e){markStatusUnavailable()}
       finally{statusInFlight=false}
     }
     // Chart-only refresh: /api/realtime carries just the plotted series.
