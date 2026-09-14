@@ -10,10 +10,11 @@ failed.** The integration is published on `main`; no tagged release has been cre
 ## Contribution provenance
 
 The [README contributor table](../README.md#contributors) is authoritative:
-Zhouyou Gu is project lead, with steering by Jihong Park.
-Minwoo Eun contributed the rank-1 MISO/SIMO
-workstream; Hyunsoo Lee (`@ehs0`) contributed the Sionna integration.
-Minwoo Eun and Hyunsoo Lee are affiliated with Yonsei University.
+Zhouyou Gu (SUTD) is project lead, with steering by
+[Jihong Park (SUTD)](https://www.sutd.edu.sg/profile/park-jihong/).
+Minwoo Eun (Yonsei University) contributed the rank-1 MISO/SIMO workstream;
+Hyunsoo Lee (Yonsei University, `@ehs0`) contributed the Sionna integration.
+SUTD is the Singapore University of Technology and Design.
 
 The normal merge `3f4c234` retains main `f51c3fd` and Hyunsoo Lee's contribution
 tip `066a702ab2ecc301d5329c5fec89baefa30336f3` as parents. Original commit IDs

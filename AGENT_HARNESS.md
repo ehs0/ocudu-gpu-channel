@@ -21,7 +21,7 @@ This workspace starts as a new repository for a GPU-backed channel-emulation lay
 
 - When the user requests consolidation into main in the current folder, perform normal merges there, preserve pending edits, and report conflicts. Resolve conflicts automatically when authorized. Do not continue editing a separate worktree after consolidation; local merge authorization does not imply a push or release publication.
 
-- Use the README contributor table as the canonical source for public contributor names, profile links and roles. Propagate confirmed display-name corrections to current documentation while preserving original Git author metadata and historical evidence.
+- Use the README contributor table as the canonical source for public contributor names, affiliations, profile links and roles. Use given-name/family-name order, consistent Name (Affiliation) bylines, and a separate affiliation column in the table; expand institutional abbreviations there. Propagate confirmed display-name corrections to current documentation while preserving original Git author metadata and historical evidence.
 
 - Default all UE builds and runtime tests to the user-owned `https://github.com/zhouyou-gu/srsRAN_4G.git` fork. Pin each baseline/fixed image to an exact fork commit; do not silently substitute official upstream or a release image.
 
