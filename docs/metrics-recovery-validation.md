@@ -42,7 +42,7 @@ The ten-minute validation completed in 603.092 seconds including final traffic c
 | Existing controls | Rays and labels toggled and restored, reset-view ran, and antenna selection was verified on the replacement DOM element after rendering. |
 | Channel processing | All ten links advanced; sequences increased by 6,730. Per-link processing calls advanced 198,957–322,524, and corresponding nominal sample-slot counters advanced 166,192–166,193. These are progress measurements, not a real-time qualification. |
 | UE traffic | Both UEs: **0/10 replies at the start and 0/10 at the end** to `10.45.1.1`, through their actual UE network namespaces. |
-| Automatic UE reassociation | **Failed in this observation**: each UE retained one initial RRC/PDU, one later release and eight random-access attempts; no new successful RRC/PDU appeared. The real returning-UE display path consequently remains unverified; controlled return/identity regressions passed. |
+| Automatic UE reassociation | **Failed in this observation**: each UE retained one initial RRC/PDU, one printed scheduling-request failure/release message and eight random-access attempts; no new successful RRC/PDU appeared. The real returning-UE display path consequently remains unverified; controlled return/identity regressions passed. |
 
 Both scheduler feeds continued to have stale intervals; the fix preserves their warnings. Fresh scheduler reports sometimes retain the gNB's old zero-throughput UE context, which is not proof that the UE is connected. Source inspection of OCUDU `lib/mac/mac_ctrl/mac_metrics_aggregator.cpp` shows report boundaries depend on radio-slot progression. That explains why the configured report period is not a guaranteed wall-clock delivery interval, but this patch does not establish the underlying cause of slow runtime progression.
 
@@ -53,3 +53,11 @@ Live commands and artifacts: `observe-recovery.py`, `recovery-proxy.py`, `recove
 ## Qualification boundary
 
 The dashboard cannot cause UE reassociation. A returning scheduler row or reused RNTI does not prove a new RRC/PDU session. Automatic reassociation is assessed from UE logs and restored traffic, separately from WebSocket recovery. No UE restart is permitted to manufacture a successful reassociation result. No GPU performance qualification is repeated or implied.
+
+## Follow-up: source-level recovery diagnosis
+
+Inspection of the running srsUE source at `7bbd443` found that the console message `Scheduling request failed: releasing RRC connection...` does **not** prove RRC release. `srsue/src/stack/mac_nr/proc_sr_nr.cc` calls `rrc->release_pucch_srs()`, which is empty in `rrc_nr.cc`, clears pending grants and starts random access. When preamble attempts are exhausted, `proc_ra_nr.cc` calls `mac.rrc_ra_problem()`; that forwards to `rrc_nr::ra_problem()`, whose standalone-NR branch is a TODO. The recovery callback therefore has no standalone recovery action.
+
+The same source has empty `in_sync()`, `out_of_sync()`, `max_retx_attempted()` and `protocol_failure()` callbacks. Its `rrc_release()` resets several lower layers but does not itself set the RRC state to IDLE or restart NAS/cell selection. `setup_request_proc::init()` refuses a new connection request unless the state is IDLE. These are concrete incomplete recovery paths and a strong explanation for the observed terminal recovery state. The trace still needs explicit callback/state instrumentation to establish which terminal branch executed during this run.
+
+The artifact counter named `release` counts that console string only; it is not a verified RRC-state transition. Previous prose describing a confirmed RRC release was too strong. Fixing this requires a separate, coordinated UE RRC/MAC/NAS recovery change; restarting the UE process is not evidence of automatic reassociation. The cause of the initial SR/RA failures and channel/timing behavior remain separate questions.
