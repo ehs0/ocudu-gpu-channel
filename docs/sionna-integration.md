@@ -1,11 +1,11 @@
 # Sionna integration and current validation
 
-Status as of **14 September 2026**, merged into local `main`.
+Status as of **14 September 2026**, published on `main`.
 The broker accepts live Sionna matrix profiles, and one dashboard displays the
 scene, channel delivery, GPU resources and independent scheduler metrics for
 both gNBs. The bounded integration fixes pass their regressions. **Continuous
 two-UE moving connectivity and strict zero-miss real-time qualification remain
-failed.** The local merge has not been pushed or published as a release.
+failed.** The integration is published on `main`; no tagged release has been created.
 
 ## Contribution provenance
 
