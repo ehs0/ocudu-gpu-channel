@@ -1156,9 +1156,13 @@ def parse_telemetry_frame(frame: str) -> tuple[str, dict[str, Any]]:
     return topic, payload
 
 
+TELEMETRY_FRESH_SECONDS = 2.0
+
+
 def delivery_status(
     sionna: dict[str, Any] | None,
     telemetry: dict[str, dict[str, Any]],
+    telemetry_ages: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Correlate one Sionna batch ACK with backend-applied seqnos.
 
@@ -1230,9 +1234,14 @@ def delivery_status(
     applied_count = 0
     usable_count = 0
     warmup_count = 0
+    stale_count = 0
     for link_id in sorted(channel_ids or acknowledged.keys()):
         expected_seqno = acknowledged.get(link_id)
         observed = telemetry.get(link_id, {})
+        age = (telemetry_ages or {}).get(link_id)
+        fresh = isinstance(age, (int, float)) and 0 <= age <= TELEMETRY_FRESH_SECONDS
+        stale = bool(observed) and not fresh
+        stale_count += int(stale)
         observed_seqno = observed.get("seqno")
         observed_backend = observed.get("backend")
         backend_matches = (
@@ -1240,7 +1249,8 @@ def delivery_status(
             or observed_backend == backend
         )
         applied = (
-            expected_seqno is not None
+            fresh
+            and expected_seqno is not None
             and isinstance(observed_seqno, int)
             and observed_seqno >= expected_seqno
             and observed.get("profile_active") is True
@@ -1267,6 +1277,9 @@ def delivery_status(
         link_rows.append(
             {
                 "link_id": link_id,
+                "fresh": fresh,
+                "stale": stale,
+                "telemetry_age_seconds": age,
                 "expected_seqno": expected_seqno,
                 "observed_seqno": observed_seqno,
                 "observed_slot": observed_slot,
@@ -1295,6 +1308,8 @@ def delivery_status(
         state = "accepted_without_seqnos"
     elif not control_received:
         state = "partial_control_ack"
+    elif stale_count:
+        state = "stale_backend_telemetry"
     elif backend_applied and not backend_usable:
         state = "backend_warmup"
     elif backend_usable:
@@ -1314,6 +1329,8 @@ def delivery_status(
         "backend_applied_links": applied_count,
         "backend_usable": backend_usable,
         "backend_usable_links": usable_count,
+        "stale_links": stale_count,
+        "telemetry_fresh_seconds": TELEMETRY_FRESH_SECONDS,
         "warmup_links": warmup_count,
         "links": link_rows,
     }
@@ -1995,7 +2012,7 @@ class StatusStore:
         with self._lock:
             telemetry = dict(self._telemetry)
             telemetry_ages = {
-                link_id: round(now - seen, 3)
+                link_id: now - seen
                 for link_id, seen in self._telemetry_seen.items()
             }
             sionna = self._sionna
@@ -2068,8 +2085,10 @@ class StatusStore:
             "event": "web_status",
             "server_uptime_seconds": round(now - self._started_monotonic, 3),
             "feeds": {
-                "telemetry_connected": bool(telemetry),
-                "telemetry_link_count": len(telemetry),
+                "telemetry_connected": any(0 <= age <= TELEMETRY_FRESH_SECONDS for age in telemetry_ages.values()),
+                "telemetry_link_count": sum(0 <= age <= TELEMETRY_FRESH_SECONDS for age in telemetry_ages.values()),
+                "telemetry_cached_link_count": len(telemetry),
+                "telemetry_fresh_seconds": TELEMETRY_FRESH_SECONDS,
                 "telemetry_age_seconds": telemetry_ages,
                 "sionna_connected": sionna is not None,
                 "sionna_age_seconds": sionna_age,
@@ -2086,7 +2105,7 @@ class StatusStore:
                 "telemetry": telemetry_history,
                 "iterations": iteration_history,
             },
-            "delivery": delivery_status(sionna, telemetry),
+            "delivery": delivery_status(sionna, telemetry, telemetry_ages),
             "ran": {
                 **gnb_state,
                 "received_unix_ms": (

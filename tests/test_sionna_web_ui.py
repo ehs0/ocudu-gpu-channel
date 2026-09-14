@@ -32,7 +32,7 @@ from server import (  # noqa: E402
     _NvmlProcessUtilizationSample,
     _NvmlUtilization,
     build_resource_payload,
-    delivery_status,
+    delivery_status as raw_delivery_status,
     parse_cpu_hardware,
     parse_nvidia_compute_apps,
     parse_nvidia_dmon_pcie,
@@ -53,7 +53,42 @@ from server import (  # noqa: E402
 )
 
 
+def delivery_status(sionna, telemetry):
+    # These direct correlation fixtures represent frames just received.
+    return raw_delivery_status(sionna, telemetry, {key: 0.0 for key in telemetry})
+
+
 class WebUiTests(unittest.TestCase):
+    def test_delivery_requires_fresh_telemetry(self):
+        with mock.patch('server.time.monotonic', return_value=100.0) as clock:
+            store = StatusStore()
+            record = {'event':'sionna_rt_update','channels':[{'link_id':'a'},{'link_id':'b'}],
+                      'control_reply':{'ok':True,'backend':'cuda','link_count':2,
+                                       'links':[{'link_id':k,'seqno':4} for k in ('a','b')]}}
+            store.update_sionna(record)
+            frame = {'seqno':4,'slot':10,'backend':'cuda','profile_active':True,'warmup_until_slot':0}
+            for k in ('a','b'): store.update_telemetry(k, dict(frame))
+            self.assertTrue(store.snapshot()['delivery']['backend_usable'])
+            clock.return_value = 102.0
+            self.assertTrue(store.snapshot()['delivery']['backend_usable'])
+            clock.return_value = 102.0001
+            stale = store.snapshot()
+            self.assertFalse(stale['delivery']['backend_usable'])
+            self.assertFalse(stale['feeds']['telemetry_connected'])
+            self.assertEqual(stale['delivery']['state'], 'stale_backend_telemetry')
+            self.assertTrue(stale['delivery']['control_received'])
+            self.assertEqual(len(stale['telemetry']), 2)
+            store.update_telemetry('a', dict(frame))
+            partial = store.snapshot()
+            self.assertEqual(partial['delivery']['backend_usable_links'], 1)
+            self.assertFalse(partial['delivery']['backend_usable'])
+            store.update_telemetry('b', dict(frame))
+            self.assertTrue(store.snapshot()['delivery']['backend_usable'])
+            # A cached record without a receipt timestamp is not evidence of liveness.
+            self.assertFalse(raw_delivery_status(record, {'a':frame,'b':frame})['backend_usable'])
+            store._telemetry_seen.pop('b')
+            self.assertFalse(store.snapshot()['delivery']['backend_usable'])
+
     def test_preserved_matrix_history_has_no_ack_invented_warmup(self) -> None:
         record = {
             "event": "sionna_rt_update", "session_id": "preserve", "iteration": 1,
