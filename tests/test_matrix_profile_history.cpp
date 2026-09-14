@@ -29,7 +29,7 @@ struct Fixture {
   std::vector<ocg::IqBuffer> inputs;
   std::vector<ocg::SuperpositionInput> lanes;
 
-  Fixture(int tx, int rx, ocg::Backend backend, bool mixed = false) : nt(tx), nr(rx), inputs(tx, ocg::IqBuffer(8))
+  Fixture(int tx, int rx, ocg::Backend backend, bool mixed = false, double initial_delay = 5.0) : nt(tx), nr(rx), inputs(tx, ocg::IqBuffer(8))
   {
     config.runtime.backend = backend;
     config.runtime.batch_samples_auto = false;
@@ -55,7 +55,7 @@ struct Fixture {
     model.id = "dynamic";
     model.chain.push_back({.type = ocg::ModelStepType::Tdl,
                            .params = {},
-                           .taps = {{.delay_samples = 5.0}},
+                           .taps = {{.delay_samples = initial_delay}},
                            .taps_declared = true});
     config.models.emplace(model.id, model);
     config.links = {{.from = "tx", .to = "rx", .model = model.id},
@@ -112,12 +112,18 @@ struct Fixture {
   ocg::TelemetrySnapshot telemetry() { return ocg::read_telemetry_snapshot(*control); }
 };
 
-std::vector<ocg::IqBuffer> delayed_output(int nt, int nr, double delay, ocg::Backend backend)
+std::vector<ocg::IqBuffer> delayed_output(int nt, int nr, double delay, ocg::Backend backend, bool scalar = false)
 {
   Fixture f(nt, nr, backend);
   for (int k = 0; k < f.matrix.lane_count; ++k)
     f.matrix.lanes[k].taps[0].delay_samples = delay;
-  f.apply();
+  if (scalar) {
+    f.control->shadow_profile = f.matrix.lanes[0];
+    f.control->profile_pending = true;
+    f.control->seqno.fetch_add(1, std::memory_order_release);
+  } else {
+    f.apply();
+  }
   for (int i = 0; i < 132; ++i) f.run();
   const auto resets = f.telemetry().warmup_event_seq;
   std::vector<ocg::IqBuffer> result(nr);
@@ -126,7 +132,7 @@ std::vector<ocg::IqBuffer> delayed_output(int nt, int nr, double delay, ocg::Bac
     if (batch == 0) for (int tx = 0; tx < nt; ++tx)
       f.inputs[tx][7-tx] = {float(tx+1), float(tx)*0.25F};
     // Alternate coefficients while echoes remain in the long history.
-    if (batch > 0) {
+    if (batch > 0 && !scalar) {
       for (int k = 0; k < f.matrix.lane_count; ++k) {
         f.matrix.lanes[k].taps[0].gain_db = batch % 2 ? -6 : 0;
         f.matrix.lanes[k].taps[0].phase_rad = 0.2 * k;
@@ -152,6 +158,13 @@ void check_delays(int nt, int nr)
     for (int rx = 0; rx < nr; ++rx) for (std::size_t i = 0; i < cpu[rx].size(); ++i) {
       require(std::hypot(cpu[rx][i].i-gpu[rx][i].i, cpu[rx][i].q-gpu[rx][i].q) < 1e-4,
               "long-delay CUDA echo must match CPU");
+    }
+    if (nt == 1 && nr == 1) {
+      const auto scalar_cpu = delayed_output(1, 1, delay, ocg::Backend::Cpu, true);
+      const auto scalar_gpu = delayed_output(1, 1, delay, ocg::Backend::Cuda, true);
+      for (std::size_t i = 0; i < scalar_cpu[0].size(); ++i)
+        require(std::hypot(scalar_cpu[0][i].i-scalar_gpu[0][i].i, scalar_cpu[0][i].q-scalar_gpu[0][i].q) < 1e-4,
+                "scalar profile maximum delay must match CPU");
     }
 #endif
   }
@@ -293,6 +306,12 @@ int main()
 #endif
     }
     check_settings();
+#if OCUDU_GPU_CHANNEL_HAS_CUDA
+    bool capacity_rejected = false;
+    try { Fixture too_long(1, 1, ocg::Backend::Cuda, false, 1500.0); }
+    catch (const std::runtime_error& e) { capacity_rejected = std::string(e.what()).find("capacity") != std::string::npos; }
+    require(capacity_rejected, "oversized device construction must fail explicitly");
+#endif
     std::cout << "matrix history: all five antenna shapes passed; CUDA="
               << OCUDU_GPU_CHANNEL_HAS_CUDA << '\n';
     return 0;

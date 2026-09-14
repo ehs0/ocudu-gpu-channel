@@ -674,6 +674,7 @@ public:
       // non-tdl-leading edge) fall back to host stage_link for the whole
       // destination.
       bool all_leading_tdl = (incoming > 0);
+      std::string device_capacity_error;
       for (const auto& lane : resolved.lanes) {
         if (lane.dst_node != node.id) {
           continue;
@@ -704,7 +705,7 @@ public:
                                          static_cast<int>(lms.delay_line.size()),
                                          src_idx,
                                          sp.host_link_states[k_idx])) {
-            throw std::runtime_error("CUDA device channel capacity exceeded for " + lane.key);
+            device_capacity_error = lane.key;
           }
         } else {
           // Non-tdl-leading: still set src_index for the pass-through path.
@@ -728,6 +729,9 @@ public:
         ++k_idx;
       }
       sp.use_device_channel = all_leading_tdl;
+      if (sp.use_device_channel && !device_capacity_error.empty()) {
+        throw std::runtime_error("CUDA device channel capacity exceeded for " + device_capacity_error);
+      }
       for (const auto* lane : per_edge_lane) {
         link_slots_.at(lane->key).model.link->control.matrix_profile_supported =
             sp.use_device_channel;

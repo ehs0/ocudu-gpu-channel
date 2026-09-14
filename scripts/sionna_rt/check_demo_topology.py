@@ -16,7 +16,6 @@ def validate(topology, scenario, sources, sinks):
         for direction in ('tx', 'rx'):
             array = node.get(direction + '_array', node.get('array', {}))
             count = array.get('rows', 1) * array.get('cols', 1)
-            if array.get('polarization', 'V') in ('VH', 'cross'): count *= 2
             if key not in nodes or len(nodes[key][direction + '_ports']) != count:
                 raise ValueError(f'{key} {direction}: scenario/topology antenna dimensions differ')
     for field, actual in [('tx_endpoint', sources), ('rx_endpoint', sinks)]:
