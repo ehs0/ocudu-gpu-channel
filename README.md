@@ -20,13 +20,15 @@ kernel design, profiling, and performance numbers, see the
 
 ## Status
 
-**Integration status — 14 September 2026.** Sionna RT now supplies live
+**Status — 14 September 2026.** Sionna RT now supplies live
 matrix profiles to the CUDA broker, with a moving SUTD scene and one dashboard
 showing both gNBs. Channel/control regressions and dashboard recovery pass.
 The user-fork UE fixes demonstrate automatic fresh attachment, but continuous
 two-UE moving traffic and strict zero-miss real-time qualification still fail.
-These results apply to `integration/sionna-history-fix`, not a published `main`
-release. See the [current integration guide](docs/sionna-integration.md).
+The integration and retained local launcher commits are merged into local
+`main`; this update has not been pushed or published as a release. See the
+[current integration guide](docs/sionna-integration.md) and
+[merge validation](docs/main-merge-validation.md).
 
 Earlier live-radio milestones below describe their tested configurations;
 they do not establish coverage or deadline compliance for the moving scenario.

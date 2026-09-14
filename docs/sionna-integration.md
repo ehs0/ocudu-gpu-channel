@@ -1,11 +1,11 @@
 # Sionna integration and current validation
 
-Status as of **14 September 2026**, on `integration/sionna-history-fix`.
+Status as of **14 September 2026**, merged into local `main`.
 The broker accepts live Sionna matrix profiles, and one dashboard displays the
 scene, channel delivery, GPU resources and independent scheduler metrics for
 both gNBs. The bounded integration fixes pass their regressions. **Continuous
 two-UE moving connectivity and strict zero-miss real-time qualification remain
-failed.** This branch has not been released on `main`.
+failed.** The local merge has not been pushed or published as a release.
 
 ## Contribution provenance
 
@@ -18,6 +18,11 @@ tip `066a702ab2ecc301d5329c5fec89baefa30336f3` as parents. Original commit IDs
 and author metadata remain intact. The contribution's Git author string
 “Ubuntu” is retained in history; the documentation uses the contributor's
 confirmed name, Hyunsoo Lee.
+
+Local main merge `22a51ba` retains integration tip `0e0a6c3`. Follow-up normal
+merge `e59e095` retains the older local tip `5f55bb7`, including subnet selection
+and Sionna argument forwarding. No contribution was squashed or rebased. See
+[merge validation and edit reconciliation](main-merge-validation.md).
 
 | Work | Retained evidence |
 |---|---|
@@ -74,6 +79,15 @@ This remains snapshot replacement at link update boundaries. It does not add
 buffered, sample-aligned channel streaming or seamless geometry changes.
 See [matrix history](sionna-matrix-history.md) and
 [delay/fallback validation](sionna-merge-fixes-validation.md).
+
+## Launcher arguments
+
+The two-gNB smoke launcher retains `OCUDU_MGNB_SIONNA_EXTRA_ARGS`, for example
+`--ue0-start=-20,0,1.5 --gain-offset-db 75`. Values are transported safely over
+SSH, split on whitespace without shell evaluation or filename expansion, and
+forwarded only to the Sionna bridge. To supply an individual argument containing
+spaces, invoke `scripts/sionna_rt/run_web_ui.sh` directly and put quoted bridge
+arguments after `--`. An unset option keeps the existing defaults.
 
 ## One dashboard for both gNBs
 
@@ -185,11 +199,13 @@ workspace's `validation/ue-sa-recovery-20260914/sync-loss-live/` directory.
 
 ## Regression record and qualification limits
 
-These are existing dated results, not tests rerun for this documentation update.
-All cited integration and UE follow-up execution was on the RTX 5090 host.
+The local merge adds launcher regression checks on the RTX 5090 host. Earlier
+channel, dashboard and UE results below remain tied to their tested revisions;
+no radio or GPU performance tests were repeated during the merge.
 
 | Tested revision | Recorded checks | Evidence |
 |---|---|---|
+| Local merge `e59e095` | Python 90/90, both frontend regressions and shell syntax; new forwarding regression fails before the fix | [Merge report](main-merge-validation.md) |
 | Channel fixes through `16af288` | CTest 12/12; Python 75/75; nine GPU stages; Compute Sanitizer memcheck/initcheck/synccheck with zero errors | [Merge-fix report](sionna-merge-fixes-validation.md) |
 | Dashboard recovery `d6637f7` | Python 86/86; both frontend regressions; actual OCUDU heartbeat, independent interruption and recovery tests | [Metrics report](metrics-recovery-validation.md) |
 | UE recovery `daa167ae3` | 18/18 focused tests; baseline defects reproduced before their fixes | UE report identified above; existing full NR RRC fixture failure remains outside the passing selection |

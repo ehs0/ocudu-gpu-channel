@@ -19,6 +19,16 @@ This workspace starts as a new repository for a GPU-backed channel-emulation lay
 
 ## Reusable Preferences
 
+- When the user requests consolidation into main in the current folder, perform normal merges there, preserve pending edits, and report conflicts. Resolve conflicts automatically when authorized. Do not continue editing a separate worktree after consolidation; local merge authorization does not imply a push or release publication.
+
+- Use the README contributor table as the canonical source for public contributor names, profile links and roles. Propagate confirmed display-name corrections to current documentation while preserving original Git author metadata and historical evidence.
+
+- Default all UE builds and runtime tests to the user-owned `https://github.com/zhouyou-gu/srsRAN_4G.git` fork. Pin each baseline/fixed image to an exact fork commit; do not silently substitute official upstream or a release image.
+
+- For user inspection of a contributor’s setup, preserve the requested scenario and movement. Use stationary configurations only as explicitly labelled diagnostic controls, not as a silent replacement for the demonstration.
+
+- When the user asks to inspect the live web interface, leave the actual OCUDU runtime running for a stated inspection window and provide one unified dashboard link covering the configured gNBs; do not tear it down at the end of the assistant turn.
+
 - Run all validation on the RTX 5090 workstation, including CPU reference tests; do not run backend tests on the user’s local PC.
 - Establish OCUDU runtime connectivity with real gNB, UE and core processes, antenna endpoint mapping, registration, PDU sessions and user-plane traffic. Synthetic source/sink ports prove broker behavior only and must be reported separately. For a two-gNB/two-UE case, verify both UEs, the actual serving PCIs and each gNB scheduler feed rather than inferring cell association from container names.
 
@@ -75,6 +85,8 @@ This workspace starts as a new repository for a GPU-backed channel-emulation lay
 - Read the producer's serialiser before displaying any field: a value that means "not reported" often arrives as a number, not as an absence. The gNB scheduler signals no-CSI as `cqi = -1`, an unreported RSRP as `-inf` clamped to a -99.9 dB wire floor, and an unobserved TA or PHR as 0 -- so a dashboard that formats blindly reports silence as the worst link it ever measured. Map each sentinel to "not reported", mark a clamp bound as the bound (`≥ 99.9 dB`), and where a sentinel is genuinely indistinguishable from a reading (an RI defaulting to 1, a TA of 0), say so in the caption rather than hiding it. [Lesson from the first live run of the RAN KPI panel: an idle UE rendered CQI -1.0 and -99.9 dB SINR/RSRP as if measured. Third instance of the same family as the R3 DTX lesson and the shared-bus overwrite above.]
 - A change that must not disturb a proven gate goes behind an opt-in switch, and the claim is proved by diffing the artifact, not by reasoning about it. The gNB metrics block established the pattern here: unset, the rendered config is byte-identical to the pre-change output, so the gates are untouched by construction rather than by argument. Render both ways and diff before saying so. The same discipline applies to runtime behaviour -- a keepalive or any other injected traffic starts only on the path that asked for it, after the gate's verdict is recorded, and writes to its own log so the file the checker parses still contains only what the check is about. [Lesson from the live-demo inactivity timer and keepalive ping.]
 - Match an injected stimulus to the instrument's integration window, or the measurement reports the gaps rather than the signal. Metrics summed per report period turn a stimulus slower than that period into an alternating record -- one populated row, then several truthful rows of zeros -- which reads as a broken feed and is not one. Pick the interval from the reporting period (a few stimuli per period), and make the knob fine-grained enough to express it: an integer-seconds option cannot say "five times per second". [Lesson from the live-demo keepalive: a 5 s ping against a 1 s du_report_period.]
+
+- Trace the production executable’s actual stack construction and event dispatcher before declaring a component recovery test sufficient. Exercise the public runtime entry point as well as the component: a passing alternate-stack test can miss the path the shipped binary uses.
 
 ## Handoff Condition
 
