@@ -12,6 +12,7 @@ failed.** The integration is published on `main`; no tagged release has been cre
 The [README contributor table](../README.md#contributors) is authoritative:
 Zhouyou Gu is project lead; Minwoo Eun contributed the rank-1 MISO/SIMO
 workstream; Hyunsoo Lee (`@ehs0`) contributed the Sionna integration.
+Minwoo Eun and Hyunsoo Lee are affiliated with Yonsei University.
 
 The normal merge `3f4c234` retains main `f51c3fd` and Hyunsoo Lee's contribution
 tip `066a702ab2ecc301d5329c5fec89baefa30336f3` as parents. Original commit IDs

@@ -1,7 +1,7 @@
 # ocudu-gpu-channel
 
 Project lead: **[Zhouyou Gu](https://github.com/zhouyou-gu)**, SUTD<br>
-Contributors: **[Minwoo Eun](https://github.com/MinwooEun)** · **[Hyunsoo Lee](https://github.com/ehs0)** ([contributions](#contributors))
+Contributors (Yonsei University): **[Minwoo Eun](https://github.com/MinwooEun)** · **[Hyunsoo Lee](https://github.com/ehs0)** ([contributions](#contributors))
 
 **GPU-accelerated, ZMQ-native channel emulator for live srsRAN and OCUDU stacks.**
 Routes `cf32` IQ between radio endpoints and applies CUDA channel models
@@ -262,8 +262,8 @@ and authorship are retained; contribution areas can overlap.
 | Contributor | Role | Contribution areas |
 |---|---|---|
 | **[Zhouyou Gu](https://github.com/zhouyou-gu)** · `@zhouyou-gu` | Project lead | Core broker and CPU/CUDA emulator, topology and runtime control, OCUDU/srsRAN interop, integration fixes and RTX validation, and multi-UE attachment/recovery work in the user-owned srsRAN fork. |
-| **[Minwoo Eun](https://github.com/MinwooEun)** · `@MinwooEun` | Rank-1 MISO/SIMO contributor | Multi-port radios and physical-link state, fixed and correlated matrix channels, live 2×1/1×2 and 4×1/1×4 gates, wire-capture scoring and transport validation, and precoding/UE feasibility studies. |
-| **[Hyunsoo Lee](https://github.com/ehs0)** · `@ehs0` | Sionna integration contributor | Sionna RT bridge and live scalar/matrix updates, native integration, moving SUTD scene and antenna arrays, scene/ray/channel visualization, timing/resource views, and the initial gNB scheduler KPI panel. |
+| **[Minwoo Eun](https://github.com/MinwooEun)** · `@MinwooEun`<br>Yonsei University | Rank-1 MISO/SIMO contributor | Multi-port radios and physical-link state, fixed and correlated matrix channels, live 2×1/1×2 and 4×1/1×4 gates, wire-capture scoring and transport validation, and precoding/UE feasibility studies. |
+| **[Hyunsoo Lee](https://github.com/ehs0)** · `@ehs0`<br>Yonsei University | Sionna integration contributor | Sionna RT bridge and live scalar/matrix updates, native integration, moving SUTD scene and antenna arrays, scene/ray/channel visualization, timing/resource views, and the initial gNB scheduler KPI panel. |
 
 The [integration guide](docs/sionna-integration.md#contribution-provenance)
 records the normal merge and distinguishes the original Sionna work from
