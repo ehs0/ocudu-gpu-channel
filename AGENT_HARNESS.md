@@ -19,6 +19,9 @@ This workspace starts as a new repository for a GPU-backed channel-emulation lay
 
 ## Reusable Preferences
 
+- Run all validation on the RTX 5090 workstation, including CPU reference tests; do not run backend tests on the user’s local PC.
+- Establish OCUDU runtime connectivity with real gNB, UE and core processes, antenna endpoint mapping, registration, PDU sessions and user-plane traffic. Synthetic source/sink ports prove broker behavior only and must be reported separately. For a two-gNB/two-UE case, verify both UEs, the actual serving PCIs and each gNB scheduler feed rather than inferring cell association from container names.
+
 - Retain contributor commit IDs and authorship through normal merges; verify contributor ancestry, and commit integration fixes separately. Do not squash or rebase contributions.
 
 - Separate source-backed OCUDU/ZMQ facts from project intent or inference; cite or record the source consulted when making durable claims about OCUDU behavior.
