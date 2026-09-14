@@ -579,7 +579,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         <h2>RAN KPIs by UE · gNB scheduler metrics</h2>
         <div id="ranState" class="foot"></div>
         <div id="ranCards"></div>
-        <div class="foot">Served by the gNB's own remote-control WebSocket — the same feed the official GUI subscribes to. Enable it by rendering the run with <span class="mono">OCUDU_NATIVE_GNB_METRICS=1</span> and starting the Web UI with <span class="mono">--gnb-metrics-endpoint ws://127.0.0.1:8001</span>. <b>BLER</b> is derived here as nok / (ok + nok) from the HARQ counters; every other value is reported by the scheduler as-is. An em dash means the scheduler reported nothing for that field in the period, including the values it signals as sentinels rather than omissions: <span class="mono">cqi = -1</span> for "no CSI report", and a SINR or RSRP mean sitting on the <span class="mono">-99.9 dB</span> clamp floor, which is where an unreported RSRP (-inf) and a DTX-pulled PUCCH SINR both land. Two sentinels cannot be told apart from readings and are shown as-is: <b>RI</b> falls back to 1 when no rank was reported, and <b>TA</b> and <b>PHR</b> report 0 when unobserved. This panel is read-only like the rest of the dashboard.</div>
+        <div class="foot">Served by the gNB's own remote-control WebSocket — the same feed the official GUI subscribes to. Enable it by rendering the run with <span class="mono">OCUDU_NATIVE_GNB_METRICS=1</span> and starting the Web UI with <span class="mono">--gnb-metrics-endpoint ws://127.0.0.1:8001</span>. For multiple gNBs, repeat <span class="mono">--gnb-metrics-source gnb0=ws://127.0.0.1:18001</span> with a unique gNB name and endpoint. <b>BLER</b> is derived here as nok / (ok + nok) from the HARQ counters; every other value is reported by the scheduler as-is. An em dash means the scheduler reported nothing for that field in the period, including the values it signals as sentinels rather than omissions: <span class="mono">cqi = -1</span> for "no CSI report", and a SINR or RSRP mean sitting on the <span class="mono">-99.9 dB</span> clamp floor, which is where an unreported RSRP (-inf) and a DTX-pulled PUCCH SINR both land. Two sentinels cannot be told apart from readings and are shown as-is: <b>RI</b> falls back to 1 when no rank was reported, and <b>TA</b> and <b>PHR</b> report 0 when unobserved. This panel is read-only like the rest of the dashboard.</div>
       </section>
     </div>
   </main>
@@ -797,7 +797,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     // not just the scheduler, so notifications and scheduler reports are
     // counted apart: only the second kind says anything about UEs, and only
     // its age tells the reader whether the table below is current.
-    function renderRanCards(ran) {
+    function renderRanGroup(gnbId, ran) {
       const state=ran?.state||'disabled',rows=ran?.ue_list||[];
       const age=finite(ran?.age_seconds)?`${fmt(ran.age_seconds,1)}s ago`:'never';
       const ueReports=Number(ran?.ue_reports||0);
@@ -807,20 +807,27 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         subscribed:'Subscribed — waiting for the first metrics notification.',
         connected:`Live · ${Number(ran?.messages||0).toLocaleString()} notifications · ${ueReports.toLocaleString()} scheduler reports · last ${age}`,
         disconnected:`Disconnected${ran?.error?` · ${ran.error}`:''} — retrying with backoff.`}[state]||state;
-      $('ranState').innerHTML=`<span class="${state==='connected'?'tag-ok':'tag-wait'}">${esc(state)}</span> · ${esc(detail)}`;
+      const status=`<span class="${state==='connected'?'tag-ok':'tag-wait'}">${esc(state)}</span> · ${esc(detail)}`;
+      const stale=ueReports>0&&(ran?.ue_list_stale===true||state!=='connected')
+        ?`<div class="ran-stale">${state==='connected'?`Last scheduler report ${esc(ueAge)}`:'Connection unavailable'} — the rows below are the last reported values, not current ones.</div>`:'';
       if(!rows.length){
         const empty=state!=='connected'?'Waiting for gNB scheduler metrics.'
-          :ueReports?'gNB scheduler is reporting no connected UEs.'
+          :ueReports?(stale?'Last scheduler report contained no UEs.':'gNB scheduler is reporting no connected UEs.')
           :'Connected — no scheduler report on this feed yet; the other metrics consumers sharing the socket do not carry UE state.';
-        $('ranCards').innerHTML=`<div class="empty">${esc(empty)}</div>`;
-        return;
+        return `<section data-gnb-id="${esc(gnbId)}"><h3>${esc(gnbId)}</h3><div class="foot">${status}</div>${stale}<div class="empty">${esc(empty)}</div></section>`;
       }
-      const stale=ran?.ue_list_stale===true
-        ?`<div class="ran-stale">Last scheduler report ${esc(ueAge)} — the rows below are the last reported values, not current ones.</div>`:'';
       const header=RAN_COLUMNS.flatMap(([,cols])=>cols).map(([label])=>`<th>${esc(label)}</th>`).join('');
       const groups=RAN_COLUMNS.map(([name,cols])=>`<th colspan="${cols.length}" style="text-align:center">${esc(name)}</th>`).join('');
-      const body=rows.map(row=>`<tr>${RAN_COLUMNS.flatMap(([,cols])=>cols).map(([,read])=>`<td>${esc(read(row))}</td>`).join('')}</tr>`).join('');
-      $('ranCards').innerHTML=`${stale}<div class="ran-table-wrap"><table class="ran-table"><thead><tr>${groups}</tr><tr>${header}</tr></thead><tbody>${body}</tbody></table></div>`;
+      const body=rows.map(row=>`<tr data-row-key="${esc(JSON.stringify([gnbId,row.pci,row.rnti]))}">${RAN_COLUMNS.flatMap(([,cols])=>cols).map(([,read])=>`<td>${esc(read(row))}</td>`).join('')}</tr>`).join('');
+      return `<section data-gnb-id="${esc(gnbId)}"><h3>${esc(gnbId)}</h3><div class="foot">${status}</div>${stale}<div class="ran-table-wrap"><table class="ran-table"><thead><tr>${groups}</tr><tr>${header}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+    }
+
+    function renderRanCards(ran, gnbs) {
+      const entries=Object.entries(gnbs||{});
+      if(!entries.length)entries.push(['gnb0',ran||{}]);
+      const fresh=entries.filter(([,feed])=>feed.state==='connected'&&Number(feed.ue_reports)>0&&feed.ue_list_age_seconds!=null&&!feed.ue_list_stale).length;
+      $('ranState').textContent=`${fresh}/${entries.length} gNB scheduler feeds fresh`;
+      $('ranCards').innerHTML=entries.map(([gnbId,feed])=>renderRanGroup(gnbId,feed)).join('');
     }
 
     function renderNodeCards(sionna) {
@@ -1195,7 +1202,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       renderDeadlineCards(telemetry, feeds.telemetry_age_seconds||{});
       renderEdgeCards(s?.channels,sampleRateHz);
       renderNodeCards(s);
-      renderRanCards(data.ran);
+      renderRanCards(data.ran, data.ran_gnbs);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
     }
     // Two loops with very different costs. render() rebuilds every card,
@@ -1209,7 +1216,8 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         const old=lastStatus,delivery=old.delivery||{};
         const links=(delivery.links||[]).map(link=>({...link,fresh:false,stale:true,applied:false,usable:false,warming_up:false}));
         const ages=Object.fromEntries(Object.keys(old.telemetry||{}).map(key=>[key,null]));
-        render({...old,feeds:{...old.feeds,telemetry_connected:false,telemetry_link_count:0,telemetry_age_seconds:ages},
+        const unavailable=feed=>({...feed,state:'disconnected',error:'Dashboard status unavailable',ue_list_stale:true});
+        render({...old,ran:unavailable(old.ran),ran_gnbs:Object.fromEntries(Object.entries(old.ran_gnbs||{}).map(([id,feed])=>[id,unavailable(feed)])),feeds:{...old.feeds,telemetry_connected:false,telemetry_link_count:0,telemetry_age_seconds:ages},
           delivery:{...delivery,state:'stale_backend_telemetry',backend_applied:false,backend_applied_links:0,
             backend_usable:false,backend_usable_links:0,warmup_links:0,stale_links:links.length,links}});
       }

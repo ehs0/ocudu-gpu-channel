@@ -1622,13 +1622,26 @@ class StatusStore:
         self._iteration_history: list[dict[str, Any]] = []
         self._warmup_targets: dict[tuple[Any, Any], dict[str, int]] = {}
         self._bad_telemetry_frames = 0
-        self._gnb_metrics: dict[str, Any] | None = None
-        self._gnb_metrics_seen: float | None = None
-        self._gnb_metrics_state = "disabled"
-        self._gnb_metrics_error: str | None = None
-        self._gnb_metrics_messages = 0
-        self._gnb_metrics_ue_seen: float | None = None
-        self._gnb_metrics_ue_reports = 0
+        self._gnb_metrics: dict[str, dict[str, Any]] = {}
+
+    def _gnb_feed(self, gnb_id: str) -> dict[str, Any]:
+        # Caller holds _lock. Insertion order also defines the legacy source.
+        return self._gnb_metrics.setdefault(gnb_id, {
+            "state": "disabled", "error": None, "messages": 0,
+            "seen": None, "ue_seen": None, "ue_reports": 0,
+            "received_unix_ms": None, "ue_list_unix_ms": None, "ue_list": [],
+        })
+
+    @staticmethod
+    def _gnb_snapshot(feed: dict[str, Any], now: float) -> dict[str, Any]:
+        age = None if feed["seen"] is None else now - feed["seen"]
+        ue_age = None if feed["ue_seen"] is None else now - feed["ue_seen"]
+        return {
+            **{k: v for k, v in feed.items() if k not in ("seen", "ue_seen")},
+            "age_seconds": None if age is None else round(age, 3),
+            "ue_list_age_seconds": None if ue_age is None else round(ue_age, 3),
+            "ue_list_stale": ue_age is not None and ue_age > GNB_UE_REPORT_STALE_SECONDS,
+        }
 
     def _iteration_event(
         self, session_id: Any, iteration: Any
@@ -1761,44 +1774,30 @@ class StatusStore:
             )
             self._close_completed_warmups(observed_unix_ms)
 
-    def update_gnb_metrics(self, payload: dict[str, Any]) -> None:
-        """Record one metrics notification from the gNB remote-control feed.
-
-        The UE table is replaced only by the notification that owns it
-        (see `is_scheduler_report`). Every other consumer sharing the
-        socket is silent on the subject, and writing that silence into
-        the table as an empty list is what made a live UE list flicker
-        to "no connected UEs" between two scheduler reports. The last
-        observed rows are kept instead, with their own timestamp, so the
-        UI can say how old they are rather than show them as current.
-        """
-
+    def update_gnb_metrics(self, payload: dict[str, Any], gnb_id: str = "gnb0") -> None:
+        """Update only this source; only scheduler reports own its UE table."""
         with self._lock:
+            feed = self._gnb_feed(gnb_id)
+            now = time.monotonic()
             received_unix_ms = time.time_ns() // 1_000_000
-            previous = self._gnb_metrics or {}
             if is_scheduler_report(payload):
-                ue_list = extract_ue_rows(payload)
-                ue_list_unix_ms = received_unix_ms
-                self._gnb_metrics_ue_seen = time.monotonic()
-                self._gnb_metrics_ue_reports += 1
-            else:
-                ue_list = previous.get("ue_list", [])
-                ue_list_unix_ms = previous.get("ue_list_unix_ms")
-            self._gnb_metrics = {
-                "received_unix_ms": received_unix_ms,
-                "ue_list": ue_list,
-                "ue_list_unix_ms": ue_list_unix_ms,
-                "raw": payload,
-            }
-            self._gnb_metrics_seen = time.monotonic()
-            self._gnb_metrics_messages += 1
-            self._gnb_metrics_state = "connected"
-            self._gnb_metrics_error = None
+                feed["ue_list"] = extract_ue_rows(payload)
+                feed["ue_list_unix_ms"] = received_unix_ms
+                feed["ue_seen"] = now
+                feed["ue_reports"] += 1
+            feed["received_unix_ms"] = received_unix_ms
+            feed["seen"] = now
+            feed["messages"] += 1
+            feed["state"] = "connected"
+            feed["error"] = None
 
-    def set_gnb_metrics_state(self, state: str, error: str | None = None) -> None:
+    def set_gnb_metrics_state(
+        self, state: str, error: str | None = None, gnb_id: str = "gnb0"
+    ) -> None:
         with self._lock:
-            self._gnb_metrics_state = state
-            self._gnb_metrics_error = error
+            feed = self._gnb_feed(gnb_id)
+            feed["state"] = state
+            feed["error"] = error
 
     def note_bad_telemetry(self) -> None:
         with self._lock:
@@ -2047,32 +2046,17 @@ class StatusStore:
             )
             iteration_history = [dict(event) for event in iteration_source]
             bad_frames = self._bad_telemetry_frames
-            gnb_metrics = self._gnb_metrics
-            # Two clocks, because they answer two questions: how long
-            # since anything arrived on the shared feed, and how long
-            # since the scheduler last spoke about UEs. Only the second
-            # tells the reader whether the table below is current.
-            gnb_ue_age = (
-                None
-                if self._gnb_metrics_ue_seen is None
-                else round(now - self._gnb_metrics_ue_seen, 3)
-            )
-            gnb_state = {
-                "state": self._gnb_metrics_state,
-                "error": self._gnb_metrics_error,
-                "messages": self._gnb_metrics_messages,
-                "age_seconds": (
-                    None
-                    if self._gnb_metrics_seen is None
-                    else round(now - self._gnb_metrics_seen, 3)
-                ),
-                "ue_reports": self._gnb_metrics_ue_reports,
-                "ue_list_age_seconds": gnb_ue_age,
-                "ue_list_stale": (
-                    gnb_ue_age is not None
-                    and gnb_ue_age > GNB_UE_REPORT_STALE_SECONDS
-                ),
+            ran_gnbs = {
+                gnb_id: self._gnb_snapshot(feed, now)
+                for gnb_id, feed in self._gnb_metrics.items()
             }
+            # Preserve the existing single-source API; multi-source clients use ran_gnbs.
+            legacy_ran = next(iter(ran_gnbs.values()), {
+                "state": "disabled", "error": None, "messages": 0,
+                "age_seconds": None, "ue_reports": 0, "ue_list_age_seconds": None,
+                "ue_list_stale": False, "received_unix_ms": None,
+                "ue_list": [], "ue_list_unix_ms": None,
+            })
         if sionna_runtime is not None:
             sionna_runtime["process_alive"] = process_is_alive(
                 sionna_runtime.get("process_id")
@@ -2106,16 +2090,8 @@ class StatusStore:
                 "iterations": iteration_history,
             },
             "delivery": delivery_status(sionna, telemetry, telemetry_ages),
-            "ran": {
-                **gnb_state,
-                "received_unix_ms": (
-                    gnb_metrics.get("received_unix_ms") if gnb_metrics else None
-                ),
-                "ue_list": gnb_metrics.get("ue_list") if gnb_metrics else [],
-                "ue_list_unix_ms": (
-                    gnb_metrics.get("ue_list_unix_ms") if gnb_metrics else None
-                ),
-            },
+            "ran": legacy_ran,
+            "ran_gnbs": ran_gnbs,
         }
 
     def realtime_snapshot(
@@ -2255,7 +2231,7 @@ def telemetry_loop(endpoint: str, store: StatusStore, stop: threading.Event) -> 
 
 
 def gnb_metrics_loop(
-    endpoint: str, store: StatusStore, stop: threading.Event
+    endpoint: str, store: StatusStore, stop: threading.Event, gnb_id: str = "gnb0"
 ) -> None:
     """Subscribe to the gNB remote-control WebSocket and store its metrics.
 
@@ -2270,10 +2246,10 @@ def gnb_metrics_loop(
     while not stop.is_set():
         client: WebSocketClient | None = None
         try:
-            store.set_gnb_metrics_state("connecting")
+            store.set_gnb_metrics_state("connecting", gnb_id=gnb_id)
             client = WebSocketClient(host, port, path, unix_path=unix_path)
             client.send_text(GNB_METRICS_SUBSCRIBE)
-            store.set_gnb_metrics_state("subscribed")
+            store.set_gnb_metrics_state("subscribed", gnb_id=gnb_id)
             backoff = 1.0
             while not stop.is_set():
                 message = client.recv_message()
@@ -2284,11 +2260,11 @@ def gnb_metrics_loop(
                 except ValueError:
                     continue
                 if isinstance(payload, dict):
-                    store.update_gnb_metrics(payload)
+                    store.update_gnb_metrics(payload, gnb_id)
         except (OSError, WebSocketError, ValueError) as exc:
-            store.set_gnb_metrics_state("disconnected", str(exc))
+            store.set_gnb_metrics_state("disconnected", str(exc), gnb_id)
         else:
-            store.set_gnb_metrics_state("disconnected", "gNB closed the feed")
+            store.set_gnb_metrics_state("disconnected", "gNB closed the feed", gnb_id)
         finally:
             if client is not None:
                 client.close()
@@ -2511,6 +2487,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--gnb-metrics-source", action="append", default=[], metavar="ID=URL",
+        help="Named gNB metrics source; repeat for multiple gNBs. Cannot combine with --gnb-metrics-endpoint.",
+    )
+    parser.add_argument(
         "--resource-interval-ms",
         type=float,
         default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
@@ -2526,11 +2506,23 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("port must be in [1, 65535]")
     if args.resource_interval_ms <= 0:
         parser.error("resource-interval-ms must be positive")
+    if args.gnb_metrics_endpoint and args.gnb_metrics_source:
+        parser.error("use either --gnb-metrics-endpoint or --gnb-metrics-source")
+    args.gnb_metrics_sources = {}
     if args.gnb_metrics_endpoint:
+        args.gnb_metrics_sources["gnb0"] = args.gnb_metrics_endpoint
+    for source in args.gnb_metrics_source:
+        gnb_id, separator, endpoint = source.partition("=")
+        if not separator or not gnb_id.strip() or not endpoint.strip():
+            parser.error("gnb-metrics-source requires ID=URL")
+        if gnb_id in args.gnb_metrics_sources:
+            parser.error(f"duplicate gNB metrics ID: {gnb_id}")
+        args.gnb_metrics_sources[gnb_id] = endpoint
+    for endpoint in args.gnb_metrics_sources.values():
         try:
-            parse_ws_endpoint(args.gnb_metrics_endpoint)
+            parse_ws_endpoint(endpoint)
         except ValueError as exc:
-            parser.error(f"gnb-metrics-endpoint: {exc}")
+            parser.error(f"gNB metrics endpoint: {exc}")
     return args
 
 
@@ -2566,18 +2558,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         name="nvidia-process-monitor",
         daemon=True,
     )
-    metrics_thread = None
-    if args.gnb_metrics_endpoint:
-        metrics_thread = threading.Thread(
-            target=gnb_metrics_loop,
-            args=(args.gnb_metrics_endpoint, store, stop),
-            name="gnb-metrics-sub",
-            daemon=True,
-        )
+    metrics_threads = []
+    for gnb_id, endpoint in args.gnb_metrics_sources.items():
+        # Register before threads run so legacy selection is deterministic.
+        store.set_gnb_metrics_state("connecting", gnb_id=gnb_id)
+        metrics_threads.append(threading.Thread(
+            target=gnb_metrics_loop, args=(endpoint, store, stop, gnb_id),
+            name=f"gnb-metrics-{gnb_id}", daemon=True,
+        ))
     telemetry_thread.start()
     status_thread.start()
     gpu_thread.start()
-    if metrics_thread is not None:
+    for metrics_thread in metrics_threads:
         metrics_thread.start()
 
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(store, index_html, scene_mesh_path(args.status_jsonl)))
@@ -2597,6 +2589,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "status_jsonl": str(args.status_jsonl),
                 "resource_interval_ms": args.resource_interval_ms,
                 "gnb_metrics_endpoint": args.gnb_metrics_endpoint or None,
+                "gnb_metrics_sources": args.gnb_metrics_sources,
                 "read_only": True,
             },
             separators=(",", ":"),
@@ -2611,8 +2604,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         telemetry_thread.join(timeout=1.0)
         status_thread.join(timeout=1.0)
         gpu_thread.join(timeout=5.0)
-        if metrics_thread is not None:
-            metrics_thread.join(timeout=1.0)
+        for metrics_thread in metrics_threads:
+            # Allow an in-flight WebSocket read/connect (5 s timeout) to close.
+            metrics_thread.join(timeout=6.0)
     return 0
 
 

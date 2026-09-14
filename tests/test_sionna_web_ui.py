@@ -50,6 +50,8 @@ from server import (  # noqa: E402
     extract_ue_rows,
     is_scheduler_report,
     parse_ws_endpoint,
+    parse_args,
+    gnb_metrics_loop,
 )
 
 
@@ -597,6 +599,103 @@ class WebUiTests(unittest.TestCase):
         self.assertTrue(ran["ue_list_stale"])
         self.assertGreater(30.0, GNB_UE_REPORT_STALE_SECONDS)
 
+    def test_named_gnb_reports_are_independent(self):
+        store = StatusStore()
+        report = {"cells": [{"pci": 1, "ue_list": [{"rnti": 17921}]}]}
+        with mock.patch("server.time.monotonic", return_value=100.0):
+            store.update_gnb_metrics(report, "gnb0")
+            store.update_gnb_metrics(report, "gnb1")
+        with mock.patch("server.time.monotonic", return_value=105.0):
+            self.assertFalse(store.snapshot()["ran_gnbs"]["gnb0"]["ue_list_stale"])
+        with mock.patch("server.time.monotonic", return_value=105.0001):
+            store.update_gnb_metrics({"ru": {"latency": 12}}, "gnb0")
+            store.update_gnb_metrics(report, "gnb1")
+            state = store.snapshot()
+        a, b = state["ran_gnbs"].values()
+        self.assertTrue(a["ue_list_stale"])
+        self.assertFalse(b["ue_list_stale"])
+        self.assertEqual(a["ue_list"], b["ue_list"])  # Same PCI/RNTI is valid on different sources.
+        self.assertEqual(a["ue_reports"], 1)
+        self.assertEqual(b["ue_reports"], 2)
+        self.assertEqual(state["ran"], a)  # Legacy view follows the first source.
+        store.set_gnb_metrics_state("disconnected", "closed", "gnb0")
+        self.assertEqual(store.snapshot()["ran_gnbs"]["gnb1"]["state"], "connected")
+        store.update_gnb_metrics({"cells": [{"pci": 1}]}, "gnb1")
+        state = store.snapshot()["ran_gnbs"]
+        self.assertEqual(state["gnb1"]["ue_list"], [])
+        self.assertEqual(len(state["gnb0"]["ue_list"]), 1)
+        store.update_gnb_metrics(report, "gnb0")
+        state = store.snapshot()["ran_gnbs"]
+        self.assertEqual(state["gnb0"]["state"], "connected")
+        self.assertIsNone(state["gnb0"]["error"])
+        self.assertFalse(state["gnb0"]["ue_list_stale"])
+        self.assertEqual(state["gnb1"]["ue_list"], [])
+
+    def test_named_gnb_configuration_and_legacy_compatibility(self):
+        self.assertEqual(parse_args([]).gnb_metrics_sources, {})
+        self.assertEqual(parse_args(["--gnb-metrics-endpoint", "ws://localhost:8001"]).gnb_metrics_sources,
+                         {"gnb0": "ws://localhost:8001"})
+        named = ["--gnb-metrics-source", "gnb0=ws://localhost:18001",
+                 "--gnb-metrics-source", "gnb1=ws+unix:///tmp/gnb1.sock"]
+        self.assertEqual(list(parse_args(named).gnb_metrics_sources), ["gnb0", "gnb1"])
+        for extra in (["--gnb-metrics-source", "gnb0=ws://localhost:18002"],
+                      ["--gnb-metrics-endpoint", "ws://localhost:8001"],
+                      ["--gnb-metrics-source", "missing-separator"],
+                      ["--gnb-metrics-source", "gnb2=invalid://localhost"],
+                      ["--gnb-metrics-source", "=ws://localhost"]):
+            with self.subTest(extra=extra), mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                parse_args(named + extra)
+        store = StatusStore()
+        self.assertEqual(store.snapshot()["ran_gnbs"], {})
+        store.set_gnb_metrics_state("connecting", gnb_id="gnb1")
+        self.assertIsNone(store.snapshot()["ran_gnbs"]["gnb1"]["ue_list_age_seconds"])
+
+    def test_named_metrics_worker_recovers_and_closes_connections(self):
+        import threading
+        store = StatusStore()
+        store.update_gnb_metrics({"ue_list": [{"rnti": 1}]}, "gnb0")
+        stop = threading.Event()
+        first, second = mock.Mock(), mock.Mock()
+        first.recv_message.side_effect = [json.dumps({"ue_list": [{"rnti": 2}]}), OSError("lost")]
+        def finish():
+            stop.set()
+            return None
+        responses = iter([json.dumps({"ue_list": [{"rnti": 3}]})])
+        def receive():
+            return next(responses) if second.recv_message.call_count == 1 else finish()
+        second.recv_message.side_effect = receive
+        with mock.patch("server.WebSocketClient", side_effect=[first, second]), mock.patch.object(stop, "wait", return_value=False):
+            worker = threading.Thread(target=gnb_metrics_loop, args=("ws://localhost:8001", store, stop, "gnb1"))
+            worker.start()
+            worker.join(timeout=2)
+        self.assertFalse(worker.is_alive())
+        first.close.assert_called_once()
+        second.close.assert_called_once()
+        feeds = store.snapshot()["ran_gnbs"]
+        self.assertEqual(feeds["gnb1"]["ue_reports"], 2)
+        self.assertEqual(feeds["gnb1"]["ue_list"][0]["rnti"], 3)
+        self.assertEqual(feeds["gnb0"]["ue_list"][0]["rnti"], 1)
+        self.assertEqual(feeds["gnb0"]["state"], "connected")
+
+    def test_metrics_worker_routes_updates_and_disconnect_to_named_source(self):
+        store = StatusStore()
+        store.update_gnb_metrics({"ue_list": [{"rnti": 1}]}, "gnb0")
+        before = store.snapshot()["ran_gnbs"]["gnb0"]
+        stop = mock.Mock()
+        stop.is_set.return_value = False
+        stop.wait.return_value = True  # Exit after the simulated connection fails.
+        with mock.patch("server.WebSocketClient") as client:
+            client.return_value.recv_message.side_effect = [
+                json.dumps({"ue_list": [{"rnti": 2}]}), OSError("test disconnect")]
+            gnb_metrics_loop("ws://localhost:8001", store, stop, "gnb1")
+            client.return_value.close.assert_called_once()
+        state = store.snapshot()["ran_gnbs"]
+        self.assertEqual(state["gnb1"]["ue_list"][0]["rnti"], 2)
+        self.assertEqual(state["gnb1"]["state"], "disconnected")
+        self.assertEqual(state["gnb0"]["messages"], before["messages"])
+        self.assertEqual(state["gnb0"]["ue_list"], before["ue_list"])
+        self.assertEqual(state["gnb0"]["state"], "connected")
+
     def test_scheduler_sentinels_are_not_rendered_as_readings(self) -> None:
         """The gNB signals "not reported" as a value, not as an omission.
 
@@ -956,8 +1055,8 @@ class WebUiTests(unittest.TestCase):
         self.assertNotIn("frequencyResponsePlot(lanes,laneColors", index)
         # RAN KPI panel, and it must be the last section on the page.
         self.assertIn("RAN KPIs by UE · gNB scheduler metrics", index)
-        self.assertIn("function renderRanCards(ran)", index)
-        self.assertIn("renderRanCards(data.ran)", index)
+        self.assertIn("function renderRanCards(ran, gnbs)", index)
+        self.assertIn("renderRanCards(data.ran, data.ran_gnbs)", index)
         for field in ("rnti", "cqi", "dl_ri", "dl_mcs", "dl_brate", "dl_nof_nok",
                       "pusch_snr_db", "pucch_snr_db", "pusch_rsrp_db", "bsr",
                       "ta_ns", "last_phr"):
