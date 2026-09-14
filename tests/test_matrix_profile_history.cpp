@@ -105,6 +105,51 @@ struct Fixture {
   ocg::TelemetrySnapshot telemetry() { return ocg::read_telemetry_snapshot(*control); }
 };
 
+std::vector<ocg::IqBuffer> delayed_output(int nt, int nr, double delay, ocg::Backend backend)
+{
+  Fixture f(nt, nr, backend);
+  for (int k = 0; k < f.matrix.lane_count; ++k)
+    f.matrix.lanes[k].taps[0].delay_samples = delay;
+  f.apply();
+  for (int i = 0; i < 132; ++i) f.run();
+  const auto resets = f.telemetry().warmup_event_seq;
+  std::vector<ocg::IqBuffer> result(nr);
+  for (int batch = 0; batch < 132; ++batch) {
+    f.clear_inputs();
+    if (batch == 0) for (int tx = 0; tx < nt; ++tx)
+      f.inputs[tx][7-tx] = {float(tx+1), float(tx)*0.25F};
+    // Alternate coefficients while echoes remain in the long history.
+    if (batch > 0) {
+      for (int k = 0; k < f.matrix.lane_count; ++k) {
+        f.matrix.lanes[k].taps[0].gain_db = batch % 2 ? -6 : 0;
+        f.matrix.lanes[k].taps[0].phase_rad = 0.2 * k;
+      }
+      f.apply();
+    }
+    const auto rows = f.run();
+    require(f.telemetry().warmup_event_seq == resets, "coefficient updates must preserve long history");
+    for (int rx = 0; rx < nr; ++rx) result[rx].insert(result[rx].end(), rows[rx].begin(), rows[rx].end());
+  }
+  double energy = 0;
+  for (const auto& row : result) for (const auto& s : row) energy += ocg::power(s);
+  require(energy > 0.1, "long delayed echo must arrive");
+  return result;
+}
+
+void check_delays(int nt, int nr)
+{
+  for (double delay : {5., 120., 120.5, 127.5, 128., 128.5, 129., 160., 1022.5, 1023.}) {
+    const auto cpu = delayed_output(nt, nr, delay, ocg::Backend::Cpu);
+#if OCUDU_GPU_CHANNEL_HAS_CUDA
+    const auto gpu = delayed_output(nt, nr, delay, ocg::Backend::Cuda);
+    for (int rx = 0; rx < nr; ++rx) for (std::size_t i = 0; i < cpu[rx].size(); ++i) {
+      require(std::hypot(cpu[rx][i].i-gpu[rx][i].i, cpu[rx][i].q-gpu[rx][i].q) < 1e-4,
+              "long-delay CUDA echo must match CPU");
+    }
+#endif
+  }
+}
+
 void check_echoes(int nt, int nr, ocg::Backend backend)
 {
   Fixture f(nt, nr, backend);
@@ -229,6 +274,7 @@ int main()
   try {
     for (const auto& [nt, nr] : {std::pair{1, 1}, {2, 1}, {1, 2}, {4, 1}, {1, 4}}) {
       check_echoes(nt, nr, ocg::Backend::Cpu);
+      check_delays(nt, nr);
 #if OCUDU_GPU_CHANNEL_HAS_CUDA
       require(ocg::cuda_runtime_probe(), "CUDA build must exercise a real GPU");
       check_echoes(nt, nr, ocg::Backend::Cuda);

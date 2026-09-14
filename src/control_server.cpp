@@ -216,7 +216,7 @@ constexpr ParamSpec kParamSpecs[] = {
   {"awgn_snr_db",                 -30.0,      120.0,       false},
   {"los_k_db",                   -30.0,       40.0,       false},
   {"cfo_hz",                  -50000.0,    50000.0,       false},
-  {"tap0_delay_samples",           0.0,     1023.0,       false},
+  {"tap0_delay_samples",           0.0,     kMaxProfileDelaySamples, false},
   {"tap0_gain_db",              -100.0,       20.0,       false},
   {"tap0_phase_rad",             -3.1415926535897932,
                                    3.1415926535897932,    false},
@@ -832,7 +832,8 @@ std::string handle_profile_swap(
     } catch (const std::exception& e) {
       return emit_rejection(ctx, std::string("profile_swap: taps[") + std::to_string(k) + "]: " + e.what());
     }
-    if (staged.taps[k].delay_samples < 0.0 || staged.taps[k].delay_samples > 1023.0) {
+    if (!std::isfinite(staged.taps[k].delay_samples) || staged.taps[k].delay_samples < 0.0 ||
+        staged.taps[k].delay_samples > kMaxProfileDelaySamples) {
       return emit_rejection(ctx, "profile_swap: taps[" + std::to_string(k) +
                                   "].delay_samples out of range [0, 1023]");
     }
@@ -1056,7 +1057,8 @@ std::string handle_matrix_profile_swap(
         tap.is_los = get_bool(tap_value.obj, "is_los", false);
         tap.los_k_db = get_number(tap_value.obj, "los_k_db", 0.0);
         tap.los_angle_rad = get_number(tap_value.obj, "los_angle_rad", 0.0);
-        if (tap.delay_samples < 0.0 || tap.delay_samples > 1023.0) {
+        if (!std::isfinite(tap.delay_samples) || tap.delay_samples < 0.0 ||
+            tap.delay_samples > kMaxProfileDelaySamples) {
           return emit_rejection(ctx, "matrix_profile_swap: tap delay_samples out of range [0, 1023]");
         }
         if (tap.gain_db < -100.0 || tap.gain_db > 20.0) {

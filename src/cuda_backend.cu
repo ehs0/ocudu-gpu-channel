@@ -698,12 +698,14 @@ public:
           // DeviceLinkState. The build helper handles the non-tdl case by
           // zeroing the struct + clearing has_tdl (but still stores src_index
           // so the pass-through branch reads the right source slot).
-          (void)build_device_link_state(model->chain.front(),
+          if (!build_device_link_state(model->chain.front(),
                                          lms.tdl_polyphase,
                                          lms.tdl_fading,
                                          static_cast<int>(lms.delay_line.size()),
                                          src_idx,
-                                         sp.host_link_states[k_idx]);
+                                         sp.host_link_states[k_idx])) {
+            throw std::runtime_error("CUDA device channel capacity exceeded for " + lane.key);
+          }
         } else {
           // Non-tdl-leading: still set src_index for the pass-through path.
           sp.host_link_states[k_idx].src_index = src_idx;

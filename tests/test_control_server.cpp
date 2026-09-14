@@ -770,6 +770,23 @@ int main()
   }
 
   // A Sionna-style matrix update is physical-link scoped: it must name the
+  // Delay boundaries are the same for scalar and matrix profiles.
+  {
+    ctl_b->nt_hint = ctl_b->nr_hint = 1;
+    for (const std::string value : {"-1", "1023.01", "1e999"}) {
+      const auto before = ctl_b->seqno.load();
+      const auto reply = server.handle_message(
+          "{\"type\":\"matrix_profile_swap\",\"link_id\":\"ue1-gnb0\",\"nt\":1,\"nr\":1,"
+          "\"lanes\":[{\"rx_port\":0,\"tx_port\":0,\"taps\":[{\"delay_samples\":" + value + "}]}]}");
+      require(contains(reply, "\"ok\":false"), "invalid matrix delay rejected");
+      require(ctl_b->seqno.load() == before, "invalid delay cannot advance sequence");
+    }
+    const auto reply = server.handle_message(R"({"type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,"force":true,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":1023}]}]})");
+    require(contains(reply, "\"ok\":true"), "maximum matrix delay accepted");
+  }
+
+  // A Sionna-style matrix update is physical-link scoped: it must name the
   // startup dimensions and cover every row-major lane exactly once.
   {
     ctl_a->nt_hint = 2;

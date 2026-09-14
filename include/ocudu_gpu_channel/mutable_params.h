@@ -19,6 +19,9 @@
 
 namespace ocg {
 
+// Runtime control and device storage share this bound.
+constexpr int kMaxProfileDelaySamples = 1023;
+
 struct MutableParams {
   // Chain-step params (consumed by the per-sample CPU chain or by the
   // superpose_kernel's apply_chain device function on CUDA).
