@@ -205,6 +205,8 @@ struct BrokerLinkControl {
   // observe a mixture of old and new channel-matrix rows.
   MatrixProfileShadow        shadow_matrix_profile;
   bool                       matrix_profile_pending = false;
+  // Immutable after prepare; CUDA host staging cannot apply dynamic matrices.
+  bool                       matrix_profile_supported = true;
 
   // M4.4 correlation-swap shadow, gated by the same seqno and slot rules as
   // the scalar and profile shadows.

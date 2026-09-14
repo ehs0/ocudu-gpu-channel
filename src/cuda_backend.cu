@@ -728,6 +728,10 @@ public:
         ++k_idx;
       }
       sp.use_device_channel = all_leading_tdl;
+      for (const auto* lane : per_edge_lane) {
+        link_slots_.at(lane->key).model.link->control.matrix_profile_supported =
+            sp.use_device_channel;
+      }
 
       // M3.4: group this node's edges by physical link, and build the mixing
       // matrix of each correlated one.

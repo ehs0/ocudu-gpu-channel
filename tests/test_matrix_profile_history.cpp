@@ -29,7 +29,7 @@ struct Fixture {
   std::vector<ocg::IqBuffer> inputs;
   std::vector<ocg::SuperpositionInput> lanes;
 
-  Fixture(int tx, int rx, ocg::Backend backend) : nt(tx), nr(rx), inputs(tx, ocg::IqBuffer(8))
+  Fixture(int tx, int rx, ocg::Backend backend, bool mixed = false) : nt(tx), nr(rx), inputs(tx, ocg::IqBuffer(8))
   {
     config.runtime.backend = backend;
     config.runtime.batch_samples_auto = false;
@@ -61,6 +61,13 @@ struct Fixture {
     config.links = {{.from = "tx", .to = "rx", .model = model.id},
                     {.from = "rx", .to = "tx", .model = model.id}};
     require(ocg::validate_config(config).empty(), "history fixture must validate");
+    if (mixed) {
+      ocg::ModelConfig bypass;
+      bypass.id = "bypass";
+      bypass.chain.push_back({.type=ocg::ModelStepType::PathLoss, .params={{"path_loss_db",100.0}}});
+      config.models.emplace(bypass.id, bypass);
+      config.links.push_back({.from="tx", .to="rx", .model=bypass.id});
+    }
     processor = ocg::create_channel_processor(config);
     for (const auto& lane : ocg::resolve_topology(config).lanes) {
       if (lane.dst_node != "rx") continue;
@@ -278,6 +285,11 @@ int main()
 #if OCUDU_GPU_CHANNEL_HAS_CUDA
       require(ocg::cuda_runtime_probe(), "CUDA build must exercise a real GPU");
       check_echoes(nt, nr, ocg::Backend::Cuda);
+      Fixture mixed(nt, nr, ocg::Backend::Cuda, true);
+      require(!mixed.control->matrix_profile_supported, "mixed CUDA receiver must reject matrix control");
+      mixed.inputs[0][0] = {1,0};
+      const auto static_output = mixed.run();
+      require(ocg::power(static_output[0][5]) > 0.9, "static mixed topology must still work");
 #endif
     }
     check_settings();

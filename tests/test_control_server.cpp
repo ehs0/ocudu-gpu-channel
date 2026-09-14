@@ -769,7 +769,25 @@ int main()
     ctl_b->fixed_mimo_declared = false;
   }
 
-  // A Sionna-style matrix update is physical-link scoped: it must name the
+  // Rejection must not stage an unsupported matrix or poison the next batch.
+  {
+    const std::string request = R"({"type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":5}]}]})";
+    const auto before = ctl_b->seqno.load();
+    const bool pending = ctl_b->matrix_profile_pending;
+    ctl_b->matrix_profile_supported = false;
+    const auto reply = server.handle_message(request);
+    require(contains(reply, "host staging"), "unsupported route rejected explicitly");
+    require(ctl_b->seqno.load() == before && ctl_b->matrix_profile_pending == pending,
+            "route rejection must not alter control state");
+    server.handle_message(R"({"type":"batch_begin","batch_id":"unsupported"})");
+    require(contains(server.handle_message(request), "host staging"), "batch rejects unsupported route");
+    server.handle_message(R"({"type":"batch_abort","batch_id":"unsupported"})");
+    require(ctl_b->seqno.load() == before, "aborted batch cannot advance sequence");
+    ctl_b->matrix_profile_supported = true;
+    require(contains(server.handle_message(request), "\"ok\":true"), "control recovers after rejected batch");
+  }
+
   // Delay boundaries are the same for scalar and matrix profiles.
   {
     ctl_b->nt_hint = ctl_b->nr_hint = 1;

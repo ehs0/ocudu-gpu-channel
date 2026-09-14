@@ -946,6 +946,11 @@ std::string handle_matrix_profile_swap(
     return emit_rejection(ctx, "unknown link_id: " + link_id);
   }
   BrokerLinkControl& ctl = *it_ctl->second;
+  if (!ctl.matrix_profile_supported) {
+    return emit_rejection(ctx,
+        "matrix_profile_swap: dynamic matrices require the CUDA device-channel route; "
+        "this link uses unsupported host staging");
+  }
   if (ctl.fixed_mimo_declared) {
     return emit_rejection(ctx,
         "matrix_profile_swap: link " + link_id +
