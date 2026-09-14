@@ -46,9 +46,10 @@ case "${case_name}" in
   # Same two-cell topology, on the OpenStreetMap SUTD campus instead of the
   # built-in street canyon.
   multi-gnb-sutd)
-    topology="${repo_root}/examples/topology.multi-gnb.cuda.yaml"
+    topology="${repo_root}/examples/topology.sionna-multi-gnb.cuda.yaml"
     scenario="${repo_root}/examples/sionna/multi-gnb-sutd.json"
-    source_ports=(3000 3002 3101 3103); sink_ports=(3001 3003 3100 3102) ;;
+    source_ports=(3000 3002 3004 3006 3010 3012 3014 3016 3101 3103)
+    sink_ports=(3001 3003 3005 3007 3011 3013 3015 3017 3100 3102) ;;
   *) echo "unknown case: ${case_name}" >&2; exit 2 ;;
 esac
 
@@ -59,6 +60,13 @@ for executable in ocudu-gpu-channel ocudu-zmq-source ocudu-zmq-sink; do
   }
 done
 [[ -x "${python_bin}" ]] || { echo "missing Sionna Python: ${python_bin}" >&2; exit 2; }
+
+if [[ "${case_name}" == "multi-gnb-sutd" ]]; then
+  "${python_bin}" "${script_dir}/check_demo_topology.py" \
+    --topology "${topology}" --scenario "${scenario}" \
+    --sources "$(IFS=,; echo "${source_ports[*]}")" \
+    --sinks "$(IFS=,; echo "${sink_ports[*]}")"
+fi
 
 declare -a child_pids
 cleanup()
