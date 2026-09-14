@@ -18,7 +18,7 @@ ready_seconds="120"
 
 usage()
 {
-  echo "usage: $0 --scenario FILE --status-jsonl FILE [--python FILE] [--port N]" >&2
+  echo "usage: $0 --scenario FILE --status-jsonl FILE [--python FILE] [--port N] [-- BRIDGE_ARGS...]" >&2
   exit 2
 }
 
@@ -34,6 +34,7 @@ while [[ "$#" -gt 0 ]]; do
     --duration) duration="${2:-}"; shift 2 ;;
     --update-hz) update_hz="${2:-}"; shift 2 ;;
     --ready-seconds) ready_seconds="${2:-}"; shift 2 ;;
+    --) shift; break ;;
     *) usage ;;
   esac
 done
@@ -69,7 +70,7 @@ trap 'exit 143' TERM
   --scenario-config "${scenario}" \
   --control-endpoint "${control_endpoint}" \
   --duration "${duration}" --update-hz "${update_hz}" \
-  --status-jsonl "${status_jsonl}" &
+  --status-jsonl "${status_jsonl}" "$@" &
 bridge_pid="$!"
 
 "${python_bin}" "${repo_root}/scripts/web_ui/server.py" \

@@ -105,6 +105,9 @@ else
   echo "running local 2-gNB/2-UE smoke from ${REMOTE_PROJECT_ROOT}"
 fi
 
+# Encode before ssh so whitespace and shell metacharacters remain data.
+sionna_extra_args_b64="$(printf '%s' "${OCUDU_MGNB_SIONNA_EXTRA_ARGS:-}" | base64 | tr -d '\n')"
+
 remote_sh bash -s -- \
   "${REMOTE_WORKSPACE}" \
   "${REMOTE_PROJECT_ROOT}" \
@@ -124,11 +127,12 @@ remote_sh bash -s -- \
   "${sionna_scenario}" \
   "${cuda_compiler_arg}" \
   "${execution_mode}" \
-  "${fivegc_host_port}" \
+  "${fivegc_host_port:-__unset__}" \
   "${hold_seconds}" \
   "${ue_inactivity_seconds:-__unset__}" \
   "${ue_keepalive_seconds}" \
-  "${topology_name:-__default__}" <<'REMOTE'
+  "${topology_name:-__default__}" \
+  "${sionna_extra_args_b64:-__none__}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -150,10 +154,18 @@ sionna_scenario="${16}"
 cuda_compiler="${17}"
 execution_mode="${18}"
 fivegc_host_port="${19}"
+[[ "${fivegc_host_port}" == "__unset__" ]] && fivegc_host_port=""
 hold_seconds="${20}"
 ue_inactivity_seconds="${21}"
 ue_keepalive_seconds="${22}"
 topology_name="${23}"
+sionna_bridge_args=()
+if [[ "${24:-__none__}" != "__none__" ]]; then
+  sionna_extra_args="$(printf '%s' "${24}" | base64 --decode)"
+  # Legacy EXTRA_ARGS uses whitespace-separated words, without shell evaluation
+  # or glob expansion. Direct wrapper callers can pass quoted argv after --.
+  IFS=$' \t\n' read -r -a sionna_bridge_args <<< "${sionna_extra_args//$'\n'/ }"
+fi
 [[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
   exit 2
@@ -782,6 +794,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --port "${sionna_web_port}" \
     --ready-seconds "${sionna_ready_seconds}" \
     --status-jsonl "${log_dir}/sionna-status.jsonl" \
+    -- "${sionna_bridge_args[@]}" \
     >"${log_dir}/sionna-bridge.log" 2>&1 &
   sionna_pid="$!"
 
