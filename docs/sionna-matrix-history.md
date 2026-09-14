@@ -1,5 +1,7 @@
 # Matrix channel history preservation
 
+This is a dated validation record. See the [current integration guide](sionna-integration.md) for subsequent channel, dashboard and UE recovery changes; the results below remain tied to their recorded revisions.
+
 Matrix updates retain recent IQ samples when dimensions, lane count, per-lane
 tap counts, ordered delays, LOS fields, fading settings, and `force` are exactly
 unchanged. Only tap gain and phase are excluded from the comparison. Resending

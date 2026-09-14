@@ -1,15 +1,16 @@
 # ocudu-gpu-channel
 
-Leading Contributor: **Zhouyou Gu**, SUTD  
-Contributors: **MinwooEun** — rank-1 MISO/SIMO ([details](#contributors))
+Project lead: **[Zhouyou Gu](https://github.com/zhouyou-gu)**, SUTD<br>
+Contributors: **[Minwoo Eun](https://github.com/MinwooEun)** · **[Hyunsoo Lee](https://github.com/ehs0)** ([contributions](#contributors))
 
 **GPU-accelerated, ZMQ-native channel emulator for live srsRAN and OCUDU stacks.**
 Drops between two ZMQ radios, routes `cf32` IQ across multi-gNB / multi-UE
-topologies, and applies CUDA channel models inside the 5G&nbsp;NR slot
-deadline (1&nbsp;ms at 15&nbsp;kHz SCS, 500&nbsp;µs at 30&nbsp;kHz SCS — the
-bench default). Radios may have several antenna ports: their ports group into
+topologies, and applies CUDA channel models with a 5G&nbsp;NR slot-time budget
+(1&nbsp;ms at 15&nbsp;kHz SCS, 500&nbsp;µs at 30&nbsp;kHz SCS — the bench
+default). Deadline compliance depends on the workload and measured run.
+Radios may have several antenna ports: their ports group into
 one radio node sharing one sample epoch, and the link between two such radios
-carries an `Nt×Nr` matrix channel.
+carries an `Nr×Nt` matrix channel (receive rows, transmit columns).
 
 This is the project landing page. For architecture, broker internals, GPU
 kernel design, profiling, and performance numbers, see the
@@ -19,7 +20,16 @@ kernel design, profiling, and performance numbers, see the
 
 ## Status
 
-What's proven end-to-end on an RTX 5090 against the OCUDU + srsUE stack.
+**Integration status — 14 September 2026.** Sionna RT now supplies live
+matrix profiles to the CUDA broker, with a moving SUTD scene and one dashboard
+showing both gNBs. Channel/control regressions and dashboard recovery pass.
+The user-fork UE fixes demonstrate automatic fresh attachment, but continuous
+two-UE moving traffic and strict zero-miss real-time qualification still fail.
+These results apply to `integration/sionna-history-fix`, not a published `main`
+release. See the [current integration guide](docs/sionna-integration.md).
+
+Earlier live-radio milestones below describe their tested configurations;
+they do not establish coverage or deadline compliance for the moving scenario.
 
 **Two naming axes, kept distinct so they don't read as competing.**
 *Milestone A/B/C/D* are the live-radio proof points — what works end-to-end,
@@ -38,7 +48,7 @@ the **unit tests** (`ctest`) and the **synthetic GPU validation**
   random-access attempt. Multi-UE attach needs a recent srsUE: on
   `release_23_11` a UE that loses RACH contention reports a successful attach
   and stops retrying, so only one of four ever gets a session. The smokes build
-  srsUE from the latest
+  srsUE by default from
   [`zhouyou-gu/srsRAN_4G`](https://github.com/zhouyou-gu/srsRAN_4G) `master`,
   which fixes that, plus a `SRSUE_PRACH_PREAMBLE_INDEX` override that pins each
   UE to its own preamble — not required for attach, but it avoids the contention
@@ -47,7 +57,7 @@ the **unit tests** (`ctest`) and the **synthetic GPU validation**
   (one per cell) on a 4-node / 8-edge inter-cell-interference topology; each
   gNB's RX is the GPU superposition of its serving UE plus the other cell's
   interferer; both UEs attach to their own cell.
-- **Milestone D — rank-1 MISO/SIMO on a multi-port cell** (MinwooEun). A real
+- **Milestone D — rank-1 MISO/SIMO on a multi-port cell** (Minwoo Eun). A real
   OCUDU gNB keeping 2 or 4 antenna ports, against srsUEs that each keep one
   (`nof_antennas = 1`), through the CUDA broker: per user the downlink is a
   `1×Nt` row and the uplink an `Nt×1` column, so every claim stays rank-1
@@ -70,7 +80,7 @@ the **unit tests** (`ctest`) and the **synthetic GPU validation**
 
 - **Multi-port radios and the matrix channel.** Ports group under
   `radio_nodes:` (writing order is the matrix index) and a link between two
-  radios carries an `Nt×Nr` matrix: deterministic (`fixed_mimo`), stochastic
+  radios carries an `Nr×Nt` matrix: deterministic (`fixed_mimo`), stochastic
   with independent lanes, or spatially correlated with a coherent LOS
   component (`spatial_correlation`, `los_matrix`). Live gate: a real
   2-antenna OCUDU gNB over four ZMQ endpoints, 20 s, ~1174 four-endpoint
@@ -86,15 +96,22 @@ the **unit tests** (`ctest`) and the **synthetic GPU validation**
 **Supported chain steps today:** `tdl` (tapped delay line — covers
 scalar gain, integer or fractional sample delay, full multi-tap multipath,
 and per-tap Doppler-shaped fading with optional Rician LOS specular via the
-same step), `path_loss`, `phase`, `cfo`, `awgn` — CUDA and CPU, bit-exact at
-1e-3 tolerance. The 3GPP TR 38.901 §7.7.2 TDL-A through TDL-E profiles ship
+same step), `path_loss`, `phase`, `cfo`, `awgn` — with CPU/CUDA numerical
+comparisons at the tolerances declared by each test (including `1e-3` fading
+checks and `1e-4` matrix-history checks). This is not a bitwise-equality claim.
+The 3GPP TR 38.901 §7.7.2 TDL-A through TDL-E profiles ship
 as [`examples/topology.tdl-{a..e}.cuda.yaml`](examples/) and all run on the
 device kernel by default.
 
-**Next:** full CDL (TR 38.901 §7.7.1) with per-cluster angles, polarisation,
-and antenna array response, once a beamforming use case surfaces — the matrix
-channel that ships today is declared or drawn, not synthesised from an array
-geometry. See
+**Live Sionna matrices:** the bridge derives coefficients from scene geometry
+and antenna arrays. Identical and gain/phase-only matrix updates retain recent
+signal samples; delay/layout changes reset history and begin warmup. Control
+delays are limited to **1023 samples**, and dynamic matrices on CUDA require
+the device-channel route. This snapshot update mechanism is not buffered
+channel streaming or seamless geometry-change support.
+
+**Planned:** full statistical CDL (TR 38.901 §7.7.1), separate from the live
+Sionna RT integration. See
 [technical reference §26](docs/index.html#scope) for the
 architecture and decisions; the Phase 2 device pipeline plan + measured
 record lives in
@@ -106,7 +123,7 @@ Adjacent tools cover offline link-level simulation, offline channel-impulse-resp
 
 | Tool | Category | Stack | Channel models | In-loop with live radio stacks? |
 |---|---|---|---|---|
-| **ocudu-gpu-channel** | Real-time GPU emulator | C++ / CUDA + ZMQ | Multi-tap delay, path-loss, phase, CFO, AWGN, Jakes fading + Rician LOS (TR 38.901 §7.7.2 TDL-A..E) — channel runs on the GPU by default | **Yes** — OCUDU / srsRAN via ZMQ on a 1 ms slot budget |
+| **ocudu-gpu-channel** | GPU IQ channel emulator | C++ / CUDA + ZMQ; Python Sionna bridge | TDL-A..E, path-loss, phase, CFO, AWGN, Jakes/Rician fading, and live Sionna matrix profiles | **Yes** — OCUDU / srsRAN via ZMQ; deadline qualification is workload-specific |
 | [ACHEM](https://arxiv.org/abs/2604.04742) (arXiv 2026) | Software (CPU) channel emulator / digital twin | Software, USRP-oriented | I/Q-level multipath, mobility, antenna patterns | Yes — validated with GNU Radio, srsRAN 4G/5G, OAI; CPU, scenario replay (no GPU/FPGA) |
 | [Colosseum / MCHEM](https://arxiv.org/abs/2110.10617) (MobiCom 2021) | FPGA hardware-in-the-loop emulator | 256 USRP SDRs + FPGA | FIR-tap fading / multipath, up to 256×256 channels | Yes — hardware-in-the-loop, full stacks; shared testbed, not a drop-in box |
 | [OpenAirLink](https://arxiv.org/abs/2404.09660) (arXiv 2024) | SDR/FPGA channel emulator | SDR + FPGA | Path-loss + propagation delay via FIR | Reproducible SDR-to-SDR emulation; FPGA-bound |
@@ -114,7 +131,7 @@ Adjacent tools cover offline link-level simulation, offline channel-impulse-resp
 | [GNU Radio](https://www.gnuradio.org/) | SDR flowgraph toolkit | C++ / Python | Composable `channels.*` blocks (DIY) | Yes — bring your own SDR or virtual sink |
 | [Keysight PROPSIM](https://www.keysight.com/us/en/products/channel-emulators/propsim-platforms.html) / [Spirent Vertex](https://www.spirent.com/products/vertex-channel-emulator) | Commercial RF hardware emulator | Proprietary firmware | 3GPP CDL/TDL, MIMO, full fading at RF | Yes — RF↔RF, commercial pricing |
 | [5G-LENA](https://5g-lena.cttc.es/) (ns-3) / [Simu5G](https://github.com/Unipisa/Simu5G) (OMNeT++) | System-level simulator | C++ / Python | TR 38.901 statistical, packet-level | Limited — real-time emulation modes exist but not slot-paced IQ |
-| [Sionna](https://github.com/NVlabs/sionna) (NVIDIA) | Offline GPU link-level + ray tracing | Python + TensorFlow / Keras | 3GPP CDL/TDL, MIMO / OFDM, differentiable ray tracing (Sionna RT) | No — research / ML training in notebooks |
+| [Sionna](https://github.com/NVlabs/sionna) (NVIDIA) | Link-level simulation and ray tracing | Python; Sionna RT | Channel impulse responses from scene geometry and antenna arrays | This project’s bridge connects Sionna RT outputs to the live IQ channel |
 | [MATLAB 5G Toolbox](https://www.mathworks.com/products/5g.html) | Offline link-level simulator | MATLAB | 3GPP CDL/TDL/NTN/HST, MIMO, beamforming | No — commercial license |
 | [QuaDRiGa](https://quadriga-channel-model.de/) (Fraunhofer HHI) | Offline channel-impulse-response generator | MATLAB / Octave | 3GPP CDL/TDL, dual-mobility, satellite / NTN, industrial | No |
 | [Remcom Wireless InSite](https://www.remcom.com/wireless-insite-em-propagation-software) | Offline 3D ray tracer | Proprietary | Site-specific CIR from 3D scene geometry, mmWave | No — commercial license |
@@ -133,6 +150,8 @@ Note: srsRAN's own ZMQ driver is a raw IQ pipe with no channel impairments — o
 - **CUDA backend** — fused `superpose_kernel` that walks every incoming edge of
   a node and accumulates per-edge channel shaping into one RX signal per slot.
 - **CPU reference backend** — same step set, used by tests and local development.
+- **Sionna RT bridge and Web UI** — live matrix updates, moving scene and ray
+  views, channel/resource plots, and independent scheduler metrics for each gNB.
 - Example topologies in [`examples/`](examples/): single-edge MVP, 3-node
   interference + crosstalk graph, 2-cell / 4-node multi-gNB, multi-UE OCUDU
   Docker, 16-edge stress, and TR 38.901 §7.7.2 TDL-A through TDL-E profiles.
@@ -248,7 +267,7 @@ continuity error):
 
 The project is validated in **three test layers**: **unit tests** (`ctest`,
 hardware-free — parity, control plane, broker), **synthetic GPU validation**
-(`gpu-test-sequence.sh`, 7 steps on the RTX 5090 — no live radio), and
+(`gpu-test-sequence.sh`, 9 stages on the RTX 5090 — no live radio), and
 **live-radio integration** (`ocudu-*-smoke.sh` — the Milestone A/B/C/D attaches
 through a real srsRAN gNB + srsUE). The remote GPU path is user-space only — no
 root needed:
@@ -257,16 +276,29 @@ root needed:
 ./scripts/remote/bootstrap-user-tools.sh        # CMake + CUDA 12.8.1 + ZeroMQ under ~/ocudu-gpu-channel-workspace/tools/
 ./scripts/remote/probe.sh                       # sanity-check the toolchain
 ./scripts/remote/build-and-bench-cuda-mvp.sh    # rsync, build, run the CUDA MVP benchmark
-./scripts/remote/gpu-test-sequence.sh           # full 7-step validation: build + ctest + clean/AWGN relays + interference graph + 2-cell multi-gNB + TDL-A profile
+./scripts/remote/gpu-test-sequence.sh           # 9 stages: build, CTest, clean/AWGN, interference, multi-gNB, TDL-A, correlated MIMO, live correlation control
 ```
 
 `gpu-test-sequence.sh` is the locked-in GPU validation run; it must pass before
 any change to the broker or CUDA backend ships.
 
+The integration's recorded RTX 5090 checks include CTest **12/12**, the
+nine-stage GPU suite, and **86 Python tests** plus both dashboard frontend
+regressions. The separately tested UE recovery source passes **18 focused
+tests**; an existing full NR RRC fixture failure remains documented. These
+are results from their respective revisions, not a new combined test run.
+
 ## OCUDU + srsRAN interop
 
 Full OCUDU Docker gNB ↔ broker ↔ srsUE runbook with attach + ping verification:
 [**docs/ocudu-interop.md**](docs/ocudu-interop.md).
+
+The default UE repository is
+[`zhouyou-gu/srsRAN_4G`](https://github.com/zhouyou-gu/srsRAN_4G). The latest
+recovery validation used commit `daa167ae3443b046ce560df646c7dc5f17e5c1dd`
+on `fix/sa-ra-recovery-5090`, version `25.10.0`. These local fixes are not
+claimed to be on remote `master`. The [integration guide](docs/sionna-integration.md#ue-recovery-validation)
+records the exact build, real two-gNB/two-UE results and remaining limits.
 
 End-to-end-validated topologies:
 
@@ -280,6 +312,9 @@ GPU runs, with all broker data-integrity counters at zero.
 
 ## Deeper docs
 
+- [Current Sionna integration](docs/sionna-integration.md) — contributor
+  provenance, channel updates, one multi-gNB dashboard, UE recovery and
+  qualification limits.
 - [Technical reference](docs/index.html) — architecture,
   topology and YAML model, broker per-slot loop, signal alignment, GPU compute,
   signal memory, multi-stream concurrency, profiling, performance, planned
@@ -293,35 +328,18 @@ GPU runs, with all broker data-integrity counters at zero.
 
 ## Contributors
 
-**[Zhouyou Gu](https://github.com/zhouyou-gu)** — lead. Created the project and
-wrote the GPU channel emulator: the lock-step broker and its ZMQ transport, the
-CPU and CUDA backends, the topology/YAML model and validator, the TDL +
-Jakes-Doppler fading and fractional-delay paths, the runtime control plane, the
-unit tests and benchmarks, the Docker packaging, and the OCUDU + srsRAN interop
-gates (single-UE attach, multi-UE on one cell, multi-gNB with inter-cell
-interference). Also the multi-UE attach fix — root-causing it to srsUE's fixed
-PRACH preamble index and patching
-[srsRAN_4G](https://github.com/zhouyou-gu/srsRAN_4G) — and the four-UE 4T4R
-rank-1 gate.
+This table is the project's authoritative contributor list. Original commits
+and authorship are retained; contribution areas can overlap.
 
-**[MinwooEun](https://github.com/MinwooEun)** — rank-1 MISO/SIMO workstream:
+| Contributor | Role | Contribution areas |
+|---|---|---|
+| **[Zhouyou Gu](https://github.com/zhouyou-gu)** · `@zhouyou-gu` | Project lead | Core broker and CPU/CUDA emulator, topology and runtime control, OCUDU/srsRAN interop, integration fixes and RTX validation, and multi-UE attachment/recovery work in the user-owned srsRAN fork. |
+| **[Minwoo Eun](https://github.com/MinwooEun)** · `@MinwooEun` | Rank-1 MISO/SIMO contributor | Multi-port radios and physical-link state, fixed and correlated matrix channels, live 2×1/1×2 and 4×1/1×4 gates, wire-capture scoring and transport validation, and precoding/UE feasibility studies. |
+| **[Hyunsoo Lee](https://github.com/ehs0)** · `@ehs0` | Sionna integration contributor | Sionna RT bridge and live scalar/matrix updates, native integration, moving SUTD scene and antenna arrays, scene/ray/channel visualization, timing/resource views, and the initial gNB scheduler KPI panel. |
 
-- Multi-port radio nodes and the physical-link state model
-  (`include/ocudu_gpu_channel/physical_link.h`) — one clock and one fading
-  realisation per link, so a link's lanes cannot drift out of the same `H(t)`.
-- `fixed_mimo` matrix links, expanded into Nt × Nr scalar lanes summed per
-  receive row, plus spatial correlation and coherent LOS
-  (`src/correlation.cpp`).
-- Live rank-1 gates: 2×1 DL MISO + 1×2 UL SIMO, extended to 4×1 / 1×4, through
-  the CUDA broker to a real OCUDU gNB and srsUE.
-- `y = Hx` wire-capture scoring (`scripts/native/verify-mimo-matrix-capture.py`)
-  and the two-port transport peer (`apps/ocudu_mimo_transport_peer.cpp`), so the
-  matrix claim is measured per run rather than asserted.
-- Root-caused the UL-4R flakiness to over-aggressive UL link adaptation with
-  CSI-RS disabled, and the two-port freeze to a self-deadlock in OCUDU's ZMQ
-  radio.
-- The oracle-precoding study (live MRT gain +0.54 dB, matching prediction to
-  0.01 dB) and the OAI nrUE integration scouting.
+The [integration guide](docs/sionna-integration.md#contribution-provenance)
+records the normal merge and distinguishes the original Sionna work from
+subsequent channel, dashboard and UE recovery fixes.
 
 ## License
 

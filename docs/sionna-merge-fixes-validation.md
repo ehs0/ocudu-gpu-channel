@@ -1,5 +1,7 @@
 # Sionna integration fixes and RTX 5090 validation
 
+This is a dated validation record. See the [current integration guide](sionna-integration.md) for subsequent channel, dashboard and UE recovery changes; the results below remain tied to their recorded revisions.
+
 The four bounded fixes pass regression checks. The stationary two-gNB/two-UE case passes connectivity, but moving SUTD connectivity and strict real-time qualification fail. Keep the changes on the integration branch; this is not an all-clear for main.
 
 ## Scope and history

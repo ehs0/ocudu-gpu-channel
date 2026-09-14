@@ -1,5 +1,7 @@
 # gNB metrics recovery validation
 
+This is a dated validation record. See the [current integration guide](sionna-integration.md) for subsequent channel, dashboard and UE recovery changes; the results below remain tied to their recorded revisions.
+
 The dashboard fix is commit `d6637f7` on `integration/sionna-history-fix`, following reviewed commit `5c6cafd`. Contributor tip `066a702` remains an ancestor. Changes are confined to metrics transport, RAN status rendering and tests. OCUDU, srsUE, Sionna, CUDA and tracked launcher scripts are unchanged by this fix.
 
 ## Confirmed defects and correction

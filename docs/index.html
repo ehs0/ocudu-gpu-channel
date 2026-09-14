@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ocudu-gpu-channel — Technical Reference</title>
 <meta name="author" content="Zhouyou Gu, SUTD; MinwooEun">
-<meta name="description" content="GPU-accelerated, ZMQ-native channel emulator for live srsRAN and OCUDU stacks. Per-edge multi-tap fading + Jakes Doppler + Rician LOS on CUDA, inside the 5G NR slot deadline.">
+<meta name="description" content="GPU-accelerated, ZMQ-native channel emulator for live srsRAN and OCUDU stacks. TDL fading, live Sionna matrices and multi-gNB telemetry, with workload-specific radio and deadline validation.">
 <meta property="og:title" content="ocudu-gpu-channel — Technical Reference">
 <meta property="og:description" content="GPU-accelerated, ZMQ-native channel emulator for live srsRAN and OCUDU stacks. TR 38.901 §7.7.2 TDL profiles on the GPU at slot cadence.">
 <meta property="og:type" content="article">
@@ -321,10 +321,11 @@
   <div class="hero">
     <h1>ocudu-gpu-channel</h1>
     <p class="hero-byline">
-      <span>Leading Contributor: <b>Zhouyou Gu</b>, SUTD</span>
+      <span>Project lead: <a href="https://github.com/zhouyou-gu"><b>Zhouyou Gu</b></a>, SUTD</span>
       <br>
-      <span>Contributors: <b>MinwooEun</b> &mdash; rank-1 MISO/SIMO
-      (<a href="https://github.com/zhouyou-gu/ocudu-gpu-channel#contributors">details</a>)</span>
+      <span>Contributors: <a href="https://github.com/MinwooEun"><b>Minwoo Eun</b></a>
+      &middot; <a href="https://github.com/ehs0"><b>Hyunsoo Lee</b></a>
+      (<a href="../README.md#contributors">contributions</a>)</span>
       <br>
       <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel">github.com/zhouyou-gu/ocudu-gpu-channel</a>
     </p>
@@ -332,8 +333,8 @@
     <p class="hero-tagline">A real-time, in-the-loop wireless channel emulator
     that sits between live SDR stacks (srsRAN gNB/UE, OCUDU runtime) over ZMQ
     and applies CUDA channel models &mdash; TR 38.901 &sect;7.7.2 TDL
-    profiles, Jakes Doppler, Rician LOS &mdash; inside the
-    5G&nbsp;NR slot deadline.</p>
+    profiles, Jakes Doppler, Rician LOS and live Sionna matrices &mdash; with a
+    5G&nbsp;NR slot-time budget. Deadline compliance is measured per workload.</p>
     <p class="hero-meta">
       <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel#readme">README &amp; quick-start</a>
       <span class="sep">&middot;</span>
@@ -346,6 +347,14 @@
       <a href="#scope">Scope &amp; planned work</a>
     </p>
   </div>
+
+  <p class="key"><b>Integration status &mdash; 14 September 2026.</b>
+  Live Sionna matrices and the unified multi-gNB dashboard are implemented on
+  <code>integration/sionna-history-fix</code>. Bounded channel/dashboard regressions
+  pass; UE recovery is demonstrated on the separately tested user fork.
+  Continuous two-UE moving traffic and strict zero-miss real-time qualification
+  remain failed. See the <a href="sionna-integration.md">current integration guide</a>
+  for contribution provenance, exact revisions and results. This is not a main release.</p>
 
   <div class="numrow hero-stats">
     <div class="panel">
@@ -362,7 +371,7 @@
     </div>
     <div class="panel">
       <div class="num">1e&#8209;3</div>
-      <div>CPU&harr;CUDA bit-exact parity tolerance<br>(ctest gate)</div>
+      <div>CPU&harr;CUDA numerical tolerance<br>(ctest gate)</div>
     </div>
   </div>
 
@@ -380,8 +389,9 @@
 
   <h2>1. Overview</h2>
   <p>ocudu-gpu-channel is a real-time, in-the-loop channel emulator that sits between live
-  SDR stacks (OCUDU runtime, srsRAN gNB/UE) over ZMQ and applies CUDA channel models inside
-  the 5G&nbsp;NR slot deadline. This doc is the implementation reference — it assumes you
+  SDR stacks (OCUDU runtime, srsRAN gNB/UE) over ZMQ and applies CUDA channel models with
+  a 5G&nbsp;NR slot-time budget. Deadline compliance requires measured qualification.
+  This doc is the implementation reference — it assumes you
   have already read the <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel#readme"><code>README</code></a> for positioning and
   quick-start.</p>
   <p><b>Single-antenna radios and multi-port radios.</b> Parts&nbsp;I&ndash;VI describe the
@@ -741,7 +751,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
 
   <h2 id="channels">5. Channel models in YAML</h2>
   <p>Every model is a chain of named steps. The CPU and CUDA backends accept the same step
-  set and produce bit-exact output for any single edge (validated by
+  set and are compared numerically at the declared test tolerances (validated by
   <code>tests/test_processing.cpp</code>). YAML keys per step type:</p>
   <table>
     <tr><th>Step type</th><th>YAML keys</th><th>Effect</th></tr>
@@ -822,7 +832,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   configuration knobs but consequences, and how the TR 38.901 §7.7.2 TDL
   profiles map onto the YAML schema. All implementation details follow
   the same wireless-modelling textbook (Bello / Jakes / Zheng &amp; Xiao);
-  the math here is the bit-exact reference both backends compute against.</p>
+  the math here is the numerical reference used by both backends.</p>
   <p class="key"><b>Scope is TDL, not full CDL.</b> The Clustered Delay
   Line (CDL) models in TR 38.901 §7.7.1 add per-cluster angles,
   polarisation, sub-ray geometry, and antenna array response on top of
@@ -1939,7 +1949,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
 
   <p class="key"><b>Per-edge invariant.</b> Multipath and Doppler are applied independently per edge, with each edge's own delay-line ring and Jakes sub-ray state, before aggregation. The channel <span class="mono">h<sub>(src→dst)</sub>(t, τ)</span> is a property of the edge, not the receiver — summing raw IQ before applying the channel would collapse the per-edge statistics and is mathematically wrong.</p>
 
-  <p>The default path is the <b>device kernel</b> <code>apply_channel_kernel</code> in <code>src/device_channel.cu</code> (Phase 2 D2b + D3 + D4, landed): per-edge state lives in <code>DeviceLinkState</code> in GPU global memory, the per-tap Jakes coarse grid is materialised cooperatively in block shared memory at each slot's start, and each output sample is computed by one CUDA thread reading <code>device_source_iq[s->src_index · count + read_idx]</code> + interpolating <span class="mono">g<sub>k</sub>(t<sub>idx</sub>)</span>. The <b>src_index indirection (D4)</b> means edges sharing a source share a single input slot — the host packs each unique source once. H2D bandwidth therefore scales with source count rather than edge count <i>when multiple edges share a source</i>; for current production topologies (one edge per (from, to) pair) the byte count is unchanged. See <a href="#perf-pcie">§20.6</a> for the empirical confirmation. The <b>host fallback</b> is <code>stage_link()</code> calling <code>apply_tdl_step{_fading}</code> in <code>delay.h</code> — used when the per-node dispatch gate (<code>CudaSuperposeState::use_device_channel</code>, set in <code>prepare()</code>) doesn't fire, i.e. when an incoming edge has no leading <code>tdl</code> step. Both paths share one numerical specification in <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/main/include/ocudu_gpu_channel/delay.h"><code>delay.h</code></a>; the CPU↔CUDA fading bit-exact test asserts agreement at <span class="mono">1e-3</span> tolerance. The math itself lives in §6 (Diagrams P / Q / R).</p>
+  <p>The default path is the <b>device kernel</b> <code>apply_channel_kernel</code> in <code>src/device_channel.cu</code> (Phase 2 D2b + D3 + D4, landed): per-edge state lives in <code>DeviceLinkState</code> in GPU global memory, the per-tap Jakes coarse grid is materialised cooperatively in block shared memory at each slot's start, and each output sample is computed by one CUDA thread reading <code>device_source_iq[s->src_index · count + read_idx]</code> + interpolating <span class="mono">g<sub>k</sub>(t<sub>idx</sub>)</span>. The <b>src_index indirection (D4)</b> means edges sharing a source share a single input slot — the host packs each unique source once. H2D bandwidth therefore scales with source count rather than edge count <i>when multiple edges share a source</i>; for current production topologies (one edge per (from, to) pair) the byte count is unchanged. See <a href="#perf-pcie">§20.6</a> for the empirical confirmation. The <b>host fallback</b> is <code>stage_link()</code> calling <code>apply_tdl_step{_fading}</code> in <code>delay.h</code> — used when the per-node dispatch gate (<code>CudaSuperposeState::use_device_channel</code>, set in <code>prepare()</code>) doesn't fire, i.e. when an incoming edge has no leading <code>tdl</code> step. Both paths share one numerical specification in <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/main/include/ocudu_gpu_channel/delay.h"><code>delay.h</code></a>; the CPU↔CUDA fading comparison asserts agreement at <span class="mono">1e-3</span> tolerance. The math itself lives in §6 (Diagrams P / Q / R).</p>
 
   <h3 id="pipeline">11.0 Pipeline op order — what each stream actually launches</h3>
   <p>Before the per-component deep dives (Diagram S below, then dispatch
@@ -2071,7 +2081,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
     <text x="750" y="254" fill="#5db1ff" text-anchor="middle" font-size="10">H2D (already-shaped IQ)</text>
     <text x="750" y="268" fill="#9aa7bd" text-anchor="middle" font-size="9">host_staged → device_staged</text>
 
-    <text x="750" y="312" fill="#9aa7bd" text-anchor="middle" font-size="9">CPU backend uses the same delay.h helpers → bit-exact at 1e-3 (§14)</text>
+    <text x="750" y="312" fill="#9aa7bd" text-anchor="middle" font-size="9">CPU uses the same delay.h helpers → compared at 1e-3 (§14)</text>
 
     <!-- Converge -->
     <line x1="250" y1="328" x2="500" y2="370" stroke="#9aa7bd" stroke-width="1.4" marker-end="url(#ars)"/>
@@ -2303,7 +2313,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   spans 4 past samples (i = 4..7) and 4 future / current samples (i = 0..3)
   around the center. Out-of-range reads zero-pad. CPU and CUDA both call
   the same coefficient helper, apply the same indexing, and zero-pad the
-  same way — this is the surface the bit-exact parity test guards.</figcaption>
+  same way — this is the surface the numerical comparison guards.</figcaption>
   </figure>
 
   <!-- ============ DIAGRAM Z: cross-slot delay-line ring continuity ============ -->
@@ -2895,27 +2905,21 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   acquire-loaded by the reader; the snap on a steady-state slot is one
   acquire-load + early-return.</p>
 
-  <p>When the snap detects a change, the data plane refreshes whatever
-  derived state the chain step needs. Scalar params (<code>path_loss_db</code>,
-  <code>awgn_snr_db</code>, <code>cfo_hz</code>) are read directly from
-  <code>live</code> in the per-sample chain &mdash; no refresh needed. Tap-0
-  and LOS params trigger <code>refresh_tap0_from_live()</code>; a profile
-  swap triggers <code>refresh_all_taps_from_live()</code>. On the CUDA path
-  both refreshes do a conditional D2H+rebuild+H2D round-trip on the dirty
-  edge, which is what preserves the device-owned cross-slot
-  <code>delay_line</code> (see <a href="#ring-continuity">§11.4</a>). On the
-  CPU path the refresh rebuilds effective taps + polyphase from
-  <code>live_profile</code> in host memory. The shared
-  <code>compute_windowed_sinc_taps</code> is what keeps post-warmup CPU↔CUDA
-  parity bit-exact.</p>
+  <p>Control is snapped once per physical link before its antenna lanes are
+  processed. An accepted update and a history reset are separate outcomes:
+  <code>history_reset_required</code> governs history clearing and warmup.
+  Coefficient-only matrix updates refresh host/device coefficients while retaining
+  the input-sample history. The shared fractional-filter helper supports numerical
+  comparisons; it does not imply bitwise CPU/CUDA equality. Scalar parameter and
+  scalar <code>profile_swap</code> behavior remain unchanged.</p>
 
-  <h3 id="rtm-protocol">17.2 Wire protocol &mdash; one REP socket, five message types + telemetry PUB</h3>
+  <h3 id="rtm-protocol">17.2 Wire protocol &mdash; one REP socket, seven message types + telemetry PUB</h3>
   <p>The control plane is a single ZMQ REP socket bound at
   <code>tcp://*:5559</code> when the broker is launched with
   <code>--control-endpoint</code> (omitted by default; the broker runs with
   no control plane unless asked). All messages are JSON; the broker replies
   to every REQ with <code>{"ok":true,&nbsp;…}</code> or
-  <code>{"ok":false,"error":"…"}</code>. Five message types cover the surface
+  <code>{"ok":false,"error":"…"}</code>. Seven message types cover the surface
   (telemetry is a PUB frame, not a REQ &mdash; see the telemetry paragraph
   below):</p>
 
@@ -2931,23 +2935,35 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         sub-config (v2.0).</td>
         <td><code>link_id, taps[], fading?, take_effect_at_slot?, batch_id?, force?</code></td>
         <td><code>applied_at_slot, warmup_until_slot</code></td></tr>
+    <tr><td><code>matrix_profile_swap</code></td>
+        <td>Replace all antenna-pair tap profiles on a prepared physical link.</td>
+        <td><code>link_id, nt, nr, lanes[{rx_port, tx_port, taps[]}], take_effect_at_slot?, batch_id?</code></td>
+        <td><code>applied_at_slot, warmup_until_slot, seqno</code></td></tr>
+    <tr><td><code>correlation_swap</code></td>
+        <td>Update spatial correlation on an eligible prepared link.</td>
+        <td><code>link_id, kind, rx?, tx?, take_effect_at_slot?</code></td>
+        <td><code>seqno</code></td></tr>
     <tr><td><code>batch_begin</code></td>
         <td>Open a caller-keyed staging slot; subsequent
-        <code>scalar</code> / <code>profile_swap</code> REQs carrying the
+        <code>scalar</code>, <code>profile_swap</code> or <code>matrix_profile_swap</code> REQs carrying the
         matching <code>batch_id</code> stage instead of apply (v2.3).</td>
-        <td><code>batch_id</code></td>
-        <td>&mdash;</td></tr>
+        <td><code>id</code></td>
+        <td><code>batch_id</code></td></tr>
     <tr><td><code>batch_commit</code></td>
         <td>Flush every staged op with a single
         <code>take_effect_at_slot</code> shared across every edge touched
         (per-edge slot-index atomicity).</td>
-        <td><code>batch_id, take_effect_at_slot?</code></td>
+        <td><code>id, take_effect_at_slot?</code></td>
         <td><code>apply_at_slot, link_count</code></td></tr>
     <tr><td><code>batch_abort</code></td>
         <td>Discard the staged batch; no shadows touched, data plane unaffected.</td>
-        <td><code>batch_id</code></td>
+        <td><code>id</code></td>
         <td><code>dropped_ops</code></td></tr>
   </table>
+
+  <p><code>correlation_swap</code> is a direct update; it does not participate in
+  batch staging. Batch begin/commit/abort use <code>id</code>; staged scalar/profile/matrix
+  messages reference that value with <code>batch_id</code>.</p>
 
   <p>Seven runtime-mutable scalar params (v1):
   <code>path_loss_db</code>, <code>awgn_snr_db</code>, <code>cfo_hz</code>,
@@ -2983,26 +2999,30 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   <code>telemetry_drops</code>) are summarised in
   <a href="#counter-taxonomy">§19.2</a>.</p>
 
-  <h3 id="rtm-warmup">17.3 The warmup contract &mdash; the only non-meaningful samples</h3>
-  <p>A <code>profile_swap</code> replaces the whole tap layout, which means
-  the cross-slot delay_line ring (see <a href="#ring-continuity">§11.4</a>)
-  contains samples convolved against the <i>previous</i> profile. Continuing
-  to read from it would produce a transient that depends on history neither
-  the new profile nor the caller has any model of. The snap path resolves
-  this by <b>zero-filling</b> the ring on activation and emitting
-  <code>event=control_warmup_begin slot=N link_id=L dl_samples=K
-  warmup_slots=W</code>. Output samples produced during the next
-  <code>warmup_slots</code> are explicitly typed as <b>warmup artefacts</b>
-  &mdash; the first formal exception to the broker's "every emitted sample
-  is meaningful" contract. <code>event=control_warmup_end</code> fires when
-  the per-edge <code>current_slot</code> crosses the target; from that slot
-  onward CPU↔CUDA parity is restored bit-exact.</p>
-
-  <p>The <code>profile_swap</code> REP body carries
-  <code>warmup_until_slot</code> so the caller can plan around it. For any
-  production topology the default warmup is one slot
-  (<code>count = 23 040 &gg; dl_size &asymp; 128</code>). Scalar updates
-  and tap-0 changes that don't alter layout skip warmup entirely.</p>
+  <h3 id="rtm-warmup">17.3 History and warmup</h3>
+  <p>The delay line stores recent <b>input samples</b>, which can be reused with
+  new coefficients. For matrix profiles, equal dimensions, tap counts, ordered
+  delays and all non-gain/phase settings preserve history. Delay equality is exact.
+  Identical or gain/phase-only updates update coefficients without clearing,
+  resizing or reinitializing lane history. The decision is shared by every antenna
+  pair on the physical link.</p>
+  <p>A first matrix profile or a change in delays, tap layout or other settings
+  resets history and starts warmup; different antenna dimensions are rejected.
+  Scalar <code>profile_swap</code> retains its existing reset behavior. A preserving
+  matrix update neither restarts nor prematurely ends a warmup already in progress.
+  <code>control_warmup_begin</code> and <code>control_warmup_end</code> describe
+  actual reset intervals, not every accepted control update.</p>
+  <p>Scalar and matrix control delays must be finite and within <b>0&ndash;1023
+  samples</b>. CUDA preallocates <b>1031 history samples per lane</b>, the shared
+  limit plus the eight-sample filter span. Device-state construction and refresh
+  reject insufficient capacity instead of truncating a delay. Warmup duration depends
+  on the required history and batch size; it is not universally one slot.</p>
+  <p>Control ACKs estimate application/warmup timing. The dashboard uses observed
+  backend status, including a reported <code>warmup_until_slot=0</code>, when
+  determining usability. It does not draw an unobserved reset interval. Dynamic
+  matrices on CUDA host staging are rejected before shadow/sequence changes;
+  they require the device-channel route. Static mixed topologies remain supported.
+  Full details and regressions are in <a href="sionna-integration.md#channel-updates-and-limits">the integration guide</a>.</p>
 
   <p><b><code>--control-warmup-cap-slots</code> REQ-time guard.</b>
   Profile swaps whose prospective warmup span exceeds the cap (default 3
@@ -3054,25 +3074,33 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   diagnose; <code>--hardware-strict</code> promotes the same condition to
   <code>event=fatal</code>.</p>
 
-  <h3 id="rtm-validation">17.6 Validation status</h3>
-  <p>The control plane has its own ctest suite,
-  <code>ctest -R runtime_update_parity</code>, currently 8/8 passing.
-  Coverage: per-param scalar mutability with CPU↔CUDA bit-exact parity at
-  1e&#8209;3 tolerance on every deterministic param (AWGN is statistical at
-  the same Jakes tolerance); <code>take_effect_at_slot</code> deferred
-  apply; warmup begin/end emission; multi-link batch atomicity; force-flag
-  warning with counter bump; and link-key canonicalisation across the
-  CPU&nbsp;/&nbsp;CUDA prepare contracts.</p>
-
-  <p>On real hardware (RTX 5090, SM 12.0, CUDA 12.8.93) the locked
-  <code>scripts/remote/gpu-test-sequence.sh</code> 7/7 has passed end to
-  end with the Part&nbsp;V code paths exercised: the
-  <code>refresh_all_taps_from_live</code> D2H+H2D round-trip preserves the
-  device-owned <code>delay_line</code>; warmup zero-fill on the device path
-  matches the host reference; <code>probe_cuda_hardware</code> returns real
-  device values; the 80% footprint gate stays untriggered on the validation
-  topologies. The telemetry PUB feed compiles and dispatches under the
-  build gate but has not yet been exercised against a live subscriber.</p>
+  <h3 id="rtm-validation">17.6 Validation and dashboard readiness</h3>
+  <p>The RTX 5090 channel-fix revision <code>16af288</code> passed CTest 12/12,
+  Python 75/75, all nine GPU stages, and Compute Sanitizer memcheck, initcheck
+  and synccheck. Delayed-echo comparisons include 1023-sample delays and SISO,
+  2&times;1/1&times;2 and 4&times;1/1&times;4 matrices at a maximum-error tolerance
+  of <code>1e-4</code>. See the <a href="sionna-merge-fixes-validation.md">dated report</a>.
+  These passes do not imply zero deadline misses or uninterrupted moving traffic.</p>
+  <p>One Web service accepts repeated <code>--gnb-metrics-source ID=URL</code>
+  subscriptions and exposes per-source <code>ran_gnbs</code> alongside legacy
+  <code>ran</code>. Rows are keyed by gNB, PCI and RNTI. Scheduler reports have a
+  five-second freshness limit; heartbeats do not refresh them. On reconnect,
+  <code>ue_list_current_connection</code> keeps cached rows historical until a
+  new scheduler report arrives. A fresh empty report clears that gNB's rows only.</p>
+  <p>Connection/handshake timeouts remain five seconds. Five seconds without an
+  incoming frame triggers a Ping; its matching Pong is required within ten seconds.
+  Socket failure, closure or invalid framing causes reconnection/resubscription;
+  partial frames and fragmented messages survive idle waits. Dashboard revision
+  <code>d6637f7</code> passed 86 Python tests, both frontend regressions and
+  independent interruption/recovery against both real OCUDU metrics feeds.</p>
+  <p>Channel readiness uses monotonic receipt times and a separate <b>two-second
+  freshness limit per link</b>. Every required link must have fresh, applied,
+  usable telemetry before <code>CUDA READY</code> appears. Missing timestamps,
+  stale telemetry or an unavailable Web backend remove readiness; cached values
+  and ACKs remain inspectable. Backend silence is shown within three seconds
+  including polling, without inventing warmup. Stopping Sionna alone leaves the
+  broker's current channel usable while matching fresh telemetry continues.
+  See <a href="sionna-integration.md#one-dashboard-for-both-gnbs">subscription and API details</a>.</p>
 
   <p>Design plans for the three increments live alongside the source:
   <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/main/docs/plans/runtime-mutable-channel.md"><code>docs/plans/runtime-mutable-channel.md</code></a>
@@ -3102,9 +3130,9 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   "Milestone" and "Phase" are two distinct axes &mdash; <i>what works
   end-to-end</i> vs <i>how it was built</i> &mdash; not competing labels.</p>
 
-  <h3 id="test-layer-unit">18.1 Unit tests (ctest, 8/8)</h3>
+  <h3 id="test-layer-unit">18.1 Unit tests (CTest, 12/12 at the integration revision)</h3>
   <p>Run with <code>ctest --test-dir build --output-on-failure</code> after
-  <code>cmake --build</code>. The suite (8 targets) groups as:</p>
+  <code>cmake --build</code>. The following summarizes the original test groups; the integration adds matrix/control/history coverage:</p>
   <ul class="tight">
     <li><b><code>config</code></b> — YAML schema validation: unknown keys,
         bad numerics, mixed sample rates, negative offsets, the
@@ -3120,7 +3148,7 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         <ul class="tight" style="margin-top:4px;">
           <li><i>tdl behaviour</i> (CPU): identity tap, 3-tap cross-slot
               impulse response, sinusoid passband at fractional delay.</li>
-          <li><i>CPU↔CUDA bit-exact parity</i> at 1e-3 tolerance:
+          <li><i>CPU↔CUDA numerical agreement</i> at 1e-3 tolerance:
               identity, integer + fractional delay, multi-tap cross-slot
               ring, fading (Jakes + LOS Rician composition).</li>
           <li><i>Dispatch-gate test</i> — asserts
@@ -3149,12 +3177,12 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         regression for the variable-size relay (documented dead-lock case).</li>
   </ul>
 
-  <h3 id="test-layer-remote">18.2 Remote GPU test sequence (gpu-test-sequence.sh, 7/7)</h3>
+  <h3 id="test-layer-remote">18.2 Remote GPU test sequence (gpu-test-sequence.sh, 9 stages)</h3>
   <p>The locked-in remote validation. <b>Must pass before any change to the
   broker or CUDA backend ships.</b> Each step adds a layer:</p>
   <ol class="tight">
     <li>CUDA release build (rsync local tree → build → check exit).</li>
-    <li>ctest 8/8 on the remote box (same suite as §18.1 above, GPU
+    <li>CTest 12/12 at the recorded integration revision on the remote box (same suite as §18.1 above, GPU
         path enabled so all <code>OCUDU_GPU_CHANNEL_HAS_CUDA</code> blocks
         actually run).</li>
     <li>Synthetic CUDA relay loop — clean 0 dB channel, sink measures
@@ -3172,6 +3200,9 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         within ±1.5 power units of the analytic expectation (the same
         tolerance the CPU↔CUDA matching test uses for single-realisation
         fading variance).</li>
+    <li>Correlated 2&times;2 MIMO relay, compared with an iid control.</li>
+    <li>Live <code>correlation_swap</code> sent over the control socket to a
+        running broker; received power must respond to the updated matrix.</li>
   </ol>
 
   <h3 id="test-layer-live">18.3 Live OCUDU + srsRAN smoke</h3>
@@ -3228,8 +3259,8 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
 
     <!-- Layer 2: DEVICE class (remote GPU + CUDA broker) -->
     <rect x="60" y="86" width="880" height="36" rx="6" fill="#0b101a" stroke="#5db1ff" stroke-width="1.6"/>
-    <text x="80"  y="108" fill="#5db1ff" font-size="11">Layer 2 · gpu-test-sequence.sh 7/7</text>
-    <text x="500" y="108" fill="#cdd6e6" text-anchor="middle" font-size="11">remote build + ctest + 5 relay scenarios on CUDA broker</text>
+    <text x="80"  y="108" fill="#5db1ff" font-size="11">Layer 2 · gpu-test-sequence.sh · 9 stages</text>
+    <text x="500" y="108" fill="#cdd6e6" text-anchor="middle" font-size="11">build + CTest + 6 relay scenarios + live correlation control</text>
     <text x="920" y="108" fill="#9aa7bd" text-anchor="end" font-size="10">~2 min · pre-ship</text>
 
     <!-- Layer 3: EXTERNAL class (live real radio stacks outside this codebase) -->
@@ -3423,16 +3454,16 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         <td>Validation failure (unknown link, unknown param, out of range, malformed JSON). The data plane is unaffected — the REP socket replies with <code>{"ok":false,"error":"…"}</code> and the broker keeps running.</td></tr>
     <tr><td><code>event=control_warmup_begin</code></td>
         <td><code>slot, link_id, dl_samples, warmup_slots</code></td>
-        <td>at each profile_swap activation</td>
-        <td>Phase 3 v2.2: a profile_swap on this link zeroed the cross-slot delay_line. Output samples in the next <code>warmup_slots</code> are warmup artefacts; downstream analysis pipelines should skip this window.</td></tr>
+        <td>when activation resets history</td>
+        <td>The update zeroed this link's lane histories. Preserving matrix updates emit no new warmup interval. Output samples in the next <code>warmup_slots</code> are warmup artefacts; downstream analysis pipelines should skip this window.</td></tr>
     <tr><td><code>event=control_warmup_end</code></td>
         <td><code>slot, link_id</code></td>
         <td>at the slot crossing the warmup target</td>
-        <td>Pairs with the preceding <code>warmup_begin</code> for this link. Output from this slot onward matches the new profile bit-exact (CPU↔CUDA parity restored).</td></tr>
+        <td>Pairs with the preceding <code>warmup_begin</code> for this link. The reset interval has ended; numerical comparisons use the declared test tolerance.</td></tr>
     <tr><td><code>event=control_batch_begin</code></td>
         <td><code>id</code></td>
         <td>one line per batch_begin REQ</td>
-        <td>Phase 3 v2.3: caller opened a staging slot. Subsequent scalar / profile_swap REQs carrying the matching <code>batch_id</code> stage into this slot instead of applying.</td></tr>
+        <td>Phase 3 v2.3: caller opened a staging slot. Subsequent scalar / profile_swap / matrix_profile_swap REQs carrying the matching <code>batch_id</code> stage into this slot instead of applying.</td></tr>
     <tr><td><code>event=control_batch_commit</code></td>
         <td><code>id, link_count, apply_at_slot</code></td>
         <td>one line per batch_commit REQ</td>
@@ -4315,7 +4346,7 @@ docker run --rm --gpus all --entrypoint bash ocudu-gpu-channel:build \
   <!-- ============ PART VII: Scope ============ -->
   <h2 class="part-divider" id="part-vii">Part VII &mdash; Multi-port radios and the matrix channel</h2>
   <p class="sub">How a radio with several antenna ports is declared, why its ports share one
-  sample epoch, how the <span class="mono">Nt&times;Nr</span> matrix is applied, and what the
+  sample epoch, how the <span class="mono">Nr&times;Nt</span> matrix is applied, and what the
   live evidence does and does not claim.</p>
 
   <h2 id="mimo-nodes">22. Radio nodes &mdash; a radio is not its socket</h2>
@@ -4614,7 +4645,7 @@ links:
   <h3>Scope today</h3>
   <ul class="tight">
     <li>CUDA is the target backend; CPU is the correctness reference and local
-        development path. Both are bit-exact for the supported step set.</li>
+        development path. Agreement is checked at the tolerance declared by each test; this is not a blanket bitwise-equality guarantee.</li>
     <li>Supported chain steps: <b>tdl, path_loss, phase, CFO, AWGN</b>.
         <code>tdl</code> is the chain-leading propagation step (covers
         scalar gain via a single tap at <code>delay_samples = 0</code>,
@@ -4642,7 +4673,7 @@ links:
         of superposition).</li>
     <li><b>Multi-port radios and the matrix channel are in.</b> Ports group
         into radio nodes under <code>radio_nodes:</code>, a link between two
-        such radios carries an <span class="mono">Nt&times;Nr</span> matrix,
+        such radios carries an <span class="mono">Nr&times;Nt</span> matrix,
         and the matrix can be deterministic
         (<code>fixed_mimo</code>), stochastic with independent lanes, or
         spatially correlated with a coherent LOS component
@@ -4654,9 +4685,10 @@ links:
         UE PHY that jointly estimates and decodes a matrix channel, which the
         integrated srsUE does not do (<a href="#mimo-evidence">&sect;25</a>).
         Several single-port UE processes are not one multi-port UE.</li>
-    <li>Antenna-array geometry, beamforming, precoder selection and TR 38.901
-        CDL are out of scope. The matrix here is declared or drawn, not
-        synthesised from a geometry.</li>
+    <li>Sionna RT supplies matrix profiles derived from scene geometry and antenna
+        arrays. Full statistical TR 38.901 CDL and automatic closed-loop precoder
+        selection remain unimplemented. The snapshot mechanism can reset history
+        when geometry changes; it is not seamless channel streaming.</li>
     <li>Broker is a standalone external process, not a patch into OCUDU
         or srsRAN.</li>
     <li>Scale claims depend on topology, sample rate, model chain, and
@@ -4678,17 +4710,21 @@ links:
         (Phase 3, all landed).</b> The full control plane is documented as a
         coherent feature in <a href="#runtime-mutability">§17</a>: the
         shadow&nbsp;&rarr;&nbsp;snap pattern (<a href="#rtm-architecture">§17.1</a>),
-        the six-message wire protocol with telemetry PUB
+        the seven-message wire protocol with telemetry PUB
         (<a href="#rtm-protocol">§17.2</a>), the
         <code>profile_swap</code> warmup contract
         (<a href="#rtm-warmup">§17.3</a>), the force-flag inertness warning
         (<a href="#rtm-force">§17.4</a>), and the CUDA hardware probe + 80%
         footprint gate + <code>--hardware-strict</code>
-        (<a href="#rtm-hardware">§17.5</a>). Validation status &mdash; ctest
-        <code>runtime_update_parity</code> 8/8 plus the GPU-workstation
-        confirmation that <code>refresh_all_taps_from_live</code> and the
-        warmup zero-fill work on real silicon &mdash; is recorded in
+        (<a href="#rtm-hardware">§17.5</a>). The recorded integration validation
+        includes CTest 12/12, nine GPU stages, delayed matrix-history tests
+        and live telemetry/dashboard recovery. Results and limits are recorded in
         <a href="#rtm-validation">§17.6</a>.</li>
+    <li><b>Live Sionna and one multi-gNB dashboard.</b> The bridge sends per-link
+        matrices and scene status; the dashboard shows independent gNB scheduler
+        groups, fresh backend application, real warmup intervals and resource charts.
+        See the <a href="sionna-integration.md">current integration guide</a> for
+        contributor provenance, UE recovery revisions and failed moving/real-time gates.</li>
   </ul>
 
   <h3>Planned — operational flexibility</h3>
@@ -4719,7 +4755,7 @@ links:
   pre / post numbers.</p>
   <p class="note"><b>D7 (source ring on GPU) — still parked.</b> D4 took
   the biggest win in this neighbourhood (H2D bytes proportional to source
-  count, not edge count) without breaking the CPU↔GPU bit-exact parity
+  count, not edge count) without breaking the CPU↔GPU numerical agreement
   invariant. D7 would push further by keeping the ring itself on the GPU,
   but it costs the parity invariant + destination-decoupling guarantee.
   Trigger conditions for revisiting are unchanged
@@ -4751,7 +4787,7 @@ links:
         bandwidth</b>. At N = 8 it would compress H2D from 119 µs →
         ~60 µs — equivalent to upgrading from x4 to x8 PCIe without
         touching hardware. The only software lever that lifts the bench
-        ceiling. Cost: revisiting the bit-exact CPU↔CUDA contract (AWGN
+        ceiling. Cost: revisiting the CPU↔CUDA numerical contract (AWGN
         sigma in fp16 needs care; gain / phase / CFO multiplies are
         fine). <b>Highest impact item by far</b> — only one that actually
         scales the boundary.</li>
@@ -4781,10 +4817,12 @@ links:
   channel emulator for live srsRAN and OCUDU stacks · broker in
   <span class="mono">src/broker.cpp</span> · kernels in
   <span class="mono">src/cuda_backend.cu</span></p>
-  <p class="sub" style="margin-top:6px">Leading Contributor: Zhouyou Gu, SUTD
-  <br>
-  Contributors: MinwooEun &mdash; rank-1 MISO/SIMO
-  (<a href="https://github.com/zhouyou-gu/ocudu-gpu-channel#contributors">details</a>)</p>
+  <p class="sub" style="margin-top:6px">Project lead:
+  <a href="https://github.com/zhouyou-gu">Zhouyou Gu</a>, SUTD<br>
+  Contributors: <a href="https://github.com/MinwooEun">Minwoo Eun</a> &mdash; rank-1 MISO/SIMO;
+  <a href="https://github.com/ehs0">Hyunsoo Lee</a> &mdash; Sionna integration<br>
+  <a href="../README.md#contributors">Authoritative contributor list</a>
+  &middot; <a href="sionna-integration.md#contribution-provenance">Contribution provenance</a></p>
   <p class="sub" style="margin-top:6px">Released under the
   <a href="https://github.com/zhouyou-gu/ocudu-gpu-channel/blob/main/LICENSE">MIT License</a>
   · &copy; 2026 Zhouyou Gu</p>
