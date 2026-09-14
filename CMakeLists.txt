@@ -130,6 +130,10 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
   target_link_libraries(test_runtime_update_parity PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME runtime_update_parity COMMAND test_runtime_update_parity)
 
+  add_executable(test_matrix_profile_history tests/test_matrix_profile_history.cpp)
+  target_link_libraries(test_matrix_profile_history PRIVATE ocudu_gpu_channel_lib)
+  add_test(NAME matrix_profile_history COMMAND test_matrix_profile_history)
+
   add_executable(test_hardware_probe tests/test_hardware_probe.cpp)
   target_link_libraries(test_hardware_probe PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME hardware_probe COMMAND test_hardware_probe)
@@ -145,4 +149,24 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
   add_executable(test_broker tests/test_broker.cpp)
   target_link_libraries(test_broker PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME broker COMMAND test_broker)
+
+  # The Sionna adapter conversion tests use only the Python standard library;
+  # Sionna RT and pyzmq remain optional live-integration dependencies.
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(Python3_Interpreter_FOUND)
+    add_test(
+      NAME sionna_rt_adapter
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sionna_rt_adapter.py
+    )
+    add_test(
+      NAME sionna_web_ui
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sionna_web_ui.py
+    )
+    add_test(
+      NAME native_sionna_rank1_renderer
+      COMMAND ${Python3_EXECUTABLE}
+              ${CMAKE_CURRENT_SOURCE_DIR}/scripts/native/render-sionna-rank1-configs.py
+              --self-test
+    )
+  endif()
 endif()

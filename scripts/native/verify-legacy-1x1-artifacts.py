@@ -25,15 +25,8 @@ COUNTER_NAMES = (
     "tx_sequence_gaps",
     "zmq_errors",
 )
-# The superseded MIMO attempt routed every slot through a RadioNodeCoordinator
-# and this verifier asserted on its group_prepares / group_commits /
-# group_aborts / partial_group_aborts counters. MIMO_MILESTONES.md section 0.2
-# discards that coordinator outright -- the producer model gives the same
-# cursor-alignment invariant structurally, with one thread per node instead of
-# a generation barrier over Nr request-driven threads -- so those counters do
-# not exist and cannot be made to exist without reintroducing the architecture
-# M0 was created to remove. The assertions they carried are dropped rather than
-# satisfied. Everything else in this file is unchanged.
+# This gate validates the current singleton gNB/UE Broker interface. It does not
+# require the multi-node coordinator or any MIMO-only counters.
 EXPECTED_SOURCE_COMMITS = {
     "ocudu": "a1916edcdbcd70ba6e0af47ee87be061dad5a4e4",
     "srsran4g": "eea87b1d893ae58e0b08bc381730c502024ae71f",
@@ -249,14 +242,14 @@ def validate_artifacts(results_root: Path, summary_path: Path, now: float) -> di
     require("cuda_device_channel_fallback" not in broker_text, "broker used a CUDA channel fallback")
     stop_lines = [line for line in lines if line.startswith("event=stop ")]
     require(len(stop_lines) == 1, "broker log must contain exactly one event=stop line")
-    expected_implicit = {
-        "event=radio_node_resolved id=gnb0 tx[0]=gnb0 rx[0]=gnb0 implicit=true",
-        "event=radio_node_resolved id=ue0 tx[0]=ue0 rx[0]=ue0 implicit=true",
-    }
-    implicit_lines = [line for line in lines if line.startswith("event=radio_node_resolved ")]
+    socket_devices = [
+        match.group(1)
+        for line in lines
+        if (match := re.match(r"^event=socket_ready device=(gnb0|ue0) ", line))
+    ]
     require(
-        len(implicit_lines) == 2 and set(implicit_lines) == expected_implicit,
-        "legacy topology did not resolve exactly two implicit singleton RadioNodes",
+        sorted(socket_devices) == ["gnb0", "ue0"],
+        "legacy topology did not open exactly one gNB and one UE socket pair",
     )
 
     raw = parse_counter_map(stop_lines[0])
@@ -341,13 +334,14 @@ def self_test() -> None:
         report_dir.mkdir(parents=True)
         broker = log_dir / "broker.log"
         broker.write_text(
-            "event=radio_node_resolved id=gnb0 tx[0]=gnb0 rx[0]=gnb0 implicit=true\n"
-            "event=radio_node_resolved id=ue0 tx[0]=ue0 rx[0]=ue0 implicit=true\n"
+            "event=socket_ready device=gnb0 tx_connect=tcp://127.0.0.1:2000 "
+            "rx_bind=tcp://127.0.0.1:2001\n"
+            "event=socket_ready device=ue0 tx_connect=tcp://127.0.0.1:2101 "
+            "rx_bind=tcp://127.0.0.1:2100\n"
             "event=start backend=cuda duration=15s\n"
             "event=hardware_probe ok=true device=0 name=test\n"
             "event=stop tx_pulls=10 rx_requests=10 rx_starvations=2 "
-            "tx_queue_overflows=0 tx_sequence_gaps=0 zmq_errors=0 "
-            "group_prepares=10 group_commits=9 group_aborts=1 partial_group_aborts=0\n",
+            "tx_queue_overflows=0 tx_sequence_gaps=0 zmq_errors=0\n",
             encoding="utf-8",
         )
         (log_dir / "gnb-console.log").write_text(
@@ -426,7 +420,7 @@ def self_test() -> None:
         }
         (report_dir / "source-evidence.json").write_text(json.dumps(evidence), encoding="utf-8")
         counters = validate_artifacts(root, summary_path, time.time())
-        assert counters["group_aborts"] == 1
+        assert counters["tx_pulls"] == 10
     print("event=native_legacy_artifact_verifier_self_test result=pass")
 
 
@@ -445,7 +439,7 @@ def main() -> int:
         parser.error("--results-root and --summary are required")
     counters = validate_artifacts(args.results_root, args.summary, time.time())
     print(
-        "event=native_mimo_legacy_attach_gate result=pass "
+        "event=native_legacy_1x1_attach_gate result=pass "
         f'summary="{args.summary}" '
         + " ".join(f"{key}={counters[key]}" for key in COUNTER_NAMES)
     )

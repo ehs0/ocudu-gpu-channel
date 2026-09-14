@@ -363,8 +363,14 @@ int main()
     auto r4 = server.handle_message(
         R"({"type":"batch_commit","id":"exp-26","take_effect_at_slot":777})");
     require(contains(r4, "\"ok\":true"), "batch_commit should succeed");
+    require(contains(r4, "\"batch_id\":\"exp-26\""),
+            "batch_commit REP echoes batch id");
     require(contains(r4, "\"link_count\":2"), "REP reports 2 links applied");
     require(contains(r4, "\"apply_at_slot\":777"), "REP carries the commit slot");
+    require(contains(r4, "\"link_id\":\"ue0-gnb0\""),
+            "REP identifies first committed link");
+    require(contains(r4, "\"seqno\":" + std::to_string(a_seqno_before + 1)),
+            "REP exposes committed seqno for UI correlation");
 
     // Post-commit assertions
     require(nearly(ctl_a->shadow.path_loss_db, -1.5F),
@@ -481,6 +487,30 @@ int main()
   }
 
   // ── v2.2 follow-on: --control-warmup-cap-slots rejects overlong swaps ──
+  // Batch profile ACKs expose the same per-link warm-up hint as a direct
+  // profile_swap so read-only observers can distinguish applied from usable.
+  {
+    auto ctl = std::make_unique<ocg::BrokerLinkControl>();
+    ctl->current_slot.store(41);
+    ocg::ControlServer::LinkMap m = {{"batch-warmup", ctl.get()}};
+    ocg::ControlServerConfig c;
+    c.endpoint = "inproc://test-batch-warmup-hint";
+    ocg::ControlServer s(std::move(c), std::move(m));
+    require(contains(s.handle_message(
+                         R"({"type":"batch_begin","id":"warmup-batch"})"),
+                     "\"ok\":true"),
+            "warmup batch should begin");
+    require(contains(s.handle_message(R"({
+      "type":"profile_swap","link_id":"batch-warmup","batch_id":"warmup-batch",
+      "taps":[{"delay_samples":0,"gain_db":0}]
+    })"), "\"staged\":true"),
+            "profile should stage inside warmup batch");
+    const std::string r = s.handle_message(
+        R"({"type":"batch_commit","id":"warmup-batch"})");
+    require(contains(r, "\"warmup_until_slot\":43"),
+            "batch profile ACK reports its per-link warmup end slot");
+  }
+
   {
     auto ctl = std::make_unique<ocg::BrokerLinkControl>();
     // Mimic what the backend writes at prepare(): a link whose
@@ -555,6 +585,35 @@ int main()
       s.live.path_loss_db = 5.0F;
       s.live.awgn_snr_db  = 12.5F;
       s.profile_active    = true;
+      s.warmup_event_seq = 3;
+      s.warmup_profile_seqno = 11;
+      s.warmup_begin_slot = 198;
+      s.warmup_end_slot = 199;
+      s.warmup_begin_unix_ns = 1700000000000000000ULL;
+      s.warmup_end_unix_ns = 1700000000001000000ULL;
+      s.processed_samples  = 23040;
+      s.sample_rate_hz     = 23040000;
+      s.slot_deadline_us   = 1000.0;
+      s.channel_process_us = 125.0;
+      s.slot_process_count = 1000;
+      s.slot_deadline_miss_count = 2;
+      s.slot_process_max_us = 1450.0;
+      s.slot_process_p95_us = 180.0;
+      s.slot_process_p99_us = 240.0;
+      s.nominal_slot_samples = 23040;
+      s.nominal_pending_samples = 10;
+      s.nominal_pending_estimated_us = 0.25;
+      s.nominal_latest_estimated_us = 125.0;
+      s.nominal_slot_count = 998;
+      s.nominal_deadline_miss_count = 1;
+      s.nominal_process_max_us = 1200.0;
+      s.nominal_process_p95_us = 175.0;
+      s.nominal_process_p99_us = 230.0;
+      s.fragment_call_count = 250;
+      s.fragment_sample_count = 30000;
+      s.fragment_min_samples = 1;
+      s.fragment_max_samples = 23039;
+      s.fragmented_nominal_slot_count = 200;
       ocg::publish_telemetry_snapshot(*t_b, s);
     }
 
@@ -567,6 +626,7 @@ int main()
     tcfg.telemetry_endpoint = "tcp://127.0.0.1:5572";
     tcfg.telemetry_rate_hz  = 50.0;           // 20 ms tick — plenty of frames in the window
     tcfg.recv_timeout_ms    = 50;
+    tcfg.backend_name       = "cuda";
     ocg::ControlServer tserver(std::move(tcfg), std::move(tlink));
     tserver.start();
 
@@ -606,6 +666,55 @@ int main()
                 "v3.0: telemetry frame names link-B");
         require(frame.find("\"profile_active\":true") != std::string::npos,
                 "v3.0: telemetry frame reports profile_active=true for link-B");
+        require(frame.find("\"warmup_event_seq\":3") != std::string::npos,
+                "telemetry retains the latest warmup cycle sequence");
+        require(frame.find("\"warmup_profile_seqno\":11") != std::string::npos,
+                "telemetry correlates warmup with the applied profile");
+        require(frame.find("\"warmup_begin_slot\":198") != std::string::npos,
+                "telemetry reports the backend warmup begin slot");
+        require(frame.find("\"warmup_end_slot\":199") != std::string::npos,
+                "telemetry reports the backend warmup end slot");
+        require(frame.find("\"warmup_begin_unix_ns\":1700000000000000000") != std::string::npos,
+                "telemetry reports the backend warmup begin timestamp");
+        require(frame.find("\"warmup_end_unix_ns\":1700000000001000000") != std::string::npos,
+                "telemetry reports the backend warmup end timestamp");
+        require(frame.find("\"backend\":\"cuda\"") != std::string::npos,
+                "v3.0: telemetry frame identifies the data-plane backend");
+        require(frame.find("\"process_id\":") != std::string::npos,
+                "telemetry identifies the GPU Channel process for GPU monitoring");
+        require(frame.find("\"scope\":\"destination_superposition\"") != std::string::npos,
+                "slot timing identifies receiver-superposition scope");
+        require(frame.find("\"usage_percent\":12.5") != std::string::npos,
+                "slot timing reports deadline utilization");
+        require(frame.find("\"deadline_met\":true") != std::string::npos,
+                "slot timing reports deadline verdict");
+        require(frame.find("\"processed_slots\":1000") != std::string::npos,
+                "slot timing reports cumulative processed slots");
+        require(frame.find("\"deadline_misses\":2") != std::string::npos,
+                "slot timing reports cumulative deadline misses");
+        require(frame.find("\"deadline_miss_percent\":0.2") != std::string::npos,
+                "slot timing reports cumulative deadline miss rate");
+        require(frame.find("\"max_elapsed_us\":1450") != std::string::npos,
+                "slot timing reports cumulative maximum");
+        require(frame.find("\"p95_elapsed_us\":180") != std::string::npos,
+                "slot timing reports cumulative p95");
+        require(frame.find("\"p99_elapsed_us\":240") != std::string::npos,
+                "slot timing reports cumulative p99");
+        require(frame.find("\"slot_samples\":23040") != std::string::npos,
+                "nominal timing reports configured samples per slot");
+        require(frame.find("\"pending_samples\":10") != std::string::npos,
+                "nominal timing reports the pending fragment remainder");
+        require(frame.find("\"completed_slots\":998") != std::string::npos,
+                "nominal timing reports reconstructed slot count");
+        require(frame.find("\"latest_estimated_us\":125") != std::string::npos,
+                "nominal timing reports the proportional elapsed estimate");
+        require(frame.find("\"estimation\":\"sample_proportional_call_time\"") !=
+                    std::string::npos,
+                "nominal timing identifies its estimation method");
+        require(frame.find("\"calls\":250") != std::string::npos,
+                "fragment telemetry reports fragment call count");
+        require(frame.find("\"fragmented_nominal_slots\":200") != std::string::npos,
+                "fragment telemetry reports affected nominal slots");
       } else if (frame.rfind("link-A ", 0) == 0) {
         got_a = true;
       }
@@ -657,6 +766,84 @@ int main()
         R"({"link_id":"ue1-gnb0","param":"path_loss_db","value":-6.0})");
     require(contains(scalar_reply, "\"ok\":true"),
             "a scalar param on a fixed_mimo link stays allowed");
+    ctl_b->fixed_mimo_declared = false;
+  }
+
+  // Rejection must not stage an unsupported matrix or poison the next batch.
+  {
+    const std::string request = R"({"type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":5}]}]})";
+    const auto before = ctl_b->seqno.load();
+    const bool pending = ctl_b->matrix_profile_pending;
+    ctl_b->matrix_profile_supported = false;
+    const auto reply = server.handle_message(request);
+    require(contains(reply, "host staging"), "unsupported route rejected explicitly");
+    require(ctl_b->seqno.load() == before && ctl_b->matrix_profile_pending == pending,
+            "route rejection must not alter control state");
+    server.handle_message(R"({"type":"batch_begin","batch_id":"unsupported"})");
+    require(contains(server.handle_message(request), "host staging"), "batch rejects unsupported route");
+    server.handle_message(R"({"type":"batch_abort","batch_id":"unsupported"})");
+    require(ctl_b->seqno.load() == before, "aborted batch cannot advance sequence");
+    ctl_b->matrix_profile_supported = true;
+    require(contains(server.handle_message(request), "\"ok\":true"), "control recovers after rejected batch");
+  }
+
+  // Delay boundaries are the same for scalar and matrix profiles.
+  {
+    ctl_b->nt_hint = ctl_b->nr_hint = 1;
+    for (const std::string value : {"-1", "1023.01", "1e999"}) {
+      const auto before = ctl_b->seqno.load();
+      const auto reply = server.handle_message(
+          "{\"type\":\"matrix_profile_swap\",\"link_id\":\"ue1-gnb0\",\"nt\":1,\"nr\":1,"
+          "\"lanes\":[{\"rx_port\":0,\"tx_port\":0,\"taps\":[{\"delay_samples\":" + value + "}]}]}");
+      require(contains(reply, "\"ok\":false"), "invalid matrix delay rejected");
+      require(ctl_b->seqno.load() == before, "invalid delay cannot advance sequence");
+    }
+    const auto reply = server.handle_message(R"({"type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,"force":true,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":1023}]}]})");
+    require(contains(reply, "\"ok\":true"), "maximum matrix delay accepted");
+  }
+
+  // A Sionna-style matrix update is physical-link scoped: it must name the
+  // startup dimensions and cover every row-major lane exactly once.
+  {
+    ctl_a->nt_hint = 2;
+    ctl_a->nr_hint = 1;
+    const std::string ok = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "lanes":[
+        {"rx_port":0,"tx_port":1,"taps":[{"delay_samples":1.0,"gain_db":-6.0,"phase_rad":0.5}]},
+        {"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0.0,"gain_db":-3.0,"phase_rad":0.0}]}
+      ]
+    })");
+    require(contains(ok, "\"ok\":true"), "a complete 1x2 matrix profile is accepted");
+    require(ctl_a->matrix_profile_pending, "the complete matrix is staged as one update");
+    require(!ctl_a->profile_pending, "matrix profile supersedes a scalar profile marker");
+    require(ctl_a->shadow_matrix_profile.nt == 2 &&
+            ctl_a->shadow_matrix_profile.nr == 1,
+            "matrix dimensions are retained in the physical-link shadow");
+    require(nearly(static_cast<float>(
+                ctl_a->shadow_matrix_profile.lanes[1].taps[0].phase_rad), 0.5F),
+            "lane addressing is canonical rx * Nt + tx order");
+
+    const std::string missing = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(missing, "\"ok\":false"), "an incomplete matrix is rejected atomically");
+    const std::string resized = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(resized, "\"ok\":false"), "runtime array resizing is rejected");
+
+    ctl_b->fixed_mimo_declared = true;
+    const std::string fixed = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue1-gnb0","nt":1,"nr":1,
+      "lanes":[{"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0,"gain_db":0}]}]
+    })");
+    require(contains(fixed, "\"ok\":false") && contains(fixed, "fixed_mimo"),
+            "a pruned fixed_mimo link cannot accept a dynamic full matrix");
     ctl_b->fixed_mimo_declared = false;
   }
 

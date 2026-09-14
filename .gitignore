@@ -21,6 +21,10 @@
 /srsRAN_4G/
 /srsran_4g/
 
+# Python-generated caches.
+__pycache__/
+*.py[cod]
+
 # Downloaded reference material -- 3GPP specs, papers, third-party source
 # clones consulted during design. Kept local-only because (a) PDFs and full
 # repository clones are large, and (b) some materials carry licenses that

@@ -31,6 +31,7 @@
 #include "ocudu_gpu_channel/mutable_params.h"
 #include "ocudu_gpu_channel/runtime_control.h"
 #include <algorithm>
+#include <chrono>
 #include <complex>
 #include <iostream>
 #include <cstdint>
@@ -174,6 +175,8 @@ struct PhysicalLinkRuntime {
   // and the channel is the link.
   ProfileShadow live_profile;
   bool live_profile_active = false;
+  MatrixProfileShadow live_matrix_profile;
+  bool live_matrix_profile_active = false;
   bool chain_has_leading_tdl = false;
   // v2.2 warmup window. The cross-slot ring it refers to is per LANE, so the
   // zero-fill has to sweep every lane of the link -- see the caller.
@@ -187,6 +190,8 @@ struct PhysicalLinkRuntime {
 struct LinkSnapOutcome {
   bool values_changed = false;
   bool profile_activated = false;
+  bool matrix_profile_activated = false;
+  bool history_reset_required = false;
   // M4.4: the link's mixing matrix was replaced this slot, so a backend that
   // keeps a device-side copy has to upload it before the slot's kernels run.
   bool correlation_changed = false;
@@ -211,11 +216,21 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
   link.next_slot = snap_idx + 1;
 
   bool profile_activated = false;
+  bool matrix_profile_activated = false;
+  bool history_reset_required = false;
+  std::uint64_t warmup_begin_unix_ns = 0;
+  std::uint64_t warmup_end_unix_ns = 0;
+  const auto wall_clock_unix_ns = [] {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count());
+  };
   if (values_changed && link.control.profile_pending) {
     if (link.chain_has_leading_tdl || link.control.shadow_profile.force) {
       if (snap_profile_from_shadow(link.live_profile, link.control)) {
         link.live_profile_active = true;
+        link.live_matrix_profile_active = false;
         profile_activated = true;
+        history_reset_required = true; // Preserve scalar profile_swap semantics.
         // v3.1: force on a chain with no leading tdl stores the profile, but
         // the per-sample chain never reaches a Tdl branch. Say so.
         if (!link.chain_has_leading_tdl) {
@@ -223,6 +238,21 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
                     << " reason=\"chain has no leading tdl; profile stored but inert\"\n";
           link.control.force_inert_warnings.fetch_add(1, std::memory_order_relaxed);
         }
+      }
+    }
+  }
+  if (values_changed && link.control.matrix_profile_pending) {
+    if (link.chain_has_leading_tdl || link.control.shadow_matrix_profile.lanes[0].force) {
+      const bool preserve_history = link.live_matrix_profile_active &&
+          matrix_history_compatible(link.live_matrix_profile,
+                                    link.control.shadow_matrix_profile);
+      if (snap_matrix_profile_from_shadow(link.live_matrix_profile, link.control)) {
+        link.live_matrix_profile_active = true;
+        // A full matrix supersedes a prior scalar profile. Keeping both active
+        // would make lane selection depend on backend implementation details.
+        link.live_profile_active = false;
+        matrix_profile_activated = true;
+        history_reset_required = !preserve_history;
       }
     }
   }
@@ -247,13 +277,28 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
     correlation_changed = true;
   }
 
-  if (profile_activated) {
+  if (history_reset_required) {
     // v2.2 W1: size the warmup window from the leading tdl's ring length. The
     // rings are zeroed by the caller, one per lane.
-    const auto dl_size = static_cast<std::size_t>(std::max(0, link.control.dl_size_samples_hint));
+    std::size_t dl_size = static_cast<std::size_t>(
+        std::max(0, link.control.dl_size_samples_hint));
+    const auto include_profile_delay = [&](const ProfileShadow& profile) {
+      for (int tap = 0; tap < profile.n_taps; ++tap) {
+        dl_size = std::max(
+            dl_size,
+            static_cast<std::size_t>(std::ceil(profile.taps[tap].delay_samples)) +
+                static_cast<std::size_t>(kTdlFracFilterTaps));
+      }
+    };
+    if (matrix_profile_activated) {
+      for (int lane = 0; lane < link.live_matrix_profile.lane_count; ++lane) {
+        include_profile_delay(link.live_matrix_profile.lanes[lane]);
+      }
+    }
     const std::uint64_t warmup_slots =
         count == 0 ? 1 : std::max<std::uint64_t>(1, (dl_size + count - 1) / count);
     link.warmup_until_slot = snap_idx + warmup_slots;
+    warmup_begin_unix_ns = wall_clock_unix_ns();
     std::cout << "event=control_warmup_begin slot=" << snap_idx
               << " link_id=" << link_id << " dl_samples=" << dl_size
               << " warmup_slots=" << warmup_slots << '\n';
@@ -261,6 +306,7 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
 
   // v2.2 W2: this slot closes the warmup window.
   if (link.warmup_until_slot != 0 && snap_idx >= link.warmup_until_slot) {
+    warmup_end_unix_ns = wall_clock_unix_ns();
     std::cout << "event=control_warmup_end slot=" << snap_idx
               << " link_id=" << link_id << '\n';
     link.warmup_until_slot = 0;
@@ -269,16 +315,37 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
   // v3.0 TM1: one telemetry frame per LINK per slot -- a 2x2 used to publish
   // four frames saying the same thing.
   {
-    TelemetrySnapshot ts;
+    // Keep the broker's most recently completed receiver timing while the
+    // backend publishes this slot's control state. The broker runs directly
+    // around this call on the same producer thread, so these two writers are
+    // ordered without an extra lock.
+    TelemetrySnapshot ts = read_telemetry_snapshot(link.control);
     ts.slot = snap_idx;
     ts.live_seqno = link.live_seqno;
     ts.live = link.live;
-    ts.profile_active = link.live_profile_active;
+    ts.profile_active = link.live_profile_active || link.live_matrix_profile_active;
+    ts.matrix_profile_active = link.live_matrix_profile_active;
+    ts.nt = link.control.nt_hint;
+    ts.nr = link.control.nr_hint;
     ts.warmup_until_slot = link.warmup_until_slot;
+    if (warmup_begin_unix_ns != 0) {
+      ++ts.warmup_event_seq;
+      ts.warmup_profile_seqno = link.live_seqno;
+      ts.warmup_begin_slot = snap_idx;
+      ts.warmup_end_slot = 0;
+      ts.warmup_begin_unix_ns = warmup_begin_unix_ns;
+      ts.warmup_end_unix_ns = 0;
+    }
+    if (warmup_end_unix_ns != 0) {
+      ts.warmup_end_slot = snap_idx;
+      ts.warmup_end_unix_ns = warmup_end_unix_ns;
+    }
     publish_telemetry_snapshot(link.control, ts);
   }
   return LinkSnapOutcome{.values_changed = values_changed,
                          .profile_activated = profile_activated,
+                         .matrix_profile_activated = matrix_profile_activated,
+                         .history_reset_required = history_reset_required,
                          .correlation_changed = correlation_changed};
 }
 

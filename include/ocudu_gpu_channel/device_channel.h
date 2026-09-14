@@ -39,10 +39,8 @@ namespace ocg {
 // in a flat array (no device-side allocation).
 constexpr int kDeviceMaxTaps = 32;
 
-// Maximum delay-line ring length. ceil(max_tap_delay_samples) + the 8-tap
-// polyphase filter span + slack. 128 covers TDL-A at 100 ns DS / 23.04 MS/s
-// (max scaled delay ~22 samples) and the longer TDL-E configurations.
-constexpr int kDeviceMaxDelayLine = 128;
+// Preallocated storage covers every accepted runtime delay plus the filter.
+constexpr int kDeviceMaxDelayLine = kMaxProfileDelaySamples + kTdlFracFilterTaps;
 
 // Reuse the host-side sub-ray count so device and host agree on the Jakes
 // generator. The device kernel loops `m < kDeviceMaxFadingSubrays` and uses

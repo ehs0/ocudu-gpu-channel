@@ -1,10 +1,13 @@
 #include "ocudu_gpu_channel/broker.h"
+#include "ocudu_gpu_channel/timing_metrics.h"
 #include "ocudu_gpu_channel/pacing.h"
 #include "ocudu_gpu_channel/ring.h"
+#include "ocudu_gpu_channel/runtime_control.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstring>
 #include <deque>
@@ -304,10 +307,12 @@ struct LinkRuntime {
   int tx_port = 0;
   const ModelConfig* model = nullptr;
   std::string key; // canonical link_key, precomputed to keep it off the hot path
+  std::string physical_key; // shared by every lane of one physical link
   std::atomic<std::uint64_t> cursor{0};
   std::atomic<bool> cursor_init{false};
 };
 
+// Run-cumulative relay health counters shared by the worker threads.
 struct AtomicStats {
   std::atomic<std::uint64_t> tx_pulls{0};
   std::atomic<std::uint64_t> rx_requests{0};
@@ -624,11 +629,28 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
     links[i].rx_port = lane.rx_port;
     links[i].model = model;
     links[i].key = lane.key;
+    links[i].physical_key = lane.physical_link_key;
   }
 
   // Per-node incoming lane lists, resolved once so no serve walks every link.
   for (std::size_t i = 0; i != links.size(); ++i) {
     nodes[links[i].dst_node].incoming.push_back(i);
+  }
+
+  // Resolve each destination node to the unique physical-link controls that
+  // feed it. Multi-port lanes share one control block and therefore receive
+  // one receiver-scoped timing update per completed superposition.
+  const auto control_links = collect_control_links();
+  std::vector<std::vector<BrokerLinkControl*>> node_controls(nodes.size());
+  for (const auto& link : links) {
+    const auto ctl_it = control_links.find(link.physical_key);
+    if (ctl_it == control_links.end() || ctl_it->second == nullptr) {
+      continue;
+    }
+    auto& controls = node_controls[link.dst_node];
+    if (std::find(controls.begin(), controls.end(), ctl_it->second) == controls.end()) {
+      controls.push_back(ctl_it->second);
+    }
   }
 
   // Live per-worker diagnostics: one entry per port for the puller role, one
@@ -639,6 +661,11 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
   std::vector<WorkerDiag> puller_diag(ports.size());
   std::vector<WorkerDiag> producer_diag(nodes.size());
   std::vector<WorkerDiag> rep_diag(ports.size());
+  std::vector<ReceiverTimingAccumulator> slot_timing;
+  slot_timing.reserve(nodes.size());
+  for (const auto& node : nodes) {
+    slot_timing.emplace_back(node.batch, node.sample_rate_hz);
+  }
 
   // Bounded stall detector. A producer that cannot make progress emits one
   // diagnostic line per interval naming the phase it is stuck in and the live
@@ -999,6 +1026,41 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         const auto t_commit_start = std::chrono::steady_clock::now();
         const double process_us =
             std::chrono::duration<double, std::micro>(t_commit_start - t_process_start).count();
+
+        // The backend shapes and sums every incoming lane in one call, so the
+        // truthful execution measurement is receiver-scoped. Publish the same
+        // completed-call timing on each physical link feeding this node.
+        const double slot_deadline_us =
+            static_cast<double>(count) * 1'000'000.0 / static_cast<double>(rate);
+        auto& timing_stats = slot_timing[n];
+        timing_stats.observe(count, process_us);
+        for (BrokerLinkControl* ctl : node_controls[n]) {
+          TelemetrySnapshot ts = read_telemetry_snapshot(*ctl);
+          ts.processed_samples = count;
+          ts.sample_rate_hz = rate;
+          ts.slot_deadline_us = slot_deadline_us;
+          ts.channel_process_us = process_us;
+          ts.slot_process_count = timing_stats.calls.count;
+          ts.slot_deadline_miss_count = timing_stats.calls.deadline_misses;
+          ts.slot_process_max_us = timing_stats.calls.max_us;
+          ts.slot_process_p95_us = timing_stats.calls.p95_us;
+          ts.slot_process_p99_us = timing_stats.calls.p99_us;
+          ts.nominal_slot_samples = timing_stats.nominal_samples();
+          ts.nominal_pending_samples = timing_stats.pending_samples;
+          ts.nominal_pending_estimated_us = timing_stats.pending_estimated_us;
+          ts.nominal_latest_estimated_us = timing_stats.latest_nominal_estimated_us;
+          ts.nominal_slot_count = timing_stats.nominal_slots.count;
+          ts.nominal_deadline_miss_count = timing_stats.nominal_slots.deadline_misses;
+          ts.nominal_process_max_us = timing_stats.nominal_slots.max_us;
+          ts.nominal_process_p95_us = timing_stats.nominal_slots.p95_us;
+          ts.nominal_process_p99_us = timing_stats.nominal_slots.p99_us;
+          ts.fragment_call_count = timing_stats.fragment_calls;
+          ts.fragment_sample_count = timing_stats.fragment_samples;
+          ts.fragment_min_samples = timing_stats.fragment_min();
+          ts.fragment_max_samples = timing_stats.fragment_max_samples;
+          ts.fragmented_nominal_slot_count = timing_stats.fragmented_nominal_slots;
+          publish_telemetry_snapshot(*ctl, ts);
+        }
 
         // (F) Commit: advance every lane cursor by the SAME count, in one
         // loop, in the one thread that owns them. This is the statement that

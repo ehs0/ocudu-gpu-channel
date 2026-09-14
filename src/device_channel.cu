@@ -10,9 +10,11 @@
 // Plan and rationale: docs/plans/device-channel-pipeline.md.
 
 #include "ocudu_gpu_channel/device_channel.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <stdexcept>
 #include <cuda_runtime.h>
 
 namespace ocg {
@@ -457,8 +459,13 @@ bool build_device_link_state(
   if (n_taps < 1 || n_taps > kDeviceMaxTaps) {
     return false;
   }
-  if (delay_line_size < 0 || delay_line_size > kDeviceMaxDelayLine) {
+  if (delay_line_size <= 0 || delay_line_size > kDeviceMaxDelayLine) {
     return false;
+  }
+  for (const auto& tap : step.taps) {
+    if (!std::isfinite(tap.delay_samples) || tap.delay_samples < 0 ||
+        tap.delay_samples > kMaxProfileDelaySamples ||
+        std::ceil(tap.delay_samples) + kTdlFracFilterTaps > delay_line_size) return false;
   }
 
   out.has_tdl = 1;
@@ -568,19 +575,20 @@ void refresh_all_taps_from_live(DeviceLinkState& s, int n_taps, const TapSpec* t
   // runtime fading-swap is deferred (would require fresh sub-ray draws
   // + a regenerated coarse grid).
   if (s.has_tdl == 0) return;
-  if (n_taps <= 0) {
-    // Empty taps array means "no kernel work" — set n_taps to 1 and zero
-    // the leading tap so the kernel produces unit-impulse output rather
-    // than reading uninitialised memory. Treat this as a degraded but
-    // defined state; the control plane validator (F2) already rejects
-    // empty taps arrays, so this branch is paranoia.
-    s.n_taps = 0;
-    return;
+  if (n_taps <= 0 || n_taps > kDeviceMaxTaps || taps == nullptr) {
+    throw std::runtime_error("CUDA profile exceeds device tap capacity");
   }
-  if (n_taps > kDeviceMaxTaps) n_taps = kDeviceMaxTaps;
+  for (int k = 0; k < n_taps; ++k) {
+    if (!std::isfinite(taps[k].delay_samples) || taps[k].delay_samples < 0 ||
+        taps[k].delay_samples > kMaxProfileDelaySamples) {
+      throw std::runtime_error("CUDA profile exceeds device delay capacity");
+    }
+  }
   s.n_taps = n_taps;
+  double max_delay = 0.0;
   for (int k = 0; k < n_taps; ++k) {
     const TapSpec& t = taps[k];
+    max_delay = std::max(max_delay, t.delay_samples);
     const double tau_int = std::floor(t.delay_samples);
     s.tap_delay_int[k] = static_cast<int>(tau_int);
     s.tap_frac[k]      = static_cast<float>(t.delay_samples - tau_int);
@@ -601,6 +609,7 @@ void refresh_all_taps_from_live(DeviceLinkState& s, int n_taps, const TapSpec* t
       s.tap_rayleigh_factor[k] = 1.0F;
     }
   }
+  s.delay_line_size = static_cast<int>(std::ceil(max_delay)) + kTdlFracFilterTaps;
   // Zero the unused tail so the kernel's read-from-the-end safety on a
   // shorter profile doesn't read whatever was left from the previous
   // (longer) profile.

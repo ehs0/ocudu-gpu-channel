@@ -45,7 +45,72 @@ struct TelemetrySnapshot {
   std::uint32_t live_seqno        = 0;
   MutableParams live;
   bool          profile_active    = false;
+  bool          matrix_profile_active = false;
+  int           nt = 1;
+  int           nr = 1;
   std::uint64_t warmup_until_slot = 0;
+
+  // Latched boundaries for the most recent profile warmup cycle. Unlike
+  // warmup_until_slot (which returns to zero as soon as warmup completes),
+  // these remain in the snapshot until the next profile activation. This
+  // lets a slower telemetry publisher report a short warmup that began and
+  // ended entirely between two PUB ticks without stretching it to the
+  // subscriber's observation interval.
+  std::uint64_t warmup_event_seq      = 0;
+  std::uint32_t warmup_profile_seqno  = 0;
+  std::uint64_t warmup_begin_slot     = 0;
+  std::uint64_t warmup_end_slot       = 0;
+  std::uint64_t warmup_begin_unix_ns  = 0;
+  std::uint64_t warmup_end_unix_ns    = 0;
+
+  // Broker-observed timing for the most recent destination superposition
+  // containing this edge. Every edge feeding the same destination receives
+  // the same values: the backend shapes and sums those edges in one call, so
+  // there is no truthful per-edge execution time. `slot_deadline_us` is the
+  // wall-clock duration represented by `processed_samples` at
+  // `sample_rate_hz`; `channel_process_us` is the wall time spent inside
+  // ChannelProcessor::process_superposition(). Zero means that no IQ serve
+  // has completed yet.
+  std::uint64_t processed_samples  = 0;
+  std::uint64_t sample_rate_hz     = 0;
+  double        slot_deadline_us   = 0.0;
+  double        channel_process_us = 0.0;
+
+  // Run-cumulative receiver-scoped timing statistics. These are updated for
+  // every completed process_superposition() call, not at the slower telemetry
+  // publication cadence, so short deadline misses cannot disappear between
+  // PUB samples. Percentiles are derived from a fixed 1 us histogram owned by
+  // the destination server thread.
+  std::uint64_t slot_process_count        = 0;
+  std::uint64_t slot_deadline_miss_count  = 0;
+  double        slot_process_max_us       = 0.0;
+  double        slot_process_p95_us       = 0.0;
+  double        slot_process_p99_us       = 0.0;
+
+  // Fixed-duration nominal-slot statistics reconstructed from the arbitrary
+  // process calls above. A call crossing a nominal boundary contributes wall
+  // time to each side in proportion to its overlapping sample count. These
+  // values therefore preserve total measured process time but are estimates,
+  // because fixed CUDA launch overhead cannot be divided after the fact.
+  std::uint64_t nominal_slot_samples             = 0;
+  std::uint64_t nominal_pending_samples          = 0;
+  double        nominal_pending_estimated_us     = 0.0;
+  double        nominal_latest_estimated_us      = 0.0;
+  std::uint64_t nominal_slot_count               = 0;
+  std::uint64_t nominal_deadline_miss_count      = 0;
+  double        nominal_process_max_us           = 0.0;
+  double        nominal_process_p95_us           = 0.0;
+  double        nominal_process_p99_us           = 0.0;
+
+  // Fragment diagnostics remain separate from deadline performance. A
+  // fragment call has a sample count different from nominal_slot_samples; a
+  // fragmented nominal slot is any reconstructed slot touched by a call that
+  // was not exactly aligned to one nominal boundary.
+  std::uint64_t fragment_call_count              = 0;
+  std::uint64_t fragment_sample_count            = 0;
+  std::uint64_t fragment_min_samples             = 0;
+  std::uint64_t fragment_max_samples             = 0;
+  std::uint64_t fragmented_nominal_slot_count    = 0;
 };
 
 // v2 ProfileShadow — the multi-tap payload a `profile_swap` REQ writes.
@@ -67,6 +132,43 @@ struct ProfileShadow {
   // a YAML reload re-establishes the dispatch.
   bool       force = false;
 };
+
+// One complete, physical-link-scoped MIMO channel update. Lane order is the
+// canonical row-major topology order: lane = rx_port * nt + tx_port. The
+// dimensions are fixed when the topology is prepared; a runtime request may
+// replace every lane profile, but may never resize the link or omit a lane.
+// This is deliberately a bounded POD shadow so the control thread can publish
+// it with the same release/acquire seqno contract as scalar profile_swap.
+struct MatrixProfileShadow {
+  int           nt = 0;
+  int           nr = 0;
+  int           lane_count = 0;
+  ProfileShadow lanes[kMaxCorrelatedLanes]{};
+};
+
+// Only gain/phase changes can reuse a matrix's input history. Compare named
+// fields (not POD bytes/padding), and do not hide delay changes with a tolerance.
+inline bool matrix_history_compatible(const MatrixProfileShadow& before,
+                                      const MatrixProfileShadow& after)
+{
+  if (before.nt != after.nt || before.nr != after.nr ||
+      before.lane_count != after.lane_count) return false;
+  for (int lane = 0; lane < before.lane_count; ++lane) {
+    const auto& a = before.lanes[lane];
+    const auto& b = after.lanes[lane];
+    if (a.n_taps != b.n_taps || a.fading_enabled != b.fading_enabled ||
+        a.fading_f_d_max_hz != b.fading_f_d_max_hz ||
+        a.fading_spectrum != b.fading_spectrum ||
+        a.fading_grid_us != b.fading_grid_us || a.force != b.force) return false;
+    for (int tap = 0; tap < a.n_taps; ++tap) {
+      const auto& x = a.taps[tap];
+      const auto& y = b.taps[tap];
+      if (x.delay_samples != y.delay_samples || x.is_los != y.is_los ||
+          x.los_k_db != y.los_k_db || x.los_angle_rad != y.los_angle_rad) return false;
+    }
+  }
+  return true;
+}
 
 // One BrokerLinkControl per emulator link. The shadow buffer is initialised
 // in prepare() to mirror the per-link YAML state; the seqno starts at 0 so
@@ -96,6 +198,15 @@ struct BrokerLinkControl {
   // seqno's release-store.
   ProfileShadow              shadow_profile;
   bool                       profile_pending = false;
+
+  // Full Nr x Nt profile replacement used by externally generated channel
+  // matrices such as Sionna RT. Unlike profile_swap, each lane has its own
+  // taps. It snaps once at the physical-link boundary, so a slot can never
+  // observe a mixture of old and new channel-matrix rows.
+  MatrixProfileShadow        shadow_matrix_profile;
+  bool                       matrix_profile_pending = false;
+  // Immutable after prepare; CUDA host staging cannot apply dynamic matrices.
+  bool                       matrix_profile_supported = true;
 
   // M4.4 correlation-swap shadow, gated by the same seqno and slot rules as
   // the scalar and profile shadows.
@@ -228,8 +339,17 @@ inline bool snap_profile_from_shadow(ProfileShadow& live_profile,
   return true;
 }
 
+inline bool snap_matrix_profile_from_shadow(MatrixProfileShadow& live_profile,
+                                            BrokerLinkControl& ctl)
+{
+  if (!ctl.matrix_profile_pending) return false;
+  live_profile = ctl.shadow_matrix_profile;
+  return true;
+}
+
 // v3.0 TM1: publish a telemetry snapshot into ctl.telemetry using the
-// seqlock pattern. Single-writer (the per-link backend snap thread);
+// seqlock pattern. Single-writer (the per-link backend snap path and the
+// immediately enclosing broker server thread are the same thread);
 // no locking. Readers call read_telemetry_snapshot() which retries on
 // observed concurrent write.
 inline void publish_telemetry_snapshot(BrokerLinkControl& ctl,
@@ -278,6 +398,8 @@ inline void init_broker_link_control(BrokerLinkControl& ctl,
   ctl.shadow = yaml_initial;
   ctl.shadow_profile = ProfileShadow{};
   ctl.profile_pending = false;
+  ctl.shadow_matrix_profile = MatrixProfileShadow{};
+  ctl.matrix_profile_pending = false;
   ctl.take_effect_at_slot = 0;
   ctl.current_slot.store(0, std::memory_order_relaxed);
   ctl.seqno.store(0, std::memory_order_relaxed);

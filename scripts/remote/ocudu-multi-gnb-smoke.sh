@@ -15,14 +15,66 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "${script_dir}/common.sh"
+execution_mode="${OCUDU_MGNB_EXECUTION:-remote}"
+if [[ "${execution_mode}" == "local" ]]; then
+  repo_root="$(cd "${script_dir}/../.." && pwd)"
+  local_workspace="$(cd "${repo_root}/.." && pwd)"
+  REMOTE_WORKSPACE="${OCUDU_MGNB_WORKSPACE:-${local_workspace}}"
+  REMOTE_PROJECT_ROOT="${OCUDU_MGNB_PROJECT_ROOT:-${repo_root}}"
+  REMOTE_BUILDS_ROOT="${OCUDU_MGNB_BUILDS_ROOT:-${local_workspace}/builds}"
+  REMOTE_RESULTS_ROOT="${OCUDU_MGNB_RESULTS_ROOT:-${repo_root}/results}"
+  REMOTE_OCUDU_ROOT="${OCUDU_MGNB_OCUDU_ROOT:-${local_workspace}/ocudu}"
+  remote_sh() {
+    "$@"
+  }
+elif [[ "${execution_mode}" == "remote" ]]; then
+  # shellcheck source=common.sh
+  source "${script_dir}/common.sh"
+else
+  echo "OCUDU_MGNB_EXECUTION must be local or remote" >&2
+  exit 2
+fi
 
 duration_seconds="${OCUDU_MGNB_DURATION_SECONDS:-60}"
 build_docker="${OCUDU_MGNB_BUILD_DOCKER:-1}"
 # Non-empty = run the broker as this Docker image (docker run --gpus all
 # --network host) instead of the native build. Default = native binary.
 broker_image="${OCUDU_MGNB_BROKER_IMAGE:-}"
+# static keeps the proven topology unchanged. sionna switches only the
+# external broker/controller path; OCUDU source and its base config stay
+# untouched.
+channel_mode="${OCUDU_MGNB_CHANNEL_MODE:-static}"
+sionna_python="${OCUDU_MGNB_SIONNA_PYTHON:-}"
+sionna_update_hz="${OCUDU_MGNB_SIONNA_UPDATE_HZ:-500}"
+sionna_ready_seconds="${OCUDU_MGNB_SIONNA_READY_SECONDS:-120}"
+sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
+# Which Sionna scenario feeds the two cells. The default is the built-in street
+# canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
+# with the serving and intercell models works, which is how the OpenStreetMap
+# SUTD campus scene is selected.
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/multi-gnb.json}"
+# Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
+# to the 5GC from outside the compose network; the base compose publishes 9999
+# only so a human can poke it, and that mapping is enough to abort the whole
+# run on a machine where something else already listens there.
+fivegc_host_port="${OCUDU_MGNB_5GC_HOST_PORT:-}"
+# Seconds to keep the whole stack -- cells, UEs, broker, bridge and Web UI --
+# running after the verdict is in. 0 tears down as soon as both UEs ping, which
+# is what a gate wants and what makes the Web UI unwatchable; set it to look at
+# the dashboard while the channel is still being traced.
+hold_seconds="${OCUDU_MGNB_HOLD_SECONDS:-0}"
+# The gNB releases an idle UE after its 120 s default, which ends the demo a
+# couple of minutes after the acceptance ping: the UE drops to idle and the
+# dashboard loses it. These two are the pair the native gate uses -- the timer
+# raises the gNB's own bound (it enforces [1, 7200]) and the keepalive gives
+# the DRB actual user-plane traffic to carry. Both are opt-in, so an unset run
+# keeps the proven behaviour byte for byte.
+ue_inactivity_seconds="${OCUDU_MGNB_UE_INACTIVITY_SECONDS:-}"
+ue_keepalive_seconds="${OCUDU_MGNB_UE_KEEPALIVE_SECONDS:-0}"
+# Which broker topology to run. Empty picks the one that matches the channel
+# mode; see where topology_name is resolved for why the two differ.
+topology_name="${OCUDU_MGNB_TOPOLOGY:-}"
+cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: the two UEs camp on different cells so they do not
 # collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
 # any startup race. 0 disables it.
@@ -31,15 +83,27 @@ ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
 # SRSUE_PRACH_PREAMBLE_INDEX override used to give each UE its own preamble.
 srsran_ref="${SRSRAN_4G_REF:-master}"
 
-case "${REMOTE_PROJECT_ROOT}" in
-  "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
-  *) remote_dest="${REMOTE_PROJECT_ROOT}" ;;
-esac
-echo "syncing working tree to ${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}"
-rsync -az --delete \
-  --exclude '.git' --exclude 'build*' --exclude '.config' \
-  -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
-  "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
+if [[ "${channel_mode}" != "static" && "${channel_mode}" != "sionna" ]]; then
+  echo "OCUDU_MGNB_CHANNEL_MODE must be static or sionna" >&2
+  exit 2
+fi
+broker_image_arg="${broker_image:-__native__}"
+sionna_python_arg="${sionna_python:-__default__}"
+cuda_compiler_arg="${cuda_compiler:-__default__}"
+
+if [[ "${execution_mode}" == "remote" ]]; then
+  case "${REMOTE_PROJECT_ROOT}" in
+    "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
+    *) remote_dest="${REMOTE_PROJECT_ROOT}" ;;
+  esac
+  echo "syncing working tree to ${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}"
+  rsync -az --delete \
+    --exclude '.git' --exclude 'build*' --exclude '.config' \
+    -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
+    "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
+else
+  echo "running local 2-gNB/2-UE smoke from ${REMOTE_PROJECT_ROOT}"
+fi
 
 remote_sh bash -s -- \
   "${REMOTE_WORKSPACE}" \
@@ -51,7 +115,20 @@ remote_sh bash -s -- \
   "${build_docker}" \
   "${srsran_ref}" \
   "${ue_stagger_seconds}" \
-  "${broker_image}" <<'REMOTE'
+  "${broker_image_arg}" \
+  "${channel_mode}" \
+  "${sionna_python_arg}" \
+  "${sionna_update_hz}" \
+  "${sionna_ready_seconds}" \
+  "${sionna_web_port}" \
+  "${sionna_scenario}" \
+  "${cuda_compiler_arg}" \
+  "${execution_mode}" \
+  "${fivegc_host_port}" \
+  "${hold_seconds}" \
+  "${ue_inactivity_seconds:-__unset__}" \
+  "${ue_keepalive_seconds}" \
+  "${topology_name:-__default__}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -63,8 +140,52 @@ duration_seconds="$6"
 build_docker="$7"
 srsran_ref="$8"
 ue_stagger_seconds="$9"
-# Default-empty: an empty trailing arg can be dropped in ssh transport.
-broker_image="${10:-}"
+broker_image="${10}"
+channel_mode="${11}"
+sionna_python="${12}"
+sionna_update_hz="${13}"
+sionna_ready_seconds="${14}"
+sionna_web_port="${15}"
+sionna_scenario="${16}"
+cuda_compiler="${17}"
+execution_mode="${18}"
+fivegc_host_port="${19}"
+hold_seconds="${20}"
+ue_inactivity_seconds="${21}"
+ue_keepalive_seconds="${22}"
+topology_name="${23}"
+[[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
+  echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
+  exit 2
+}
+[[ "${ue_inactivity_seconds}" == "__unset__" ]] && ue_inactivity_seconds=""
+# The bound is the gNB's own: apps/units/o_cu_cp/cu_cp/cu_cp_unit_config_cli11_schema.cpp
+# declares range(1, 7200), and anything outside it makes the cell refuse to start.
+if [[ -n "${ue_inactivity_seconds}" ]]; then
+  [[ "${ue_inactivity_seconds}" =~ ^[1-9][0-9]*$ && "${ue_inactivity_seconds}" -le 7200 ]] || {
+    echo "OCUDU_MGNB_UE_INACTIVITY_SECONDS must be an integer in [1, 7200]" >&2
+    exit 2
+  }
+fi
+# ping refuses an interval below 0.2 s for a non-root caller and the flood it
+# would become is not what this is for; 60 s is past every inactivity timer.
+[[ "${ue_keepalive_seconds}" =~ ^(0|0?\.[0-9]+|[1-9][0-9]*(\.[0-9]+)?)$ ]] || {
+  echo "OCUDU_MGNB_UE_KEEPALIVE_SECONDS must be 0 or a positive number" >&2
+  exit 2
+}
+if [[ "${ue_keepalive_seconds}" != "0" ]]; then
+  awk -v value="${ue_keepalive_seconds}" 'BEGIN { exit !(value >= 0.2 && value <= 60) }' || {
+    echo "OCUDU_MGNB_UE_KEEPALIVE_SECONDS must be 0 or within [0.2, 60] seconds" >&2
+    exit 2
+  }
+fi
+# An empty list is what tells Compose to publish nothing at all.
+if [[ -n "${fivegc_host_port}" ]]; then
+  fivegc_ports="      - \"${fivegc_host_port}:9999/tcp\""
+else
+  fivegc_ports="      []"
+fi
+[[ "${broker_image}" == "__native__" ]] && broker_image=""
 
 expand_remote_path() {
   case "$1" in
@@ -85,17 +206,101 @@ project_root="$(expand_remote_path "${project_root}")"
 builds_root="$(expand_remote_path "${builds_root}")"
 results_root="$(expand_remote_path "${results_root}")"
 ocudu_root="$(expand_remote_path "${ocudu_root}")"
+if [[ "${sionna_python}" == "__default__" ]]; then
+  sionna_python="${workspace}/venvs/sionna/bin/python"
+else
+  sionna_python="$(expand_remote_path "${sionna_python}")"
+fi
+if [[ "${cuda_compiler}" == "__default__" ]]; then
+  if [[ "${execution_mode}" == "local" && -x /opt/conda/envs/torch/bin/nvcc ]]; then
+    cuda_compiler=/opt/conda/envs/torch/bin/nvcc
+  else
+    cuda_compiler="${workspace}/tools/cuda-12.8.1/bin/nvcc"
+  fi
+else
+  cuda_compiler="$(expand_remote_path "${cuda_compiler}")"
+fi
 
-if [[ ! -f "${workspace}/tools/env.sh" ]]; then
+if [[ -f "${workspace}/tools/env.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "${workspace}/tools/env.sh"
+elif [[ "${execution_mode}" == "remote" ]]; then
   echo "missing ${workspace}/tools/env.sh; run scripts/remote/bootstrap-user-tools.sh first" >&2
   exit 1
 fi
-# shellcheck source=/dev/null
-source "${workspace}/tools/env.sh"
+command -v cmake >/dev/null 2>&1 || { echo "cmake not found" >&2; exit 1; }
+if [[ ! -x "${cuda_compiler}" ]]; then
+  echo "CUDA compiler not found or not executable: ${cuda_compiler}" >&2
+  echo "set OCUDU_MGNB_CUDA_COMPILER to the nvcc path" >&2
+  exit 1
+fi
 
 if [[ ! -d "${ocudu_root}/docker" ]]; then
   echo "missing OCUDU checkout with docker directory: ${ocudu_root}" >&2
   exit 1
+fi
+if [[ "${execution_mode}" == "local" ]]; then
+  command -v docker >/dev/null 2>&1 || { echo "docker not found" >&2; exit 1; }
+  if ! docker info >/dev/null 2>&1; then
+    if sudo -n docker info >/dev/null 2>&1; then
+      docker_bin="$(command -v docker)"
+      docker() {
+        sudo -n env \
+          GNB_CONFIG_PATH="${GNB_CONFIG_PATH:-}" \
+          GNB1_CONFIG_PATH="${GNB1_CONFIG_PATH:-}" \
+          OCUDU_ZMQ_DOCKERFILE="${OCUDU_ZMQ_DOCKERFILE:-}" \
+          OS="${OS:-}" OS_VERSION="${OS_VERSION:-}" \
+          "${docker_bin}" "$@"
+      }
+      echo "Docker socket requires sudo; using passwordless sudo for this run"
+    else
+      echo "cannot access the Docker daemon; grant this user Docker socket access" >&2
+      exit 1
+    fi
+  fi
+  if ! nvidia-smi -L >/dev/null 2>&1; then
+    echo "NVIDIA GPU/driver is not accessible; the CUDA and Sionna test cannot run" >&2
+    exit 1
+  fi
+  if [[ "$(systemd-detect-virt 2>/dev/null || true)" == "lxc" ]] && \
+     docker image inspect hello-world:latest >/dev/null 2>&1 && \
+     ! docker run --rm hello-world:latest >/dev/null 2>&1; then
+    echo "nested Docker cannot create a network namespace in this LXC/LXD guest" >&2
+    echo "fix the host LXC/LXD AppArmor profile, restart the guest, then rerun" >&2
+    exit 1
+  fi
+fi
+
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ "${sionna_web_port}" =~ ^[1-9][0-9]*$ && "${sionna_web_port}" -le 65535 ]] || {
+    echo "invalid OCUDU_MGNB_WEB_PORT" >&2
+    exit 2
+  }
+  case "${sionna_scenario}" in
+    /*) ;;
+    *) sionna_scenario="${project_root}/${sionna_scenario}" ;;
+  esac
+  if [[ ! -f "${sionna_scenario}" ]]; then
+    echo "missing Sionna scenario: ${sionna_scenario}" >&2
+    exit 2
+  fi
+  if [[ ! -x "${sionna_python}" ]]; then
+    echo "missing Sionna Python: ${sionna_python}" >&2
+    echo "create ${workspace}/venvs/sionna and install scripts/sionna_rt/requirements.txt" >&2
+    exit 2
+  fi
+  if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
+    optix_file="$(find "${workspace}/local" -type f -name 'libnvoptix.so*' -print -quit 2>/dev/null || true)"
+    if [[ -n "${optix_file}" ]]; then
+      export DRJIT_LIBOPTIX_PATH="${optix_file}"
+      export LD_LIBRARY_PATH="$(dirname "${optix_file}"):${LD_LIBRARY_PATH:-}"
+    fi
+  fi
+  if ! "${sionna_python}" -c 'import sionna.rt, zmq' >/dev/null 2>&1; then
+    echo "${sionna_python} cannot import sionna.rt and zmq" >&2
+    "${sionna_python}" -c 'import sionna.rt, zmq' 2>&1 | tail -n 12 >&2 || true
+    exit 2
+  fi
 fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -110,6 +315,7 @@ rrc0=0; rrc1=0; pdu0=0; pdu1=0; ping0=0; ping1=0
 gnb0_up=0; gnb1_up=0
 broker_status=0; rx_starvations=0; tx_queue_overflows=0; tx_sequence_gaps=0; zmq_errors=0
 gnb0_overflow=0; gnb1_overflow=0
+sionna_updates=0; telemetry_ok=0
 
 write_summary() {
   local status="$1"
@@ -118,6 +324,7 @@ write_summary() {
 {
   "timestamp": "${timestamp}",
   "status": "${status}",
+  "channel_mode": "${channel_mode}",
   "duration_seconds": ${duration_seconds},
   "gnb0": { "cell_up": ${gnb0_up}, "rt_overflow": ${gnb0_overflow} },
   "gnb1": { "cell_up": ${gnb1_up}, "rt_overflow": ${gnb1_overflow} },
@@ -128,6 +335,8 @@ write_summary() {
   "tx_queue_overflows": ${tx_queue_overflows},
   "tx_sequence_gaps": ${tx_sequence_gaps},
   "zmq_errors": ${zmq_errors},
+  "sionna_updates": ${sionna_updates},
+  "telemetry_ok": ${telemetry_ok},
   "log_dir": "${log_dir}"
 }
 JSON
@@ -139,7 +348,7 @@ JSON
 # --- build ---------------------------------------------------------------------
 cmake -S "${project_root}" -B "${cuda_build}" \
   -DCMAKE_BUILD_TYPE=Release -DOCUDU_GPU_CHANNEL_ENABLE_CUDA=ON \
-  -DCMAKE_CUDA_COMPILER="${workspace}/tools/cuda-12.8.1/bin/nvcc" \
+  -DCMAKE_CUDA_COMPILER="${cuda_compiler}" \
   -DOCUDU_GPU_CHANNEL_CUDA_ARCHITECTURES=120 >"${log_dir}/cmake-configure.log" 2>&1
 cmake --build "${cuda_build}" -j"$(nproc)" >"${log_dir}/cmake-build.log" 2>&1
 
@@ -152,20 +361,49 @@ srsue_dockerfile="${config_dir}/Dockerfile.srsue"
 
 # One gNB config per cell from the shared ZMQ base: rewrite the ZMQ ports and
 # add a distinct PCI, gnb_id and node name so the two cells are independent.
+#
+# The base is the 4T4R rank-1 fixture, so each cell carries FOUR antennas in
+# both directions and each srsUE keeps one: per UE the downlink is a 1x4 row
+# and the uplink a 4x1 column, still rank-1 MISO/SIMO. Everything that fixture
+# is careful about carries over unchanged and is load-bearing -- ue_dedicated
+# with DCI 0_1/1_1, CSI-RS off, and above all the pusch.max_ue_mcs cap, without
+# which UL 4R registration is a coin flip (root-caused 2026-08-17).
+#
+# The gains go to 0 for the same reason the native renderers zero them: the
+# fixture carries the B210's tx_gain/rx_gain of 75, and OCUDU's ZMQ device
+# refuses anything above 0 dB ("Channel gain must be <= 0.0 dB for
+# ZMQ-device"), which kills the cell right after the DU is created.
 gen_gnb_config() {
-  # $1 dst  $2 tx_port  $3 rx_port  $4 pci  $5 gnb_id  $6 ran_node_name
-  awk -v tx="$2" -v rx="$3" -v pci="$4" -v gid="$5" -v nm="$6" '
-    /^[[:space:]]*device_args:/ {
-      print "  device_args: tx_port=tcp://*:" tx ",rx_port=tcp://host.docker.internal:" rx ",base_srate=23.04e6"
-      next
-    }
+  # $1 dst  $2 first_port  $3 pci  $4 gnb_id  $5 ran_node_name
+  #
+  # A cell takes eight consecutive ports from $2: tx on the even offsets and
+  # rx on the odd ones, port by port, which is the pairing both the fixture's
+  # device_args and the broker topology's gnbN_pM devices use. The two cells
+  # take disjoint blocks so a stale socket cannot cross between them.
+  #
+  # inactivity_timer goes inside the fixture's existing cu_cp block, not after
+  # it: a second top-level `cu_cp:` mapping is a duplicate key, not an override.
+  local base="$2" args="" port
+  for port in 0 1 2 3; do
+    args+="tx_port${port}=tcp://*:$((base + port * 2)),"
+  done
+  for port in 0 1 2 3; do
+    args+="rx_port${port}=tcp://host.docker.internal:$((base + port * 2 + 1)),"
+  done
+  args+="base_srate=23.04e6"
+  awk -v args="${args}" -v pci="$3" -v gid="$4" -v nm="$5" \
+      -v inactivity="${ue_inactivity_seconds}" '
+    /^[[:space:]]*device_args:/ { print "  device_args: " args; next }
+    /^[[:space:]]*tx_gain:/ { print "  tx_gain: 0"; next }
+    /^[[:space:]]*rx_gain:/ { print "  rx_gain: 0"; next }
     { print }
+    /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
     END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
-  ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml" >"$1"
+  ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
 }
-gen_gnb_config "${gnb0_config}" 3000 3001 1 411 gnb0
-gen_gnb_config "${gnb1_config}" 3002 3003 2 412 gnb1
+gen_gnb_config "${gnb0_config}" 3000 1 411 gnb0
+gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
 
 awk '
   { print }
@@ -225,9 +463,22 @@ services:
     networks:
       ran:
         ipv4_address: ${OPEN5GS_IP}
+    # The base compose publishes 9999 on the host, which collides with anything
+    # else already listening there and takes the whole stack down before a
+    # single cell comes up. Nothing in this gate reaches the 5GC from outside
+    # the compose network, so the mapping is replaced rather than merged --
+    # !override is what stops Compose appending to the base list.
+    ports: !override
+${fivegc_ports}
   gnb:
+    # One published port per transmit antenna: these are the four the cell
+    # binds, and the broker connects in to each. The receive ports are dialled
+    # out to host.docker.internal and need no mapping.
     ports:
       - "3000:3000"
+      - "3002:3002"
+      - "3004:3004"
+      - "3006:3006"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -259,7 +510,10 @@ services:
       metrics:
         ipv4_address: ${metrics_prefix}.4
     ports:
-      - "3002:3002"
+      - "3010:3010"
+      - "3012:3012"
+      - "3014:3014"
+      - "3016:3016"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -385,13 +639,23 @@ export OCUDU_ZMQ_DOCKERFILE="${ocudu_dockerfile}"
 export OS=ubuntu OS_VERSION=24.04
 srsue_image="ocudu-gpu-channel/srsue-zmq:${srsran_ref}"
 broker_pid=""
+sionna_pid=""
+telemetry_pid=""
 ue0_pid=""
 ue1_pid=""
+keepalive0_pid=""
+keepalive1_pid=""
 
 cleanup() {
   set +e
+  # The keepalive goes first: no reason to keep injecting user-plane traffic
+  # into a stack that is being torn down.
+  [[ -n "${keepalive0_pid}" ]] && kill "${keepalive0_pid}" >/dev/null 2>&1
+  [[ -n "${keepalive1_pid}" ]] && kill "${keepalive1_pid}" >/dev/null 2>&1
   [[ -n "${ue0_pid}" ]] && kill "${ue0_pid}" >/dev/null 2>&1
   [[ -n "${ue1_pid}" ]] && kill "${ue1_pid}" >/dev/null 2>&1
+  [[ -n "${telemetry_pid}" ]] && kill "${telemetry_pid}" >/dev/null 2>&1
+  [[ -n "${sionna_pid}" ]] && kill "${sionna_pid}" >/dev/null 2>&1
   [[ -n "${broker_pid}" ]] && kill "${broker_pid}" >/dev/null 2>&1
   [[ -n "${broker_image}" ]] && docker rm -f ocudu_broker_mgnb >/dev/null 2>&1
   docker rm -f ocudu_srsue_0 ocudu_srsue_1 >/dev/null 2>&1
@@ -425,11 +689,65 @@ done
 echo "open5gs: ${h:-?}"
 
 # CUDA broker on the multi-gNB topology (4 nodes, inter-cell interference).
+# The proven static path remains the default. Sionna mode selects the external
+# runtime profiles on the same validated topology and enables control/telemetry
+# without changing OCUDU. A Sionna run is stopped explicitly after attach/ping so tracing setup
+# time does not consume the radio validation window.
+# The static gate's topology hand-tunes the two cells apart (serving 6 dB vs
+# intercell 20 dB of fixed path loss) and a profile_swap replaces only a link's
+# taps, so those steps would sit on top of every ray-traced channel. Sionna
+# mode therefore defaults to the bare-anchor topology, where the scene alone
+# decides which cell is stronger.
+if [[ "${topology_name}" == "__default__" ]]; then
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    topology_name="examples/topology.sionna-multi-gnb.cuda.yaml"
+  else
+    topology_name="examples/topology.multi-gnb.cuda.yaml"
+  fi
+fi
+case "${topology_name}" in
+  /*) topology_host="${topology_name}" ;;
+  *) topology_host="${project_root}/${topology_name}" ;;
+esac
+topology_container="/work/${topology_name#"${project_root}/"}"
+[[ -f "${topology_host}" ]] || { echo "missing topology: ${topology_host}" >&2; exit 2; }
+
+# The telemetry topic is the broker's own link key, "from>to:model", so the
+# list of links to expect has to come from the topology the broker was handed.
+# check_feed.py's built-in default names ten ":sionna_rt" links, which belongs
+# to topology.sionna-2gnb-2ue.cuda.yaml, not to this gate's eight
+# serving/intercell ones -- left implicit it reports every real link as
+# missing while the feed is perfectly healthy.
+topology_links() {
+  awk '
+    /^links:/ { in_links = 1; next }
+    /^[^[:space:]]/ { in_links = 0 }
+    in_links && $1 == "-" && $2 == "from:" { from = $3; next }
+    in_links && $1 == "to:" { to = $2; next }
+    in_links && $1 == "model:" {
+      printf "%s%s>%s:%s", separator, from, to, $2
+      separator = ","
+    }
+    END { printf "\n" }
+  ' "$1"
+}
+broker_duration="${duration_seconds}s"
+broker_extra=()
+if [[ "${channel_mode}" == "sionna" ]]; then
+  broker_duration="0s"
+  broker_extra=(
+    --control-endpoint 'tcp://*:5559'
+    --telemetry-endpoint 'tcp://*:5560'
+    --telemetry-rate-hz 500
+  )
+fi
+
 # Native binary by default; container image when OCUDU_MGNB_BROKER_IMAGE is set.
 if [[ -z "${broker_image}" ]]; then
   "${cuda_build}/ocudu-gpu-channel" \
-    --config "${project_root}/examples/topology.multi-gnb.cuda.yaml" \
-    --duration "${duration_seconds}s" >"${log_dir}/broker.log" 2>&1 &
+    --config "${topology_host}" \
+    --duration "${broker_duration}" "${broker_extra[@]}" \
+    >"${log_dir}/broker.log" 2>&1 &
   broker_pid="$!"
 else
   echo "broker mode: container image ${broker_image}" >"${log_dir}/broker-mode.txt"
@@ -437,9 +755,59 @@ else
     --gpus all --network host \
     -v "${project_root}:/work:ro" \
     "${broker_image}" \
-    --config "/work/examples/topology.multi-gnb.cuda.yaml" \
-    --duration "${duration_seconds}s" >"${log_dir}/broker.log" 2>&1 &
+    --config "${topology_container}" \
+    --duration "${broker_duration}" "${broker_extra[@]}" \
+    >"${log_dir}/broker.log" 2>&1 &
   broker_pid="$!"
+fi
+
+if [[ "${channel_mode}" == "sionna" ]]; then
+  # Wait for the REP control server before starting the sole channel writer.
+  for _ in $(seq 1 50); do
+    grep -q 'event=control_start' "${log_dir}/broker.log" 2>/dev/null && break
+    kill -0 "${broker_pid}" 2>/dev/null || write_summary "broker_failed_before_sionna" 1
+    sleep 0.1
+  done
+  if ! grep -q 'event=control_start' "${log_dir}/broker.log" 2>/dev/null; then
+    write_summary "control_server_not_ready" 1
+  fi
+
+  "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
+    --python "${sionna_python}" \
+    --scenario "${sionna_scenario}" \
+    --control-endpoint tcp://127.0.0.1:5559 \
+    --telemetry-endpoint tcp://127.0.0.1:5560 \
+    --duration 0 \
+    --update-hz "${sionna_update_hz}" \
+    --port "${sionna_web_port}" \
+    --ready-seconds "${sionna_ready_seconds}" \
+    --status-jsonl "${log_dir}/sionna-status.jsonl" \
+    >"${log_dir}/sionna-bridge.log" 2>&1 &
+  sionna_pid="$!"
+
+  # Do not start the radios against the topology's -100 dB placeholder. The
+  # first successful record means all ten profiles were committed atomically.
+  sionna_ready=0
+  for _ in $(seq 1 "${sionna_ready_seconds}"); do
+    if grep -q 'event=sionna_web_ui_ready' "${log_dir}/sionna-bridge.log" 2>/dev/null; then
+      sionna_ready=1
+      break
+    fi
+    kill -0 "${sionna_pid}" 2>/dev/null || break
+    sleep 1
+  done
+  if [[ "${sionna_ready}" -ne 1 ]]; then
+    write_summary "sionna_bridge_not_ready" 2
+  fi
+  sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
+  echo "Sionna Web UI: http://127.0.0.1:${sionna_web_port}"
+
+  expected_links="$(topology_links "${topology_host}")"
+  [[ -n "${expected_links}" ]] || write_summary "topology_has_no_links" 2
+  "${sionna_python}" "${project_root}/scripts/telemetry/check_feed.py" \
+    --endpoint tcp://127.0.0.1:5560 --duration 10 --links "${expected_links}" \
+    >"${log_dir}/telemetry-check.json" 2>&1 &
+  telemetry_pid="$!"
 fi
 
 "${compose[@]}" up -d gnb gnb1 >"${log_dir}/docker-gnb-up.log" 2>&1
@@ -498,7 +866,47 @@ ping_ue() {
 [[ "${rrc0}" -eq 1 && "${pdu0}" -eq 1 ]] && ping0="$(ping_ue ocudu_srsue_0)"
 [[ "${rrc1}" -eq 1 && "${pdu1}" -eq 1 ]] && ping1="$(ping_ue ocudu_srsue_1)"
 
+# Keep the DRBs carrying traffic so the gNB has no idle UE to release. Started
+# only after the verdict is in, so it cannot manufacture the attach it is meant
+# to preserve.
+keepalive_ue() {
+  # $1 container name
+  docker exec "$1" sh -lc '
+      if ip netns list 2>/dev/null | grep -q ue1; then ns="ip netns exec ue1"; else ns=""; fi
+      exec $ns ping -I tun_srsue -i '"${ue_keepalive_seconds}"' 10.45.1.1
+    ' >/dev/null 2>&1 &
+}
+if [[ "${ue_keepalive_seconds}" != "0" ]]; then
+  [[ "${ping0}" -eq 1 ]] && { keepalive_ue ocudu_srsue_0; keepalive0_pid="$!"; }
+  [[ "${ping1}" -eq 1 ]] && { keepalive_ue ocudu_srsue_1; keepalive1_pid="$!"; }
+  printf 'UE keepalive every %ss\n' "${ue_keepalive_seconds}"
+fi
+
+# Hold the live stack open so the dashboard can be watched. Everything stays
+# running: both cells keep serving, the UEs keep their PDU sessions, and the
+# bridge keeps re-tracing the moving UEs into the broker. Ctrl-C cuts the hold
+# short and still runs the normal teardown and summary.
+if [[ "${hold_seconds}" -gt 0 ]]; then
+  if [[ "${channel_mode}" == "sionna" ]]; then
+    printf 'holding the stack for %ss -- Web UI: http://127.0.0.1:%s\n' \
+      "${hold_seconds}" "${sionna_web_port}"
+  else
+    printf 'holding the stack for %ss\n' "${hold_seconds}"
+  fi
+  sleep "${hold_seconds}" || true
+fi
+
 set +e
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ -n "${telemetry_pid}" ]] && { wait "${telemetry_pid}"; telemetry_ok=$(( $? == 0 )); telemetry_pid=""; }
+  [[ -n "${sionna_pid}" ]] && { kill -INT "${sionna_pid}" >/dev/null 2>&1; wait "${sionna_pid}" >/dev/null 2>&1; sionna_pid=""; }
+  sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
+  if [[ -z "${broker_image}" ]]; then
+    kill -INT "${broker_pid}" >/dev/null 2>&1
+  else
+    docker stop -t 10 ocudu_broker_mgnb >/dev/null 2>&1
+  fi
+fi
 wait "${broker_pid}"; broker_status="$?"; broker_pid=""
 docker rm -f ocudu_srsue_0 ocudu_srsue_1 >/dev/null 2>&1
 [[ -n "${ue0_pid}" ]] && { kill "${ue0_pid}" >/dev/null 2>&1; wait "${ue0_pid}" >/dev/null 2>&1; }
@@ -527,6 +935,9 @@ zmq_errors="$(extract_counter zmq_errors "${broker_stop}")"
 [[ "${rx_starvations}" -ne 0 ]] && echo "note: rx_starvations=${rx_starvations} (soft signal)"
 if [[ "${broker_status}" -ne 0 || "${tx_queue_overflows}" -ne 0 || "${tx_sequence_gaps}" -ne 0 || "${zmq_errors}" -ne 0 ]]; then
   write_summary "broker_failed" 1
+fi
+if [[ "${channel_mode}" == "sionna" && ( "${sionna_updates}" -eq 0 || "${telemetry_ok}" -ne 1 ) ]]; then
+  write_summary "sionna_observability_failed" 1
 fi
 if [[ "${gnb0_up}" -ne 1 || "${gnb1_up}" -ne 1 ]]; then
   write_summary "gnb_cell_blocker" 2
