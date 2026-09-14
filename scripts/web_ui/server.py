@@ -1475,11 +1475,43 @@ class WebSocketClient:
         else:
             self._sock = socket.create_connection((host, port), timeout=timeout)
         self._buffer = b""
+        self._stop: threading.Event | None = None
         try:
             self._handshake()
         except Exception:
             self.close()
             raise
+
+    def monitor_connection(
+        self, stop: threading.Event, *, idle_seconds: float = 5.0,
+        pong_seconds: float = 10.0, poll_seconds: float = 0.25,
+    ) -> None:
+        """Enable interruptible reads after the five-second handshake.
+
+        Liveness is independent of scheduler report freshness. Poll timeouts
+        stay inside _read_exactly so no partially parsed frame is discarded.
+        """
+        self._stop = stop
+        self._idle_seconds = idle_seconds
+        self._pong_seconds = pong_seconds
+        self._last_frame_at = time.monotonic()
+        self._ping_payload: bytes | None = None
+        self._pong_deadline = 0.0
+        self._sock.settimeout(poll_seconds)
+
+    def _check_liveness(self) -> None:
+        if self._stop is None:
+            return
+        if self._stop.is_set():
+            raise WebSocketError("metrics reader stopped")
+        now = time.monotonic()
+        if self._ping_payload is not None:
+            if now >= self._pong_deadline:
+                raise WebSocketError("heartbeat Pong timed out")
+        elif now - self._last_frame_at >= self._idle_seconds:
+            self._ping_payload = secrets.token_bytes(8)
+            self._pong_deadline = now + self._pong_seconds
+            self._send_control(WS_OP_PING, self._ping_payload)
 
     def _handshake(self) -> None:
         key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
@@ -1518,8 +1550,15 @@ class WebSocketClient:
             raise WebSocketError("Sec-WebSocket-Accept mismatch")
 
     def _read_exactly(self, count: int) -> bytes:
+        self._check_liveness()
         while len(self._buffer) < count:
-            chunk = self._sock.recv(65536)
+            self._check_liveness()
+            try:
+                chunk = self._sock.recv(65536)
+            except socket.timeout:
+                if self._stop is None:
+                    raise
+                continue
             if not chunk:
                 raise WebSocketError("connection closed")
             self._buffer += chunk
@@ -1564,9 +1603,16 @@ class WebSocketClient:
         while True:
             first, second = self._read_exactly(2)
             fin, opcode = first & 0x80, first & 0x0F
+            if first & 0x70 or opcode not in (
+                WS_OP_CONTINUATION, WS_OP_TEXT, WS_OP_BINARY,
+                WS_OP_CLOSE, WS_OP_PING, WS_OP_PONG,
+            ):
+                raise WebSocketError("invalid frame flags or opcode")
             if second & 0x80:
                 raise WebSocketError("server frame must not be masked")
             length = second & 0x7F
+            if opcode >= WS_OP_CLOSE and (not fin or length > 125):
+                raise WebSocketError("invalid control frame")
             if length == 126:
                 (length,) = struct.unpack("!H", self._read_exactly(2))
             elif length == 127:
@@ -1574,17 +1620,23 @@ class WebSocketClient:
             if length > WS_MAX_MESSAGE_BYTES:
                 raise WebSocketError(f"frame of {length} bytes exceeds cap")
             payload = self._read_exactly(length) if length else b""
+            if self._stop is not None:
+                self._last_frame_at = time.monotonic()
             if opcode == WS_OP_CLOSE:
                 return None
             if opcode == WS_OP_PING:
                 self._send_control(WS_OP_PONG, payload)
                 continue
             if opcode == WS_OP_PONG:
+                if self._stop is not None and payload == self._ping_payload:
+                    self._ping_payload = None
                 continue
             if opcode == WS_OP_CONTINUATION:
                 if message_opcode is None:
                     raise WebSocketError("continuation without a start frame")
             else:
+                if message_opcode is not None:
+                    raise WebSocketError("new message before final continuation")
                 message_opcode = opcode
                 chunks = []
             chunks.append(payload)
@@ -1594,7 +1646,10 @@ class WebSocketClient:
                 continue
             body = b"".join(chunks)
             if message_opcode == WS_OP_TEXT:
-                return body.decode("utf-8", "replace")
+                try:
+                    return body.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise WebSocketError("invalid text encoding") from exc
             message_opcode = None
             chunks = []
 
@@ -1630,6 +1685,7 @@ class StatusStore:
             "state": "disabled", "error": None, "messages": 0,
             "seen": None, "ue_seen": None, "ue_reports": 0,
             "received_unix_ms": None, "ue_list_unix_ms": None, "ue_list": [],
+            "ue_list_current_connection": False,
         })
 
     @staticmethod
@@ -1640,7 +1696,9 @@ class StatusStore:
             **{k: v for k, v in feed.items() if k not in ("seen", "ue_seen")},
             "age_seconds": None if age is None else round(age, 3),
             "ue_list_age_seconds": None if ue_age is None else round(ue_age, 3),
-            "ue_list_stale": ue_age is not None and ue_age > GNB_UE_REPORT_STALE_SECONDS,
+            "ue_list_stale": ue_age is not None and (
+                not feed["ue_list_current_connection"] or ue_age > GNB_UE_REPORT_STALE_SECONDS
+            ),
         }
 
     def _iteration_event(
@@ -1785,6 +1843,7 @@ class StatusStore:
                 feed["ue_list_unix_ms"] = received_unix_ms
                 feed["ue_seen"] = now
                 feed["ue_reports"] += 1
+                feed["ue_list_current_connection"] = True
             feed["received_unix_ms"] = received_unix_ms
             feed["seen"] = now
             feed["messages"] += 1
@@ -1798,6 +1857,8 @@ class StatusStore:
             feed = self._gnb_feed(gnb_id)
             feed["state"] = state
             feed["error"] = error
+            if state in ("connecting", "disconnected"):
+                feed["ue_list_current_connection"] = False
 
     def note_bad_telemetry(self) -> None:
         with self._lock:
@@ -2056,6 +2117,7 @@ class StatusStore:
                 "age_seconds": None, "ue_reports": 0, "ue_list_age_seconds": None,
                 "ue_list_stale": False, "received_unix_ms": None,
                 "ue_list": [], "ue_list_unix_ms": None,
+                "ue_list_current_connection": False,
             })
         if sionna_runtime is not None:
             sionna_runtime["process_alive"] = process_is_alive(
@@ -2235,8 +2297,8 @@ def gnb_metrics_loop(
 ) -> None:
     """Subscribe to the gNB remote-control WebSocket and store its metrics.
 
-    Read-only, like every other feed here: the only frame this ever sends is
-    the subscribe command. It reconnects with backoff because the gNB is
+    Read-only: sends a subscribe command and WebSocket heartbeat controls.
+    It reconnects with backoff because the gNB is
     started and stopped independently of the dashboard, and a gNB that is
     simply not running must not be reported as an error state forever.
     """
@@ -2249,6 +2311,7 @@ def gnb_metrics_loop(
             store.set_gnb_metrics_state("connecting", gnb_id=gnb_id)
             client = WebSocketClient(host, port, path, unix_path=unix_path)
             client.send_text(GNB_METRICS_SUBSCRIBE)
+            client.monitor_connection(stop)
             store.set_gnb_metrics_state("subscribed", gnb_id=gnb_id)
             backoff = 1.0
             while not stop.is_set():

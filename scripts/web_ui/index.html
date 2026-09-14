@@ -801,15 +801,17 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       const state=ran?.state||'disabled',rows=ran?.ue_list||[];
       const age=finite(ran?.age_seconds)?`${fmt(ran.age_seconds,1)}s ago`:'never';
       const ueReports=Number(ran?.ue_reports||0);
+      const currentConnection=ran?.ue_list_current_connection!==false;
+      const waitingReport=!currentConnection||!ueReports;
       const ueAge=finite(ran?.ue_list_age_seconds)?`${fmt(ran.ue_list_age_seconds,1)}s ago`:'never';
       const detail={disabled:'Feed disabled — start the Web UI with --gnb-metrics-endpoint.',
         connecting:'Opening the gNB remote-control WebSocket…',
         subscribed:'Subscribed — waiting for the first metrics notification.',
-        connected:`Live · ${Number(ran?.messages||0).toLocaleString()} notifications · ${ueReports.toLocaleString()} scheduler reports · last ${age}`,
+        connected:waitingReport?'Connected · waiting for scheduler report':ran?.ue_list_stale?'Connected · scheduler data stale':`Live · ${Number(ran?.messages||0).toLocaleString()} notifications · ${ueReports.toLocaleString()} scheduler reports · last ${age}`,
         disconnected:`Disconnected${ran?.error?` · ${ran.error}`:''} — retrying with backoff.`}[state]||state;
       const status=`<span class="${state==='connected'?'tag-ok':'tag-wait'}">${esc(state)}</span> · ${esc(detail)}`;
-      const stale=ueReports>0&&(ran?.ue_list_stale===true||state!=='connected')
-        ?`<div class="ran-stale">${state==='connected'?`Last scheduler report ${esc(ueAge)}`:'Connection unavailable'} — the rows below are the last reported values, not current ones.</div>`:'';
+      const stale=ueReports>0&&(ran?.ue_list_stale===true||!currentConnection||state!=='connected')
+        ?`<div class="ran-stale">${state==='connected'?(!currentConnection?'Waiting for a scheduler report on this connection':`Last scheduler report ${esc(ueAge)}`):'Connection unavailable'} — the rows below are the last reported values, not current ones.</div>`:'';
       if(!rows.length){
         const empty=state!=='connected'?'Waiting for gNB scheduler metrics.'
           :ueReports?(stale?'Last scheduler report contained no UEs.':'gNB scheduler is reporting no connected UEs.')
@@ -825,7 +827,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     function renderRanCards(ran, gnbs) {
       const entries=Object.entries(gnbs||{});
       if(!entries.length)entries.push(['gnb0',ran||{}]);
-      const fresh=entries.filter(([,feed])=>feed.state==='connected'&&Number(feed.ue_reports)>0&&feed.ue_list_age_seconds!=null&&!feed.ue_list_stale).length;
+      const fresh=entries.filter(([,feed])=>feed.state==='connected'&&feed.ue_list_current_connection!==false&&Number(feed.ue_reports)>0&&feed.ue_list_age_seconds!=null&&!feed.ue_list_stale).length;
       $('ranState').textContent=`${fresh}/${entries.length} gNB scheduler feeds fresh`;
       $('ranCards').innerHTML=entries.map(([gnbId,feed])=>renderRanGroup(gnbId,feed)).join('');
     }
