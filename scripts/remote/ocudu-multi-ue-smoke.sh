@@ -438,13 +438,33 @@ broker_pid=""
 sionna_pid=""
 sionna_updates=0
 
+# See the identical helper in ocudu-multi-gnb-smoke.sh. run_web_ui.sh is a bash
+# wrapper around the RT bridge and the Web UI server; a non-interactive shell
+# does not forward signals to its children, so signalling only the wrapper
+# leaves both children alive and `wait` never returns. Children first, then the
+# wrapper, with a bounded SIGKILL fallback.
+stop_sionna() {
+  local pid="$1" waited=0
+  [[ -n "${pid}" ]] || return 0
+  pkill -INT -P "${pid}" >/dev/null 2>&1
+  kill -INT "${pid}" >/dev/null 2>&1
+  while kill -0 "${pid}" 2>/dev/null && [[ "${waited}" -lt 30 ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  pkill -KILL -P "${pid}" >/dev/null 2>&1
+  kill -KILL "${pid}" >/dev/null 2>&1
+  wait "${pid}" >/dev/null 2>&1
+  return 0
+}
+
 cleanup() {
   set +e
   for ((i = 0; i < ue_count; i++)); do
     [[ -n "${ue_pids[i]:-}" ]] && kill "${ue_pids[i]}" >/dev/null 2>&1
   done
   [[ -n "${broker_pid}" ]] && kill "${broker_pid}" >/dev/null 2>&1
-  [[ -n "${sionna_pid}" ]] && kill "${sionna_pid}" >/dev/null 2>&1
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   [[ -n "${broker_image}" ]] && docker rm -f ocudu_broker_mue >/dev/null 2>&1
   for ((i = 0; i < ue_count; i++)); do docker rm -f "ocudu_srsue_${i}" >/dev/null 2>&1; done
   docker cp ocudu_gnb:/tmp/gnb.log "${log_dir}/ocudu-gnb-internal.log" >/dev/null 2>&1
@@ -616,7 +636,7 @@ fi
 
 set +e
 if [[ "${channel_mode}" == "sionna" ]]; then
-  [[ -n "${sionna_pid}" ]] && { kill -INT "${sionna_pid}" >/dev/null 2>&1; wait "${sionna_pid}" >/dev/null 2>&1; sionna_pid=""; }
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-web-ui.log" 2>/dev/null)" || sionna_updates=0
   if [[ -z "${broker_image}" ]]; then
     kill -INT "${broker_pid}" >/dev/null 2>&1

@@ -617,6 +617,29 @@ ue1_pid=""
 keepalive0_pid=""
 keepalive1_pid=""
 
+# The Sionna side is a bash wrapper (run_web_ui.sh) whose children are the RT
+# bridge and the Web UI server. A non-interactive shell does not forward
+# signals to its children, so signalling only the wrapper leaves both children
+# running and the wrapper alive -- `wait` then never returns. That is the hang
+# that left a bridge tracing for 15 hours and 13 GB of status/bridge logs
+# behind on 2026-09-13, and again for 48 minutes on 2026-09-14. Signal the
+# children first so they flush and exit, then the wrapper, then reap. SIGKILL
+# is the bounded fallback so teardown cannot block forever.
+stop_sionna() {
+  local pid="$1" waited=0
+  [[ -n "${pid}" ]] || return 0
+  pkill -INT -P "${pid}" >/dev/null 2>&1
+  kill -INT "${pid}" >/dev/null 2>&1
+  while kill -0 "${pid}" 2>/dev/null && [[ "${waited}" -lt 30 ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  pkill -KILL -P "${pid}" >/dev/null 2>&1
+  kill -KILL "${pid}" >/dev/null 2>&1
+  wait "${pid}" >/dev/null 2>&1
+  return 0
+}
+
 cleanup() {
   set +e
   # The keepalive goes first: no reason to keep injecting user-plane traffic
@@ -626,7 +649,7 @@ cleanup() {
   [[ -n "${ue0_pid}" ]] && kill "${ue0_pid}" >/dev/null 2>&1
   [[ -n "${ue1_pid}" ]] && kill "${ue1_pid}" >/dev/null 2>&1
   [[ -n "${telemetry_pid}" ]] && kill "${telemetry_pid}" >/dev/null 2>&1
-  [[ -n "${sionna_pid}" ]] && kill "${sionna_pid}" >/dev/null 2>&1
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   [[ -n "${broker_pid}" ]] && kill "${broker_pid}" >/dev/null 2>&1
   [[ -n "${broker_image}" ]] && docker rm -f ocudu_broker_mgnb >/dev/null 2>&1
   docker rm -f ocudu_srsue_0 ocudu_srsue_1 >/dev/null 2>&1
@@ -880,7 +903,7 @@ fi
 set +e
 if [[ "${channel_mode}" == "sionna" ]]; then
   [[ -n "${telemetry_pid}" ]] && { wait "${telemetry_pid}"; telemetry_ok=$(( $? == 0 )); telemetry_pid=""; }
-  [[ -n "${sionna_pid}" ]] && { kill -INT "${sionna_pid}" >/dev/null 2>&1; wait "${sionna_pid}" >/dev/null 2>&1; sionna_pid=""; }
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
   if [[ -z "${broker_image}" ]]; then
     kill -INT "${broker_pid}" >/dev/null 2>&1
