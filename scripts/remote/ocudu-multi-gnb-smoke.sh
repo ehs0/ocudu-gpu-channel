@@ -540,11 +540,27 @@ ENTRYPOINT ["srsue"]
 DOCKER
 
 # One srsUE config per UE: distinct ZMQ ports and IMSI/IMEI, shared key/OPc.
+# srsUE's ZMQ RF driver APPLIES tx_gain as a sample scale, unlike the OCUDU
+# side, which refuses anything above 0 dB ("Channel gain must be <= 0.0 dB for
+# ZMQ-device") and is forced to 0 in gen_gnb_config. Measured on 2026-09-14 with
+# --wire-capture: at tx_gain 50 the UE puts peak amplitude 313 on the wire while
+# the gNB puts 0.45, and with this scene's near-lossless uplink the gNB's
+# receiver sees peak amplitude 212 -- 212x full scale. The 56.8 dB gap is fully
+# accounted for (this +50 dB against srsRAN's -43.045 dB amplitude-control
+# back-off) and the reported uplink SINR is NOT a distortion floor: it is the
+# gNB's DM-RS channel-estimate residual, which tracks allocation bandwidth and
+# is invariant to this knob. See docs/multi-gnb-sionna-attach-diagnosis.md.
+#
+# CAVEAT: this knob cannot go below 40. srsRAN_4G's radio::init gates on
+# `args.tx_gain > 0` and otherwise applies rx_gain (40, below), logging
+# "Warning: TX gain was not set" -- so 0 here means 40, not 0. Default stays 50
+# so the proven gates are byte-for-byte unchanged.
+ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
 write_srsue_config() {
   cat >"$1" <<CONF
 [rf]
 freq_offset = 0
-tx_gain = 50
+tx_gain = ${ue_tx_gain}
 rx_gain = 40
 srate = 23.04e6
 nof_antennas = 1
@@ -734,6 +750,14 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --telemetry-endpoint 'tcp://*:5560'
     --telemetry-rate-hz 500
   )
+fi
+# Diagnostic passthrough for broker flags this gate has no opinion on, e.g.
+# --wire-capture-dir/--wire-capture-samples to measure what each radio actually
+# put on the wire. Word-split on purpose so a caller can pass several flags;
+# unset adds nothing, so a normal run is byte-for-byte unchanged.
+if [[ -n "${OCUDU_MGNB_BROKER_EXTRA_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  broker_extra+=(${OCUDU_MGNB_BROKER_EXTRA_ARGS})
 fi
 
 # Native binary by default; container image when OCUDU_MGNB_BROKER_IMAGE is set.
