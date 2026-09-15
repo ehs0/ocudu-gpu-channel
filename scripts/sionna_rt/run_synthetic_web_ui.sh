@@ -8,7 +8,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 case_name="${1:-}"
 [[ -n "${case_name}" ]] || {
-  echo "usage: $0 {single|multi-ue|graph|multi-gnb|multi-gnb-sutd}" >&2
+  echo "usage: $0 {single|multi-ue|graph|multi-gnb|multi-gnb-sutd|multi-gnb-sutd-overlap}" >&2
   exit 2
 }
 duration="${OCUDU_SIONNA_DEMO_DURATION_SECONDS:-60}"
@@ -29,26 +29,37 @@ declare -a source_ports sink_ports
 case "${case_name}" in
   single)
     topology="${repo_root}/examples/topology.ocudu-docker.cuda.yaml"
-    scenario="${repo_root}/examples/sionna/ocudu-docker.json"
+    scenario="${repo_root}/examples/sionna/simple/1gnb-1ue.json"
     source_ports=(2000 2101); sink_ports=(2001 2100) ;;
   multi-ue)
     topology="${repo_root}/examples/topology.ocudu-docker.multi-ue.cuda.yaml"
-    scenario="${repo_root}/examples/sionna/ocudu-docker-multi-ue.json"
+    scenario="${repo_root}/examples/sionna/simple/1gnb-2ue.json"
     source_ports=(2000 2101 2103); sink_ports=(2001 2100 2102) ;;
   graph)
     topology="${repo_root}/examples/topology.graph.cuda.yaml"
-    scenario="${repo_root}/examples/sionna/graph.json"
+    scenario="${repo_root}/examples/sionna/simple/1gnb-2ue-crosstalk.json"
     source_ports=(16000 16002 16004); sink_ports=(16001 16003 16005) ;;
   multi-gnb)
     topology="${repo_root}/examples/topology.multi-gnb.cuda.yaml"
-    scenario="${repo_root}/examples/sionna/multi-gnb.json"
+    scenario="${repo_root}/examples/sionna/simple/2gnb-2ue.json"
     source_ports=(3000 3002 3101 3103); sink_ports=(3001 3003 3100 3102) ;;
   # Same two-cell topology, on the OpenStreetMap SUTD campus instead of the
   # built-in street canyon.
   multi-gnb-sutd)
     topology="${repo_root}/examples/topology.multi-gnb.cuda.yaml"
-    scenario="${repo_root}/examples/sionna/multi-gnb-sutd.json"
+    scenario="${repo_root}/examples/sionna/sutd/2gnb-2ue.json"
     source_ports=(3000 3002 3101 3103); sink_ports=(3001 3003 3100 3102) ;;
+  # The two-roof SUTD layout, the one where both cells actually reach the same
+  # ground so a receiver sums two live terms. It runs on the four-port
+  # sionna-multi-gnb topology, whose links are bare routing anchors -- the
+  # bridge supplies the whole channel, so what the dashboard shows is the ray
+  # tracing and not a hand-tuned path-loss step. Hence the wider port lists:
+  # four ports per cell, one per UE.
+  multi-gnb-sutd-overlap)
+    topology="${repo_root}/examples/topology.sionna-multi-gnb.cuda.yaml"
+    scenario="${repo_root}/examples/sionna/sutd/2gnb-2ue-overlap.json"
+    source_ports=(3000 3002 3004 3006 3010 3012 3014 3016 3101 3103)
+    sink_ports=(3001 3003 3005 3007 3011 3013 3015 3017 3100 3102) ;;
   *) echo "unknown case: ${case_name}" >&2; exit 2 ;;
 esac
 

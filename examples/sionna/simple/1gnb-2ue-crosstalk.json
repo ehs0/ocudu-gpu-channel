@@ -1,5 +1,5 @@
 {
-  "name": "two-cell-multi-gnb",
+  "name": "simple-1gnb-2ue-crosstalk",
   "scene": "sionna_simple_test",
   "nodes": {
     "gnb0": {
@@ -9,35 +9,9 @@
         60.0
       ],
       "mobility": "fixed",
-      "tx_array": {
+      "array": {
         "rows": 1,
-        "cols": 4,
-        "pattern": "iso",
-        "polarization": "V"
-      },
-      "rx_array": {
-        "rows": 1,
-        "cols": 4,
-        "pattern": "iso",
-        "polarization": "V"
-      }
-    },
-    "gnb1": {
-      "start_m": [
-        32.5,
-        45.0,
-        60.0
-      ],
-      "mobility": "fixed",
-      "tx_array": {
-        "rows": 1,
-        "cols": 4,
-        "pattern": "iso",
-        "polarization": "V"
-      },
-      "rx_array": {
-        "rows": 1,
-        "cols": 4,
+        "cols": 1,
         "pattern": "iso",
         "polarization": "V"
       }
@@ -94,49 +68,37 @@
       "from": "gnb0",
       "to": "ue0",
       "direction": "downlink",
-      "model": "serving"
-    },
-    {
-      "from": "gnb1",
-      "to": "ue1",
-      "direction": "downlink",
-      "model": "serving"
+      "model": "desired"
     },
     {
       "from": "gnb0",
       "to": "ue1",
       "direction": "downlink",
-      "model": "intercell"
+      "model": "desired"
     },
     {
-      "from": "gnb1",
+      "from": "ue0",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "desired"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "desired"
+    },
+    {
+      "from": "ue0",
+      "to": "ue1",
+      "direction": "crosstalk",
+      "model": "crosstalk"
+    },
+    {
+      "from": "ue1",
       "to": "ue0",
-      "direction": "downlink",
-      "model": "intercell"
-    },
-    {
-      "from": "ue0",
-      "to": "gnb0",
-      "direction": "uplink",
-      "model": "serving"
-    },
-    {
-      "from": "ue1",
-      "to": "gnb1",
-      "direction": "uplink",
-      "model": "serving"
-    },
-    {
-      "from": "ue0",
-      "to": "gnb1",
-      "direction": "uplink",
-      "model": "intercell"
-    },
-    {
-      "from": "ue1",
-      "to": "gnb0",
-      "direction": "uplink",
-      "model": "intercell"
+      "direction": "crosstalk",
+      "model": "crosstalk"
     }
   ]
 }

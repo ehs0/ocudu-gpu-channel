@@ -122,10 +122,10 @@ The four tracked scenario/topology pairs are:
 
 | Validation | Broker topology | Sionna scenario |
 |---|---|---|
-| single cell / UE | `examples/topology.ocudu-docker.cuda.yaml` | `examples/sionna/ocudu-docker.json` |
-| one cell / multiple UEs | `examples/topology.ocudu-docker.multi-ue.cuda.yaml` | `examples/sionna/ocudu-docker-multi-ue.json` |
-| interference + crosstalk graph | `examples/topology.graph.cuda.yaml` | `examples/sionna/graph.json` |
-| two cells / eight directed links | `examples/topology.multi-gnb.cuda.yaml` | `examples/sionna/multi-gnb.json` |
+| single cell / UE | `examples/topology.ocudu-docker.cuda.yaml` | `examples/sionna/simple/1gnb-1ue.json` |
+| one cell / multiple UEs | `examples/topology.ocudu-docker.multi-ue.cuda.yaml` | `examples/sionna/simple/1gnb-2ue.json` |
+| interference + crosstalk graph | `examples/topology.graph.cuda.yaml` | `examples/sionna/simple/1gnb-2ue-crosstalk.json` |
+| two cells / eight directed links | `examples/topology.multi-gnb.cuda.yaml` | `examples/sionna/simple/2gnb-2ue.json` |
 
 The existing post-TDL chain remains active. For example, the near/far path
 loss and AWGN settings still apply after Sionna's instantaneous CIR. Models
@@ -181,7 +181,7 @@ cd /home/ubuntu/OCUDU/ocudu-gpu-channel
 ```
 
 The launcher drives the same validated eight-link multi-gNB topology from
-`examples/sionna/multi-gnb.json`, serves `http://127.0.0.1:8080`, and verifies both gNB
+`examples/sionna/simple/2gnb-2ue.json`, serves `http://127.0.0.1:8080`, and verifies both gNB
 cells, both UE RRC connections, both PDU sessions, both data-plane pings, live
 Sionna profile updates, and the broker telemetry feed. Override detected paths
 when needed with `OCUDU_MGNB_OCUDU_ROOT`, `OCUDU_MGNB_SIONNA_PYTHON`, or

@@ -52,7 +52,7 @@ sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 # canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
 # with the serving and intercell models works, which is how the OpenStreetMap
 # SUTD campus scene is selected.
-sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/multi-gnb.json}"
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/simple/2gnb-2ue.json}"
 # Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
 # to the 5GC from outside the compose network; the base compose publishes 9999
 # only so a human can poke it, and that mapping is enough to abort the whole

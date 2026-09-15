@@ -1,5 +1,5 @@
 {
-  "name": "ocudu-docker-single-cell",
+  "name": "simple-1gnb-1ue",
   "scene": "sionna_simple_test",
   "nodes": {
     "gnb0": {

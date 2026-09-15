@@ -686,7 +686,7 @@ class AdapterTests(unittest.TestCase):
         # not inherit whatever the caller happened to type.
         path = (
             pathlib.Path(__file__).resolve().parents[1]
-            / "examples" / "sionna" / "ocudu-rank1-sutd.json"
+            / "examples" / "sionna" / "sutd" / "1gnb-1ue-4t4r.json"
         )
         definition = load_scenario_config(path)
         self.assertEqual(sorted(definition.nodes), ["gnb0", "ue0"])

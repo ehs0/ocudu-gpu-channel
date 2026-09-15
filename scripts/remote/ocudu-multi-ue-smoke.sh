@@ -510,7 +510,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     write_summary "control_server_not_ready" 1
   "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
     --python "${sionna_python}" \
-    --scenario "${project_root}/examples/sionna/ocudu-docker-multi-ue.json" \
+    --scenario "${project_root}/examples/sionna/simple/1gnb-2ue.json" \
     --control-endpoint tcp://127.0.0.1:5559 \
     --telemetry-endpoint tcp://127.0.0.1:5560 \
     --status-jsonl "${log_dir}/sionna-status.jsonl" \

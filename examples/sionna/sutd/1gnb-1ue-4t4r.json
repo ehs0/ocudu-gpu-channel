@@ -1,5 +1,5 @@
 {
-  "name": "ocudu-native-rank1-sutd",
+  "name": "sutd-1gnb-1ue-4t4r",
   "description": "One OCUDU gNB (4T4R) on the parapet of SUTD Building 2 and one car UE shuttling along the drop-off in front of it, on OpenStreetMap geometry of the SUTD campus. This is the shape run-ocudu-sionna-rank1.sh runs: exactly one gNB and one single-port UE, one downlink and one uplink.",
   "scene": "sionna_SUTD_test",
   "simple_road": false,
