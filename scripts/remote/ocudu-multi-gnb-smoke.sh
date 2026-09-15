@@ -52,7 +52,7 @@ sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 # canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
 # with the serving and intercell models works, which is how the OpenStreetMap
 # SUTD campus scene is selected.
-sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/multi-gnb.json}"
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/simple/2gnb-2ue.json}"
 # Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
 # to the 5GC from outside the compose network; the base compose publishes 9999
 # only so a human can poke it, and that mapping is enough to abort the whole
@@ -75,12 +75,28 @@ ue_keepalive_seconds="${OCUDU_MGNB_UE_KEEPALIVE_SECONDS:-0}"
 # mode; see where topology_name is resolved for why the two differ.
 topology_name="${OCUDU_MGNB_TOPOLOGY:-}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
-# srsUE launch stagger: the two UEs camp on different cells so they do not
-# collide on RACH, but staggering ue1 until ue0 is RRC-connected still removes
-# any startup race. 0 disables it.
+# srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped. The two
+# UEs were assumed not to collide on RACH because they camp on different
+# cells, and that assumption was wrong twice over -- which cell a UE camps on
+# is decided by the geometry at attach, not by the config, and both UEs
+# landed on gnb0 in every measured run; and srsRAN ZMQ radios share the
+# broker's lock-step virtual time, so two UEs started together land in the
+# same PRACH occasion whichever cell they are talking to. The distinct
+# preamble per UE below is what makes several UEs possible at all; this
+# stagger is what makes it reliable. 0 disables it.
 ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
-# srsUE base: latest zhouyou-gu/srsRAN_4G master, which carries the
-# SRSUE_PRACH_PREAMBLE_INDEX override used to give each UE its own preamble.
+# Host to fetch Ubuntu packages from while building the images, e.g.
+# sg.archive.ubuntu.com. Empty keeps Docker's default archive.ubuntu.com.
+# This is a network-locality knob and nothing else: apt verifies every package
+# against its GPG signature either way, so a mirror cannot substitute content.
+# It is left unset by default because the right mirror depends on where the
+# gate runs -- on this host archive.ubuntu.com timed out entirely while
+# sg.archive.ubuntu.com served the same file in 1.3 s.
+apt_mirror="${OCUDU_MGNB_APT_MIRROR:-}"
+# srsUE base: latest zhouyou-gu/srsRAN_4G master. Stock srsRAN cannot run more
+# than one UE on a cell -- proc_ra_nr.cc hardcodes preamble_index = 0 with no
+# random draw at all, so every UE sends the same preamble. master restores the
+# draw and adds the SRSUE_PRACH_PREAMBLE_INDEX override used below.
 srsran_ref="${SRSRAN_4G_REF:-master}"
 
 if [[ "${channel_mode}" != "static" && "${channel_mode}" != "sionna" ]]; then
@@ -132,7 +148,8 @@ remote_sh bash -s -- \
   "${ue_inactivity_seconds:-__unset__}" \
   "${ue_keepalive_seconds}" \
   "${topology_name:-__default__}" \
-  "${sionna_extra_args_b64:-__none__}" <<'REMOTE'
+  "${sionna_extra_args_b64:-__none__}" \
+  "${apt_mirror:-__none__}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -166,6 +183,8 @@ if [[ "${24:-__none__}" != "__none__" ]]; then
   # or glob expansion. Direct wrapper callers can pass quoted argv after --.
   IFS=$' \t\n' read -r -a sionna_bridge_args <<< "${sionna_extra_args//$'\n'/ }"
 fi
+apt_mirror="${25:-__none__}"
+[[ "${apt_mirror}" == "__none__" ]] && apt_mirror=""
 [[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
   exit 2
@@ -566,7 +585,13 @@ cat >"${srsue_dockerfile}" <<'DOCKER'
 FROM ubuntu:22.04
 ARG SRSRAN_4G_REPO=https://github.com/zhouyou-gu/srsRAN_4G.git
 ARG SRSRAN_4G_REF=master
+ARG APT_MIRROR=
 ENV DEBIAN_FRONTEND=noninteractive
+RUN if [ -n "${APT_MIRROR}" ]; then \
+      sed -i "s|http://archive.ubuntu.com|http://${APT_MIRROR}|g; \
+              s|http://security.ubuntu.com|http://${APT_MIRROR}|g" \
+          /etc/apt/sources.list; \
+    fi
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates cmake g++ gcc git iproute2 iputils-ping \
     libboost-program-options-dev libconfig++-dev libfftw3-dev \
@@ -581,11 +606,27 @@ ENTRYPOINT ["srsue"]
 DOCKER
 
 # One srsUE config per UE: distinct ZMQ ports and IMSI/IMEI, shared key/OPc.
+# srsUE's ZMQ RF driver APPLIES tx_gain as a sample scale, unlike the OCUDU
+# side, which refuses anything above 0 dB ("Channel gain must be <= 0.0 dB for
+# ZMQ-device") and is forced to 0 in gen_gnb_config. Measured on 2026-09-14 with
+# --wire-capture: at tx_gain 50 the UE puts peak amplitude 313 on the wire while
+# the gNB puts 0.45, and with this scene's near-lossless uplink the gNB's
+# receiver sees peak amplitude 212 -- 212x full scale. The 56.8 dB gap is fully
+# accounted for (this +50 dB against srsRAN's -43.045 dB amplitude-control
+# back-off) and the reported uplink SINR is NOT a distortion floor: it is the
+# gNB's DM-RS channel-estimate residual, which tracks allocation bandwidth and
+# is invariant to this knob. See docs/multi-gnb-sionna-attach-diagnosis.md.
+#
+# CAVEAT: this knob cannot go below 40. srsRAN_4G's radio::init gates on
+# `args.tx_gain > 0` and otherwise applies rx_gain (40, below), logging
+# "Warning: TX gain was not set" -- so 0 here means 40, not 0. Default stays 50
+# so the proven gates are byte-for-byte unchanged.
+ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
 write_srsue_config() {
   cat >"$1" <<CONF
 [rf]
 freq_offset = 0
-tx_gain = 50
+tx_gain = ${ue_tx_gain}
 rx_gain = 40
 srate = 23.04e6
 nof_antennas = 1
@@ -658,6 +699,29 @@ ue1_pid=""
 keepalive0_pid=""
 keepalive1_pid=""
 
+# The Sionna side is a bash wrapper (run_web_ui.sh) whose children are the RT
+# bridge and the Web UI server. A non-interactive shell does not forward
+# signals to its children, so signalling only the wrapper leaves both children
+# running and the wrapper alive -- `wait` then never returns. That is the hang
+# that left a bridge tracing for 15 hours and 13 GB of status/bridge logs
+# behind on 2026-09-13, and again for 48 minutes on 2026-09-14. Signal the
+# children first so they flush and exit, then the wrapper, then reap. SIGKILL
+# is the bounded fallback so teardown cannot block forever.
+stop_sionna() {
+  local pid="$1" waited=0
+  [[ -n "${pid}" ]] || return 0
+  pkill -INT -P "${pid}" >/dev/null 2>&1
+  kill -INT "${pid}" >/dev/null 2>&1
+  while kill -0 "${pid}" 2>/dev/null && [[ "${waited}" -lt 30 ]]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  pkill -KILL -P "${pid}" >/dev/null 2>&1
+  kill -KILL "${pid}" >/dev/null 2>&1
+  wait "${pid}" >/dev/null 2>&1
+  return 0
+}
+
 cleanup() {
   set +e
   # The keepalive goes first: no reason to keep injecting user-plane traffic
@@ -667,7 +731,7 @@ cleanup() {
   [[ -n "${ue0_pid}" ]] && kill "${ue0_pid}" >/dev/null 2>&1
   [[ -n "${ue1_pid}" ]] && kill "${ue1_pid}" >/dev/null 2>&1
   [[ -n "${telemetry_pid}" ]] && kill "${telemetry_pid}" >/dev/null 2>&1
-  [[ -n "${sionna_pid}" ]] && kill "${sionna_pid}" >/dev/null 2>&1
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   [[ -n "${broker_pid}" ]] && kill "${broker_pid}" >/dev/null 2>&1
   [[ -n "${broker_image}" ]] && docker rm -f ocudu_broker_mgnb >/dev/null 2>&1
   docker rm -f ocudu_srsue_0 ocudu_srsue_1 >/dev/null 2>&1
@@ -686,7 +750,8 @@ if [[ "${build_docker}" == "1" ]]; then
   "${compose[@]}" build 5gc gnb >"${log_dir}/docker-build.log" 2>&1
 fi
 if ! docker build --build-arg "SRSRAN_4G_REPO=${SRSRAN_4G_REPO:-https://github.com/zhouyou-gu/srsRAN_4G.git}" \
-     --build-arg "SRSRAN_4G_REF=${srsran_ref}" -f "${srsue_dockerfile}" \
+     --build-arg "SRSRAN_4G_REF=${srsran_ref}" \
+     --build-arg "APT_MIRROR=${apt_mirror}" -f "${srsue_dockerfile}" \
      -t "${srsue_image}" "${config_dir}" >"${log_dir}/srsue-docker-build.log" 2>&1; then
   echo "SRSUE BUILD FAILED"; tail -25 "${log_dir}/srsue-docker-build.log"
   write_summary "srsue_build_failed" 2
@@ -752,6 +817,14 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --telemetry-endpoint 'tcp://*:5560'
     --telemetry-rate-hz 500
   )
+fi
+# Diagnostic passthrough for broker flags this gate has no opinion on, e.g.
+# --wire-capture-dir/--wire-capture-samples to measure what each radio actually
+# put on the wire. Word-split on purpose so a caller can pass several flags;
+# unset adds nothing, so a normal run is byte-for-byte unchanged.
+if [[ -n "${OCUDU_MGNB_BROKER_EXTRA_ARGS:-}" ]]; then
+  # shellcheck disable=SC2206
+  broker_extra+=(${OCUDU_MGNB_BROKER_EXTRA_ARGS})
 fi
 
 # Native binary by default; container image when OCUDU_MGNB_BROKER_IMAGE is set.
@@ -836,14 +909,24 @@ done
 echo "cells: gnb0_up=${gnb0_up} gnb1_up=${gnb1_up}"
 
 run_srsue() {
-  # $1 container name  $2 tx port  $3 config  $4 log
+  # $1 container name  $2 tx port  $3 config  $4 log  $5 preamble index
+  #
+  # A distinct contention-based preamble per UE. Stock srsRAN hardcodes
+  # `preamble_index = 0` and `prach_occasion = 0` in proc_ra_nr.cc, so two
+  # srsUEs racing on one cell send the identical preamble in the identical
+  # occasion and the gNB merges them onto one C-RNTI -- measured here, both
+  # UEs answering as 0x4601, the second stalling and every uplink grant
+  # answered by two radios at once. The fork this image builds from restores
+  # the random draw and adds this override on top so a gate can be
+  # deterministic about which UE takes which preamble.
   docker run --rm --name "$1" --privileged --cap-add NET_ADMIN --device /dev/net/tun \
     --add-host host.docker.internal:host-gateway -p "$2:$2" \
+    -e "SRSUE_PRACH_PREAMBLE_INDEX=${5:-0}" \
     -v "$3:/config/ue.conf:ro" --entrypoint /bin/sh \
     "${srsue_image}" -lc 'mkdir -p /var/run/netns && ip netns add ue1 && exec srsue /config/ue.conf' \
     >"$4" 2>&1 &
 }
-run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log"
+run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log" 0
 ue0_pid="$!"
 # Hold ue1 until ue0 is RRC-connected (capped), then a short settle.
 if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
@@ -853,7 +936,7 @@ if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
   done
   sleep 2
 fi
-run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log"
+run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log" 1
 ue1_pid="$!"
 
 deadline=$((SECONDS + duration_seconds))
@@ -912,7 +995,7 @@ fi
 set +e
 if [[ "${channel_mode}" == "sionna" ]]; then
   [[ -n "${telemetry_pid}" ]] && { wait "${telemetry_pid}"; telemetry_ok=$(( $? == 0 )); telemetry_pid=""; }
-  [[ -n "${sionna_pid}" ]] && { kill -INT "${sionna_pid}" >/dev/null 2>&1; wait "${sionna_pid}" >/dev/null 2>&1; sionna_pid=""; }
+  stop_sionna "${sionna_pid}"; sionna_pid=""
   sionna_updates="$(grep -c '"event":"sionna_rt_update"' "${log_dir}/sionna-bridge.log" 2>/dev/null)" || sionna_updates=0
   if [[ -z "${broker_image}" ]]; then
     kill -INT "${broker_pid}" >/dev/null 2>&1

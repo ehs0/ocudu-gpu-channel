@@ -22,10 +22,11 @@ from build_osm_scene import (  # noqa: E402
 SUTD_MANIFEST = (
     PROJECT_ROOT / "examples" / "sionna" / "scenes" / "sionna_SUTD_test" / "manifest.json"
 )
-SUTD_SCENARIOS = (
-    "multi-gnb-sutd.json",
-    "sionna-multi-ue-sutd.json",
-    "sionna_SUTD_test.json",
+# Every scenario on the SUTD scene, found by directory rather than listed: the
+# routes are checked against the campus footprints, so a scenario added later
+# has to be checked too and an enumeration here would silently miss it.
+SUTD_SCENARIOS = sorted(
+    (PROJECT_ROOT / "examples" / "sionna" / "sutd").glob("*.json")
 )
 
 
@@ -91,9 +92,10 @@ class OutwardRingTests(unittest.TestCase):
         footprints = [
             [(x, y) for x, y in entry["footprint_m"]] for entry in manifest["buildings"]
         ]
-        scenarios = PROJECT_ROOT / "examples" / "sionna"
-        for name in SUTD_SCENARIOS:
-            config = json.loads((scenarios / name).read_text())
+        self.assertTrue(SUTD_SCENARIOS, "no SUTD scenarios found to check")
+        for path in SUTD_SCENARIOS:
+            name = path.name
+            config = json.loads(path.read_text())
             for node_id, node in config["nodes"].items():
                 route = [(p[0], p[1]) for p in node.get("route_m", [])]
                 if len(route) < 2:

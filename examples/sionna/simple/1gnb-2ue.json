@@ -1,5 +1,5 @@
 {
-  "name": "three-node-interference-graph",
+  "name": "simple-1gnb-2ue",
   "scene": "sionna_simple_test",
   "nodes": {
     "gnb0": {
@@ -68,37 +68,25 @@
       "from": "gnb0",
       "to": "ue0",
       "direction": "downlink",
-      "model": "desired"
+      "model": "near"
     },
     {
       "from": "gnb0",
       "to": "ue1",
       "direction": "downlink",
-      "model": "desired"
+      "model": "far"
     },
     {
       "from": "ue0",
       "to": "gnb0",
       "direction": "uplink",
-      "model": "desired"
+      "model": "near"
     },
     {
       "from": "ue1",
       "to": "gnb0",
       "direction": "uplink",
-      "model": "desired"
-    },
-    {
-      "from": "ue0",
-      "to": "ue1",
-      "direction": "crosstalk",
-      "model": "crosstalk"
-    },
-    {
-      "from": "ue1",
-      "to": "ue0",
-      "direction": "crosstalk",
-      "model": "crosstalk"
+      "model": "far"
     }
   ]
 }

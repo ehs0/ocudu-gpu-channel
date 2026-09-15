@@ -6,8 +6,8 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/../.." && pwd)"
 # SUTD campus (OpenStreetMap geometry) by default. The canyon scenario is
-# still there: OCUDU_NATIVE_SIONNA_SCENARIO=<repo>/examples/sionna/ocudu-rank1.json
-scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-${repo_root}/examples/sionna/ocudu-rank1-sutd.json}"
+# still there: OCUDU_NATIVE_SIONNA_SCENARIO=<repo>/examples/sionna/simple/1gnb-1ue-4t4r.json
+scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-${repo_root}/examples/sionna/sutd/1gnb-1ue-4t4r.json}"
 [[ "${scenario}" == /* && -f "${scenario}" && ! -L "${scenario}" ]] || {
   printf 'error: OCUDU_NATIVE_SIONNA_SCENARIO must be an absolute regular file: %s\n' \
     "${scenario}" >&2

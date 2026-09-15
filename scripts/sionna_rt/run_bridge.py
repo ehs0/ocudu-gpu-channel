@@ -12,6 +12,7 @@ imported or modified; it only sees the impaired IQ emitted by the broker.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -1183,6 +1184,40 @@ def resolve_scene(name: str, rt: Any) -> pathlib.Path:
         ) from exc
 
 
+class SceneRevision:
+    """Ship `scene_geometry` only on the updates where it actually changed.
+
+    The footprints are ~70 KB and, for an internally driven run, identical
+    for the life of the process -- yet the update record is written ten
+    times a second, so repeating them cost ~710 KB/s of status JSONL and
+    the same again in parse time on the web UI side, which is a thread the
+    telemetry stream competes with. Every record still carries
+    `scene_revision`; the geometry rides along only when that number moves.
+
+    The digest is recomputed every call rather than cached against the
+    object's identity, because the point of the revision is the source that
+    does not exist yet: an external channel provider that swaps or edits the
+    scene mid-run. Identity says nothing about an in-place edit, and at
+    ~1.2 ms against a 100 ms update budget the honest compare is affordable.
+    """
+
+    def __init__(self) -> None:
+        self._revision = 0
+        self._digest: str | None = None
+
+    def observe(self, geometry: Any) -> tuple[int, bool]:
+        """Return `(revision, changed)` for this update's geometry."""
+
+        digest = hashlib.sha1(
+            json.dumps(geometry, separators=(",", ":"), sort_keys=True).encode()
+        ).hexdigest()
+        if digest == self._digest:
+            return self._revision, False
+        self._digest = digest
+        self._revision += 1
+        return self._revision, True
+
+
 def scene_mesh(scene_xml: pathlib.Path) -> dict[str, Any]:
     """Extract the real triangle mesh of every scene shape, for the 3D UI.
 
@@ -1793,6 +1828,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     start = 0.0
     next_update = 0.0
     iteration = 0
+    scene_tracker = SceneRevision()
     try:
         scenario = SionnaScenario(args)
         write_scene_mesh(scene_mesh_path(args.status_jsonl), scenario.scene_mesh)
@@ -1864,6 +1900,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 }
 
             total_update_ms = (time.monotonic() - update_started) * 1000.0
+            scene_revision, scene_changed = scene_tracker.observe(
+                scenario.scene_geometry
+            )
 
             record = {
                 "event": "sionna_rt_update",
@@ -1885,9 +1924,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "directions": direction_trace_ms,
                 },
                 "environment": environment,
-                # UI-only scene footprints. They are written to status JSONL
-                # and never included in profile_swap control messages.
-                "scene_geometry": scenario.scene_geometry,
+                "scene_revision": scene_revision,
                 "frequencies_hz": {
                     "downlink": args.downlink_frequency_hz,
                     "uplink": args.uplink_frequency_hz,
@@ -1897,6 +1934,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "channels": statuses,
                 "control_reply": reply,
             }
+            if scene_changed:
+                # UI-only scene footprints. They are written to status JSONL
+                # and never included in profile_swap control messages.
+                record["scene_geometry"] = scenario.scene_geometry
             print(json.dumps(record, separators=(",", ":")), flush=True)
             append_status(args.status_jsonl, record)
             iteration += 1

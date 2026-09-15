@@ -682,6 +682,9 @@ int main()
                 "v3.0: telemetry frame identifies the data-plane backend");
         require(frame.find("\"process_id\":") != std::string::npos,
                 "telemetry identifies the GPU Channel process for GPU monitoring");
+        require(frame.find("\"sent_unix_ms\":") != std::string::npos,
+                "telemetry carries its own send time so a subscriber plots the "
+                "sample where it was measured, not where it was read");
         require(frame.find("\"scope\":\"destination_superposition\"") != std::string::npos,
                 "slot timing identifies receiver-superposition scope");
         require(frame.find("\"usage_percent\":12.5") != std::string::npos,
