@@ -74,6 +74,13 @@ ue_keepalive_seconds="${OCUDU_MGNB_UE_KEEPALIVE_SECONDS:-0}"
 # Which broker topology to run. Empty picks the one that matches the channel
 # mode; see where topology_name is resolved for why the two differ.
 topology_name="${OCUDU_MGNB_TOPOLOGY:-}"
+# How many cells to bring up. Two is the historical gate and stays the
+# default; one exists for scenarios where the handsets must not split across
+# cells, which is every indoor scene tried so far.
+cells="${OCUDU_MGNB_CELLS:-2}"
+# srsUE ZMQ transmit gain, in dB of sample amplitude. Read here and passed as
+# an argument so it reaches a remote host too. See write_srsue_config.
+ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped. The two
 # UEs were assumed not to collide on RACH because they camp on different
@@ -149,7 +156,9 @@ remote_sh bash -s -- \
   "${ue_keepalive_seconds}" \
   "${topology_name:-__default__}" \
   "${sionna_extra_args_b64:-__none__}" \
-  "${apt_mirror:-__none__}" <<'REMOTE'
+  "${apt_mirror:-__none__}" \
+  "${cells}" \
+  "${ue_tx_gain}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -185,6 +194,12 @@ if [[ "${24:-__none__}" != "__none__" ]]; then
 fi
 apt_mirror="${25:-__none__}"
 [[ "${apt_mirror}" == "__none__" ]] && apt_mirror=""
+cells="${26:-2}"
+ue_tx_gain="${27:-50}"
+[[ "${cells}" == "1" || "${cells}" == "2" ]] || {
+  echo "OCUDU_MGNB_CELLS must be 1 or 2" >&2
+  exit 2
+}
 [[ "${hold_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || {
   echo "OCUDU_MGNB_HOLD_SECONDS must be a non-negative integer" >&2
   exit 2
@@ -430,11 +445,32 @@ gen_gnb_config() {
     { print }
     /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
-    END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
+    END {
+      print ""; print "gnb_id: " gid; print "ran_node_name: " nm
+      # Scheduler metrics for both cells. enable_sched_ue is the layer that
+      # carries the per-UE KPIs -- bitrate, MCS, HARQ counters, SINR. Without
+      # it the remote-control feed still lists a row per connected UE, but
+      # every counter in it reads zero, which is indistinguishable from a UE
+      # that attached and then passed no traffic. remote_control is what the
+      # dashboard subscribes to; 0.0.0.0 because it is reached from the host
+      # across the compose network, not from inside the container.
+      print ""
+      print "metrics:"
+      print "  enable_json: true"
+      print "  layers:"
+      print "    enable_sched: true"
+      print "    enable_sched_ue: true"
+      print "  periodicity:"
+      print "    du_report_period: 1000"
+      print "remote_control:"
+      print "  enabled: true"
+      print "  bind_addr: 0.0.0.0"
+      print "  port: 8001"
+    }
   ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
 }
 gen_gnb_config "${gnb0_config}" 3000 1 411 gnb0
-gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
+[[ "${cells}" -eq 2 ]] && gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
 
 awk '
   { print }
@@ -486,6 +522,64 @@ sed -e "s|^OPEN5GS_IP=.*|OPEN5GS_IP=${OPEN5GS_IP}|" \
 export OPEN_5GS_ENV_FILE="${open5gs_env}"
 printf 'ran_subnet=%s\nmetrics_subnet=%s\n' "${ran_subnet}" "${metrics_subnet}" >"${log_dir}/network-selection.txt"
 
+# The second cell is optional. Two cells on one carrier means each srsUE camps
+# on whichever PCI it hears strongest, which is not the cell a scenario labels
+# as serving, and an indoor scene puts the two handsets close enough that they
+# split across cells and neither finishes attaching. A single cell removes
+# that: both UEs camp on gnb0 or neither does. Everything gnb1 contributes is
+# assembled here so the compose file below carries it or does not.
+gnb1_service=""
+gnb1_configs=""
+gnb1_volumes=""
+if [[ "${cells}" -eq 2 ]]; then
+  gnb1_service="  gnb1:
+    container_name: ocudu_gnb1
+    image: ocudu/gnb
+    privileged: true
+    cap_add:
+      - SYS_NICE
+      - CAP_SYS_PTRACE
+    volumes:
+      - gnb1-storage:/tmp
+    configs:
+      - gnb1_config.yml
+      - gnb1_compose_config.yml
+    networks:
+      ran:
+        ipv4_address: ${ran_prefix}.4
+      metrics:
+        ipv4_address: ${metrics_prefix}.4
+    ports:
+      - \"3010:3010\"
+      - \"3012:3012\"
+      - \"3014:3014\"
+      - \"3016:3016\"
+    extra_hosts:
+      - \"host.docker.internal:host-gateway\"
+    depends_on:
+      5gc:
+        condition: service_healthy
+    command: gnb -c /gnb1_config.yml -c /gnb1_compose_config.yml
+"
+  gnb1_configs="configs:
+  gnb1_config.yml:
+    file: \${GNB1_CONFIG_PATH}
+  gnb1_compose_config.yml:
+    content: |
+      cu_cp:
+        amf:
+          addrs: ${OPEN5GS_IP}
+          bind_addrs: ${ran_prefix}.4
+      # metrics and remote_control are written into both cells' configs by
+      # gen_gnb_config, so they are deliberately not repeated here; only
+      # stdout metrics, which that block does not set, stay.
+      metrics:
+        autostart_stdout_metrics: true
+"
+  gnb1_volumes="volumes:
+  gnb1-storage:"
+fi
+
 cat >"${compose_override}" <<YAML
 services:
   5gc:
@@ -523,50 +617,7 @@ ${fivegc_ports}
         EXTRA_CMAKE_ARGS: "-DENABLE_ZEROMQ=ON -DENABLE_EXPORT=ON -DZEROMQ_INCLUDE_DIRS=/usr/include -DZEROMQ_LIBRARIES=/usr/lib/x86_64-linux-gnu/libzmq.so"
         OS: "ubuntu"
         OS_VERSION: "24.04"
-  gnb1:
-    container_name: ocudu_gnb1
-    image: ocudu/gnb
-    privileged: true
-    cap_add:
-      - SYS_NICE
-      - CAP_SYS_PTRACE
-    volumes:
-      - gnb1-storage:/tmp
-    configs:
-      - gnb1_config.yml
-      - gnb1_compose_config.yml
-    networks:
-      ran:
-        ipv4_address: ${ran_prefix}.4
-      metrics:
-        ipv4_address: ${metrics_prefix}.4
-    ports:
-      - "3010:3010"
-      - "3012:3012"
-      - "3014:3014"
-      - "3016:3016"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    depends_on:
-      5gc:
-        condition: service_healthy
-    command: gnb -c /gnb1_config.yml -c /gnb1_compose_config.yml
-configs:
-  gnb1_config.yml:
-    file: \${GNB1_CONFIG_PATH}
-  gnb1_compose_config.yml:
-    content: |
-      cu_cp:
-        amf:
-          addrs: ${OPEN5GS_IP}
-          bind_addrs: ${ran_prefix}.4
-      metrics:
-        autostart_stdout_metrics: true
-        enable_json: true
-      remote_control:
-        bind_addr: 0.0.0.0
-        enabled: true
-networks:
+${gnb1_service}${gnb1_configs}networks:
   ran:
     ipam:
       driver: default
@@ -577,8 +628,7 @@ networks:
       driver: default
       config:
         - subnet: ${metrics_subnet}
-volumes:
-  gnb1-storage:
+${gnb1_volumes}
 YAML
 
 cat >"${srsue_dockerfile}" <<'DOCKER'
@@ -621,7 +671,7 @@ DOCKER
 # `args.tx_gain > 0` and otherwise applies rx_gain (40, below), logging
 # "Warning: TX gain was not set" -- so 0 here means 40, not 0. Default stays 50
 # so the proven gates are byte-for-byte unchanged.
-ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
+# The value arrives as argument 27 (OCUDU_MGNB_UE_TX_GAIN on the caller).
 write_srsue_config() {
   cat >"$1" <<CONF
 [rf]
@@ -777,7 +827,11 @@ echo "open5gs: ${h:-?}"
 # decides which cell is stronger.
 if [[ "${topology_name}" == "__default__" ]]; then
   if [[ "${channel_mode}" == "sionna" ]]; then
-    topology_name="examples/topology.sionna-multi-gnb.cuda.yaml"
+    if [[ "${cells}" -eq 1 ]]; then
+      topology_name="examples/topology.sionna-1gnb-2ue.cuda.yaml"
+    else
+      topology_name="examples/topology.sionna-multi-gnb.cuda.yaml"
+    fi
   else
     topology_name="examples/topology.multi-gnb.cuda.yaml"
   fi
@@ -857,7 +911,26 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     write_summary "control_server_not_ready" 1
   fi
 
+  # Both cells' scheduler feeds, not just the first. The gNBs enable
+  # remote_control on 0.0.0.0:8001 inside the compose network, and their
+  # metrics-network addresses are routable from the host, so the dashboard
+  # subscribes to each by name and shows one card per cell.
+  web_ui_args=()
+  for gnb_index in $(seq 0 $((cells - 1))); do
+    web_ui_args+=(
+      --web-arg --gnb-metrics-source
+      --web-arg "gnb${gnb_index}=ws://${metrics_prefix}.$((gnb_index + 3)):8001"
+    )
+  done
+  # The preamble indices the UEs are about to be launched with. No feed
+  # reports them, so the dashboard is told directly.
+  web_ui_args+=(
+    --web-arg --ue-preamble --web-arg "ue0=${OCUDU_MGNB_UE0_PREAMBLE_INDEX:-0}"
+    --web-arg --ue-preamble --web-arg "ue1=${OCUDU_MGNB_UE1_PREAMBLE_INDEX:-1}"
+  )
+
   "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
+    "${web_ui_args[@]}" \
     --python "${sionna_python}" \
     --scenario "${sionna_scenario}" \
     --control-endpoint tcp://127.0.0.1:5559 \
@@ -896,17 +969,24 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   telemetry_pid="$!"
 fi
 
-"${compose[@]}" up -d gnb gnb1 >"${log_dir}/docker-gnb-up.log" 2>&1
+gnb_services=(gnb)
+[[ "${cells}" -eq 2 ]] && gnb_services+=(gnb1)
+"${compose[@]}" up -d "${gnb_services[@]}" >"${log_dir}/docker-gnb-up.log" 2>&1
 # Wait for both cells to broadcast SIB1 / activate.
 for _ in $(seq 1 40); do
   docker cp ocudu_gnb:/tmp/gnb.log "${log_dir}/ocudu-gnb0-internal.log" >/dev/null 2>&1 || true
   docker cp ocudu_gnb1:/tmp/gnb.log "${log_dir}/ocudu-gnb1-internal.log" >/dev/null 2>&1 || true
   grep -q 'Cell.*activated\|SIB1' "${log_dir}/ocudu-gnb0-internal.log" 2>/dev/null && gnb0_up=1
   grep -q 'Cell.*activated\|SIB1' "${log_dir}/ocudu-gnb1-internal.log" 2>/dev/null && gnb1_up=1
+  [[ "${cells}" -eq 1 ]] && gnb1_up=1
   [[ "${gnb0_up}" -eq 1 && "${gnb1_up}" -eq 1 ]] && break
   sleep 1
 done
-echo "cells: gnb0_up=${gnb0_up} gnb1_up=${gnb1_up}"
+if [[ "${cells}" -eq 1 ]]; then
+  echo "cells: gnb0_up=${gnb0_up} (single-cell run)"
+else
+  echo "cells: gnb0_up=${gnb0_up} gnb1_up=${gnb1_up}"
+fi
 
 run_srsue() {
   # $1 container name  $2 tx port  $3 config  $4 log  $5 preamble index
@@ -926,7 +1006,8 @@ run_srsue() {
     "${srsue_image}" -lc 'mkdir -p /var/run/netns && ip netns add ue1 && exec srsue /config/ue.conf' \
     >"$4" 2>&1 &
 }
-run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log" 0
+run_srsue ocudu_srsue_0 3101 "${srsue0_config}" "${log_dir}/srsue0.log" \
+  "${OCUDU_MGNB_UE0_PREAMBLE_INDEX:-0}"
 ue0_pid="$!"
 # Hold ue1 until ue0 is RRC-connected (capped), then a short settle.
 if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
@@ -936,7 +1017,8 @@ if [[ "${ue_stagger_seconds}" -gt 0 ]]; then
   done
   sleep 2
 fi
-run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log" 1
+run_srsue ocudu_srsue_1 3103 "${srsue1_config}" "${log_dir}/srsue1.log" \
+  "${OCUDU_MGNB_UE1_PREAMBLE_INDEX:-1}"
 ue1_pid="$!"
 
 deadline=$((SECONDS + duration_seconds))

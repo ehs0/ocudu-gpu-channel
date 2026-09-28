@@ -1,0 +1,115 @@
+# Sionna RT-driven single-cell topology: one 4-antenna gNB, two srsUEs.
+#
+# The two-cell topology splits the handsets across cells, and srsUE camps on
+# whichever PCI it hears strongest rather than on the cell a scenario labels
+# as serving. One cell removes that entirely: both robots attach here or not
+# at all, which is also the arrangement the street-canyon reference run ends
+# up in whenever it passes.
+#
+# Per UE the downlink is a 1x4 row and the uplink a 4x1 column -- rank-1
+# MISO/SIMO, never 2x2. Ports pair tx even / rx odd, matching the 4T4R gNB
+# fixture's ZMQ device_args. Six links: two downlink, two uplink, and the
+# UE<->UE leakage pair. Every one carries the canonical control key
+# "from>to:sionna_rt", which is what the bridge swaps at runtime.
+runtime:
+  backend: cuda
+  gpu_device: 0
+  batch_samples: 23040
+  queue_samples: 2457600
+devices:
+  - id: gnb0_p0
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3000
+    rx_endpoint: tcp://*:3001
+    rx_model: noise_floor
+  - id: gnb0_p1
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3002
+    rx_endpoint: tcp://*:3003
+    rx_model: noise_floor
+  - id: gnb0_p2
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3004
+    rx_endpoint: tcp://*:3005
+    rx_model: noise_floor
+  - id: gnb0_p3
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3006
+    rx_endpoint: tcp://*:3007
+    rx_model: noise_floor
+  - id: ue0_p0
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3101
+    rx_endpoint: tcp://*:3100
+    rx_model: noise_floor
+  - id: ue1_p0
+    role: port
+    sample_rate_hz: 23040000
+    tx_endpoint: tcp://127.0.0.1:3103
+    rx_endpoint: tcp://*:3102
+    rx_model: noise_floor
+
+radio_nodes:
+  - id: gnb0
+    tx_ports:
+      - gnb0_p0
+      - gnb0_p1
+      - gnb0_p2
+      - gnb0_p3
+    rx_ports:
+      - gnb0_p0
+      - gnb0_p1
+      - gnb0_p2
+      - gnb0_p3
+  - id: ue0
+    tx_ports:
+      - ue0_p0
+    rx_ports:
+      - ue0_p0
+  - id: ue1
+    tx_ports:
+      - ue1_p0
+    rx_ports:
+      - ue1_p0
+links:
+  - from: gnb0
+    to: ue0
+    model: sionna_rt
+  - from: gnb0
+    to: ue1
+    model: sionna_rt
+  - from: ue0
+    to: gnb0
+    model: sionna_rt
+  - from: ue1
+    to: gnb0
+    model: sionna_rt
+  - from: ue0
+    to: ue1
+    model: sionna_rt
+  - from: ue1
+    to: ue0
+    model: sionna_rt
+models:
+  # Routing anchor for runtime profile_swap. The bridge replaces this tap
+  # before any IQ matters; no statistical fading is added because the
+  # instantaneous complex coefficients already come from Sionna.
+  sionna_rt:
+    chain:
+      - type: tdl
+        taps:
+          - delay_samples: 0.0
+            gain_db: -100.0
+            phase_rad: 0.0
+  # Receiver noise, applied once to the superposed sum at each node. The value
+  # is absolute and tied to the emulator's sample scale, so it is carried over
+  # from topology.sionna-multi-gnb.cuda.yaml unchanged rather than re-derived.
+  noise_floor:
+    chain:
+      - type: awgn
+        noise_power: 1.05e-7

@@ -50,6 +50,17 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="validate lock syntax and present files while listing missing cache inputs",
     )
+    parser.add_argument(
+        "--allow-untracked",
+        action="store_true",
+        help=(
+            "accept untracked files in a locked checkout. The commit and every "
+            "tracked file are still required to match, so what the run was "
+            "built from is unchanged; this only tolerates artifacts a run "
+            "drops inside the tree, such as the Open5GS subscriber_db.csv that "
+            "docker-compose mounts back into the core"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -129,7 +140,14 @@ def main() -> int:
             missing.append(source["path"])
             continue
         require(command("git", "-C", str(path), "rev-parse", "HEAD") == source["commit"], f"Git revision mismatch: {source['name']}")
-        require(command("git", "-C", str(path), "status", "--porcelain") == "", f"Git checkout is dirty: {source['name']}")
+        # `??` marks a file git has never seen. Under --allow-untracked those
+        # are dropped and everything else -- staged, modified, deleted,
+        # renamed -- still fails, so a relaxed run is still built from exactly
+        # the locked code.
+        dirt = command("git", "-C", str(path), "status", "--porcelain").splitlines()
+        if args.allow_untracked:
+            dirt = [line for line in dirt if not line.startswith("??")]
+        require(not dirt, f"Git checkout is dirty: {source['name']}")
         missing_objects = command(
             "git", "-C", str(path), "rev-list", "--objects", "--missing=print", "HEAD"
         )

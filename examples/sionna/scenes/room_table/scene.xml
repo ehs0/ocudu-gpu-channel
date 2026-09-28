@@ -1,0 +1,95 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scene version="2.1.0">
+  <bsdf type="itu-radio-material" id="concrete">
+    <string name="type" value="concrete" />
+    <float name="thickness" value="0.2" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="wood">
+    <string name="type" value="wood" />
+    <float name="thickness" value="0.05" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="glass">
+    <string name="type" value="glass" />
+    <float name="thickness" value="0.01" />
+  </bsdf>
+  <shape type="ply" id="mesh-floor">
+    <string name="filename" value="meshes/floor.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_south">
+    <string name="filename" value="meshes/building_wall_south.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_north">
+    <string name="filename" value="meshes/building_wall_north.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_west_south">
+    <string name="filename" value="meshes/building_wall_west_south.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_west_north">
+    <string name="filename" value="meshes/building_wall_west_north.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_west_below">
+    <string name="filename" value="meshes/building_wall_west_below.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_west_above">
+    <string name="filename" value="meshes/building_wall_west_above.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_window">
+    <string name="filename" value="meshes/building_window.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="glass" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_east_south">
+    <string name="filename" value="meshes/building_wall_east_south.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_east_north">
+    <string name="filename" value="meshes/building_wall_east_north.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_wall_east_above">
+    <string name="filename" value="meshes/building_wall_east_above.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-wood_door">
+    <string name="filename" value="meshes/wood_door.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-wood_wall_table_north">
+    <string name="filename" value="meshes/wood_wall_table_north.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-wood_wall_table_south">
+    <string name="filename" value="meshes/wood_wall_table_south.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-wood_centre_table_west">
+    <string name="filename" value="meshes/wood_centre_table_west.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-wood_centre_table_east">
+    <string name="filename" value="meshes/wood_centre_table_east.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+</scene>

@@ -40,7 +40,9 @@ if __package__ in (None, ""):
         make_matrix_profile_swap,
         rays_to_taps,
     )
+    from isaac_source import IsaacPositionSource  # type: ignore
 else:
+    from .isaac_source import IsaacPositionSource
     from .channel_adapter import (
         LaneProfile,
         MatrixProfile,
@@ -580,6 +582,7 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
         "sample_rate_hz": args.sample_rate_hz,
         "update_rate_hz": args.update_hz,
         "gain_offset_db": args.gain_offset_db,
+        "uplink_gain_offset_db": args.uplink_gain_offset_db,
         "frequencies_hz": {
             "downlink": args.downlink_frequency_hz,
             "uplink": args.uplink_frequency_hz,
@@ -642,6 +645,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-endpoint", default="tcp://127.0.0.1:5559")
     parser.add_argument(
+        "--position-endpoint",
+        default=None,
+        help=(
+            "subscribe to node poses published by a simulator (Isaac Sim), "
+            "e.g. tcp://127.0.0.1:5601. Nodes named in a frame follow it; "
+            "the rest keep their configured motion. Omit for configured "
+            "motion only."
+        ),
+    )
+    parser.add_argument(
         "--scenario-config",
         type=pathlib.Path,
         help="JSON node/link/antenna configuration; overrides --layout motion and arrays",
@@ -682,6 +695,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--carrier-frequency-hz",
         type=float,
         help="compatibility/TDD override: use one carrier for both directions",
+    )
+    parser.add_argument(
+        "--uplink-gain-offset-db", type=float, default=None,
+        help=(
+            "calibration offset for uplink links only; falls back to "
+            "--gain-offset-db when unset. Needed where the two directions "
+            "do not scale alike, which an indoor scene makes obvious: a "
+            "level that leaves the downlink readable can still drive the "
+            "cell's receiver past full scale."
+        ),
     )
     parser.add_argument("--gain-offset-db", type=float, default=60.0,
                         help="fixed Sionna-field to normalized-IQ calibration")
@@ -1545,11 +1568,33 @@ class SionnaScenario:
             polarization=rx.polarization,
         )
 
-    def update_positions(self, elapsed_seconds: float) -> dict[str, tuple[float, float, float]]:
+    def update_positions(
+        self,
+        elapsed_seconds: float,
+        external: dict[str, Any] | None = None,
+    ) -> dict[str, tuple[float, float, float]]:
+        """Place every node for this tick.
+
+        `external` carries poses from a simulator driving the nodes from
+        outside -- Isaac Sim, in the robot demo. It is consulted per node, not
+        all-or-nothing: an Isaac scene that owns only the UEs leaves the gNBs
+        to their configured motion, which is what a fixed access point wants.
+        """
+
         positions: dict[str, tuple[float, float, float]] = {}
         for node_id, motion in self.motion.items():
-            position = motion.position_at(elapsed_seconds)
-            velocity = motion.velocity_at(elapsed_seconds)
+            supplied = (external or {}).get(node_id)
+            if supplied is None:
+                position = motion.position_at(elapsed_seconds)
+                velocity = motion.velocity_at(elapsed_seconds)
+            else:
+                # Mitsuba's Point3f rejects numpy scalars, and a simulator
+                # sending float32 poses is the normal case, so coerce here
+                # rather than trusting every publisher to have done it.
+                position = tuple(float(value) for value in supplied["position_m"])
+                velocity = tuple(
+                    float(value) for value in supplied.get("velocity_mps", (0.0, 0.0, 0.0))
+                )
             positions[node_id] = position
             self.current_positions[node_id] = position
             self.current_velocities[node_id] = velocity
@@ -1558,6 +1603,24 @@ class SionnaScenario:
             self.scene.get(f"{node_id}_tx").velocity = velocity
             self.scene.get(f"{node_id}_rx").velocity = velocity
         return positions
+
+    def link_gain_offset_db(self, link: "ScenarioLink") -> float:
+        """Calibration offset for one link, which is not the same both ways.
+
+        ``gain_offset_db`` bridges Sionna's physical field scale and the
+        normalized IQ scale of the software radios, and those two radios do
+        not scale alike: a gNB and a handset drive their ZMQ streams at
+        different levels, and every UE uplink into a cell is superposed on
+        the same receiver. One number for both directions therefore leaves
+        one of them wrong. Too hot on the uplink is the damaging case --
+        PRACH survives it on processing gain alone while msg3 clips into
+        CRC failures, so a UE gets a random-access response it can never
+        follow up, which reads as "the cell ignores this UE".
+        """
+
+        if link.direction == "uplink" and self.args.uplink_gain_offset_db is not None:
+            return float(self.args.uplink_gain_offset_db)
+        return float(self.args.gain_offset_db)
 
     def trace(self, carrier_frequency_hz: float) -> Any:
         self.scene.frequency = carrier_frequency_hz
@@ -1617,6 +1680,7 @@ class SionnaScenario:
 
         profiles: dict[str, MatrixProfile] = {}
         statuses: list[dict[str, Any]] = []
+
         for link in links:
             source = link.source
             destination = link.destination
@@ -1659,7 +1723,7 @@ class SionnaScenario:
                     taps = rays_to_taps(
                         rays,
                         sample_rate_hz=self.args.sample_rate_hz,
-                        gain_offset_db=self.args.gain_offset_db,
+                        gain_offset_db=self.link_gain_offset_db(link),
                     )
                     lane_profiles.append(
                         LaneProfile(rx_port, tx_port, tuple(taps))
@@ -1825,6 +1889,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scenario: SionnaScenario | None = None
     client: ZmqControlClient | None = None
+    isaac: IsaacPositionSource | None = None
     start = 0.0
     next_update = 0.0
     iteration = 0
@@ -1834,6 +1899,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_scene_mesh(scene_mesh_path(args.status_jsonl), scenario.scene_mesh)
         environment = scenario_environment(args)
         client = None if args.dry_run else ZmqControlClient(args.control_endpoint)
+        if args.position_endpoint:
+            isaac = IsaacPositionSource(args.position_endpoint)
         start = time.monotonic()
         next_update = start
         publish_runtime(
@@ -1859,7 +1926,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             update_started = time.monotonic()
             update_started_unix_ms = time.time_ns() // 1_000_000
             elapsed = time.monotonic() - start
-            positions = scenario.update_positions(elapsed)
+            positions = scenario.update_positions(
+                elapsed, external=isaac.poll() if isaac is not None else None
+            )
             generation_started = time.monotonic()
             publish_runtime(
                 "tracing_channels",

@@ -1679,6 +1679,12 @@ class StatusStore:
         self._warmup_targets: dict[tuple[Any, Any], dict[str, int]] = {}
         self._bad_telemetry_frames = 0
         self._gnb_metrics: dict[str, dict[str, Any]] = {}
+        # Static launch parameters, set once at startup rather than fed.
+        self._ue_preambles: dict[str, int] = {}
+
+    def set_ue_preambles(self, preambles: dict[str, int]) -> None:
+        with self._lock:
+            self._ue_preambles = dict(preambles)
 
     def _gnb_feed(self, gnb_id: str) -> dict[str, Any]:
         # Caller holds _lock. Insertion order also defines the legacy source.
@@ -2180,6 +2186,13 @@ class StatusStore:
             "delivery": delivery_status(sionna, telemetry, telemetry_ages),
             "ran": legacy_ran,
             "ran_gnbs": ran_gnbs,
+            # Which PRACH preamble each UE was launched with. srsUE hardcodes
+            # preamble 0 (proc_ra_nr.cc), so two UEs left at the default
+            # collide on every attempt and never resolve; the harness assigns
+            # distinct indices instead. It is a launch parameter, not
+            # something any feed reports, so it is passed in and echoed here
+            # to make the assignment visible next to the UEs it applies to.
+            "ue_preambles": dict(self._ue_preambles),
         }
 
     def realtime_snapshot(
@@ -2580,6 +2593,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Named gNB metrics source; repeat for multiple gNBs. Cannot combine with --gnb-metrics-endpoint.",
     )
     parser.add_argument(
+        "--ue-preamble", action="append", default=[], metavar="ID=INDEX",
+        help=(
+            "PRACH preamble index a UE was launched with; repeat per UE "
+            "(e.g. ue0=0 ue1=1). Display only -- the dashboard cannot read "
+            "it from any feed, and two UEs sharing an index collide on every "
+            "random-access attempt."
+        ),
+    )
+    parser.add_argument(
         "--resource-interval-ms",
         type=float,
         default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
@@ -2607,6 +2629,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         if gnb_id in args.gnb_metrics_sources:
             parser.error(f"duplicate gNB metrics ID: {gnb_id}")
         args.gnb_metrics_sources[gnb_id] = endpoint
+    args.ue_preambles = {}
+    for entry in args.ue_preamble:
+        ue_id, separator, index = entry.partition("=")
+        if not separator or not ue_id.strip() or not index.strip():
+            parser.error("ue-preamble requires ID=INDEX")
+        try:
+            args.ue_preambles[ue_id.strip()] = int(index)
+        except ValueError:
+            parser.error(f"ue-preamble index must be an integer: {entry}")
     for endpoint in args.gnb_metrics_sources.values():
         try:
             parse_ws_endpoint(endpoint)
@@ -2647,6 +2678,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         name="nvidia-process-monitor",
         daemon=True,
     )
+    store.set_ue_preambles(args.ue_preambles)
     metrics_threads = []
     for gnb_id, endpoint in args.gnb_metrics_sources.items():
         # Register before threads run so legacy selection is deterministic.

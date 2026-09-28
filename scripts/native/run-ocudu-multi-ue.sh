@@ -72,9 +72,17 @@ done
 [[ "$(git -C "${native_root}/src/ocudu" rev-parse HEAD)" == "${audited_ocudu}" ]] || usage_error "OCUDU revision mismatch"
 [[ "$(git -C "${native_root}/src/srsRAN_4G" rev-parse HEAD)" == "${audited_srsran}" ]] || usage_error "srsRAN revision mismatch"
 [[ "$(git -C "${native_root}/src/open5gs" rev-parse HEAD)" == "${audited_open5gs}" ]] || usage_error "Open5GS revision mismatch"
+# A live demo drops files inside the locked checkouts -- Open5GS writes the
+# subscriber database that docker-compose then mounts back into the core --
+# and the lock check cannot tell those from an edited source. Setting
+# OCUDU_NATIVE_ALLOW_UNTRACKED=1 tolerates them; the commit and every tracked
+# file are still required to match, so a measurement run left at the default
+# still proves what it was built from.
+lock_args=()
+[[ "${OCUDU_NATIVE_ALLOW_UNTRACKED:-0}" == "1" ]] && lock_args+=(--allow-untracked)
 "/usr/bin/python3" "${script_dir}/verify-workspace-lock.py" \
   --root "${native_root}" --repo-root "${repo_root}" \
-  --lock "${script_dir}/native-workspace.lock.json"
+  --lock "${script_dir}/native-workspace.lock.json" "${lock_args[@]}"
 grep -qx 'ENABLE_ZEROMQ:BOOL=ON' "${native_root}/builds/ocudu-zmq-release/CMakeCache.txt" || usage_error "gNB lacks ZMQ"
 # Ports for the gNB pair and BOTH UE pairs, plus mongo and the core.
 for port in 2000 2001 2100 2101 2102 2103 27017 38412 7777; do
