@@ -81,6 +81,9 @@ cells="${OCUDU_MGNB_CELLS:-2}"
 # srsUE ZMQ transmit gain, in dB of sample amplitude. Read here and passed as
 # an argument so it reaches a remote host too. See write_srsue_config.
 ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
+# srsUE [log] all_level. info writes ~4 GB per UE per 10 min, and that load
+# sits on the same cores as the lock-step radios; warning keeps errors only.
+srsue_log_level="${OCUDU_MGNB_SRSUE_LOG_LEVEL:-info}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
 # srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped. The two
 # UEs were assumed not to collide on RACH because they camp on different
@@ -158,7 +161,8 @@ remote_sh bash -s -- \
   "${sionna_extra_args_b64:-__none__}" \
   "${apt_mirror:-__none__}" \
   "${cells}" \
-  "${ue_tx_gain}" <<'REMOTE'
+  "${ue_tx_gain}" \
+  "${srsue_log_level}" <<'REMOTE'
 set -euo pipefail
 
 workspace="$1"
@@ -196,6 +200,11 @@ apt_mirror="${25:-__none__}"
 [[ "${apt_mirror}" == "__none__" ]] && apt_mirror=""
 cells="${26:-2}"
 ue_tx_gain="${27:-50}"
+srsue_log_level="${28:-info}"
+[[ "${srsue_log_level}" =~ ^(none|error|warning|info|debug)$ ]] || {
+  echo "OCUDU_MGNB_SRSUE_LOG_LEVEL must be none, error, warning, info or debug" >&2
+  exit 2
+}
 [[ "${cells}" == "1" || "${cells}" == "2" ]] || {
   echo "OCUDU_MGNB_CELLS must be 1 or 2" >&2
   exit 2
@@ -715,7 +724,7 @@ ip_devname = tun_srsue
 ip_netmask = 255.255.255.0
 
 [log]
-all_level = info
+all_level = ${srsue_log_level}
 filename = /tmp/srsue.log
 
 [pcap]
