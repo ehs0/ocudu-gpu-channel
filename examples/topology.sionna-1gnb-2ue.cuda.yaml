@@ -8,9 +8,17 @@
 #
 # Per UE the downlink is a 1x4 row and the uplink a 4x1 column -- rank-1
 # MISO/SIMO, never 2x2. Ports pair tx even / rx odd, matching the 4T4R gNB
-# fixture's ZMQ device_args. Six links: two downlink, two uplink, and the
-# UE<->UE leakage pair. Every one carries the canonical control key
-# "from>to:sionna_rt", which is what the bridge swaps at runtime.
+# fixture's ZMQ device_args. Four links: two downlink, two uplink. Every one
+# carries the canonical control key "from>to:sionna_rt", which is what the
+# bridge swaps at runtime.
+#
+# No UE<->UE edges. Band n3 is FDD with 95 MHz duplex spacing, so a UE's
+# uplink never reaches another UE's downlink demodulator; ZMQ folds both
+# directions onto one baseband, so such an edge lands in-band instead. With
+# the srsUE tx_gain of 50 it arrived ~60 dB above the serving downlink, broke
+# the other UE's PBCH decode and knocked it out of sync. srsUE does not
+# re-align its slot counter after such a loss, so that UE then stays SFN
+# slipped and the cell never hears its uplink again.
 runtime:
   backend: cuda
   gpu_device: 0
@@ -88,12 +96,6 @@ links:
     model: sionna_rt
   - from: ue1
     to: gnb0
-    model: sionna_rt
-  - from: ue0
-    to: ue1
-    model: sionna_rt
-  - from: ue1
-    to: ue0
     model: sionna_rt
 models:
   # Routing anchor for runtime profile_swap. The bridge replaces this tap
