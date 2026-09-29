@@ -86,6 +86,9 @@ else:
         preamble = 'set -euo pipefail\n' + '\n'.join(f'{name}=value{n}' for n, name in enumerate(variables))
         # ssh joins its command arguments before the remote shell parses them.
         preamble += '\nfivegc_host_port=\nremote_sh() { bash -c "$*"; }\n'
+        # Passed after the bridge arguments and validated inside the slice
+        # this test runs, so they need real values, not placeholders.
+        preamble += 'cells=2\nue_tx_gain=50\nsrsue_log_level=info\n'
         report = 'printf \'%s\\0\' "${cuda_compiler}" "${execution_mode}" "${topology_name}" "${fivegc_host_port:-empty}"\n'
         report += 'if [[ "${#sionna_bridge_args[@]}" -gt 0 ]]; then printf \'%s\\0\' "${sionna_bridge_args[@]}"; fi\n'
         result = subprocess.run(['bash'], input=preamble + '\n' + outer + "<<'REMOTE'\n" + inner + report + 'REMOTE\n',

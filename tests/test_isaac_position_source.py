@@ -14,7 +14,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "sionna_rt"))
 
 import zmq  # noqa: E402
 
-from build_room_scene import box, room_boxes  # noqa: E402
+from build_room_scene import box, build_parser, room_boxes  # noqa: E402
 from isaac_source import IsaacPositionSource  # noqa: E402
 
 
@@ -22,16 +22,11 @@ class RoomGeometryTest(unittest.TestCase):
     """The room is the one thing Isaac and Sionna must agree on exactly."""
 
     @staticmethod
-    def _args(**overrides):
-        defaults = {
-            "room_span_m": 10.0,
-            "room_height_m": 3.0,
-            "wall_thickness_m": 0.2,
-            "table_size_m": [2.0, 1.2, 0.75],
-            "table_center_m": [0.0, 0.0],
-        }
-        defaults.update(overrides)
-        return type("Args", (), defaults)
+    def _args(*argv):
+        # The generator's own parser, so these tests follow its defaults
+        # instead of a copy of them. An earlier copy here went stale the first
+        # time the room was redesigned.
+        return build_parser().parse_args(["--out", "unused", *argv])
 
     def test_box_faces_are_triangles(self) -> None:
         # Mitsuba's PLY loader refuses quads, and the failure only surfaces
@@ -57,24 +52,41 @@ class RoomGeometryTest(unittest.TestCase):
             self.assertGreater(sum(normal[i] * centroid[i] for i in range(3)), 0.0)
 
     def test_walls_leave_the_interior_clear(self) -> None:
-        boxes = room_boxes(self._args())
-        by_id = {item["id"]: item for item in boxes}
-        span = 10.0
-        for wall, axis in (("building_wall_east", 0), ("building_wall_north", 1)):
-            near_face = by_id[wall]["center"][axis] - by_id[wall]["size"][axis] / 2.0
-            self.assertAlmostEqual(near_face, span / 2.0, places=6)
+        # Every wall slab -- including the pieces the window and door openings
+        # are cut from -- sits outside the clear interior, with its inner face
+        # exactly on the room boundary.
+        args = self._args()
+        half = args.room_span_m / 2.0
+        walls = [i for i in room_boxes(args) if i["id"].startswith("building_wall")]
+        self.assertTrue(walls)
+        for wall in walls:
+            axis = min(range(2), key=lambda k: wall["size"][k])  # the thin axis
+            inner = abs(wall["center"][axis]) - wall["size"][axis] / 2.0
+            self.assertAlmostEqual(inner, half, places=6, msg=wall["id"])
 
-    def test_table_sits_on_the_floor(self) -> None:
-        table = next(i for i in room_boxes(self._args()) if i["id"] == "wood_table")
-        self.assertAlmostEqual(table["center"][2] - table["size"][2] / 2.0, 0.0, places=6)
-        self.assertAlmostEqual(table["center"][2] + table["size"][2] / 2.0, 0.75, places=6)
+    def test_tables_sit_on_the_floor(self) -> None:
+        args = self._args()
+        heights = {
+            "wood_wall_table": args.wall_table_m[2],
+            "wood_centre_table": args.centre_table_m[1],
+        }
+        tables = [i for i in room_boxes(args) if "table" in i["id"]]
+        self.assertEqual(len(tables), 4)  # two along the walls, two at the centre
+        for table in tables:
+            height = next(v for k, v in heights.items() if table["id"].startswith(k))
+            self.assertAlmostEqual(table["center"][2] - table["size"][2] / 2.0, 0.0,
+                                   places=6, msg=table["id"])
+            self.assertAlmostEqual(table["center"][2] + table["size"][2] / 2.0, height,
+                                   places=6, msg=table["id"])
 
     def test_object_ids_classify_for_the_viewer(self) -> None:
         from run_bridge import surface_kind
 
         kinds = {item["id"]: surface_kind(item["id"]) for item in room_boxes(self._args())}
-        self.assertEqual(kinds["wood_table"], "wood")
+        self.assertEqual(kinds["wood_centre_table_west"], "wood")
+        self.assertEqual(kinds["wood_door"], "wood")
         self.assertEqual(kinds["building_wall_north"], "building")
+        self.assertEqual(kinds["building_window"], "building")
 
 
 class IsaacPositionSourceTest(unittest.TestCase):

@@ -233,7 +233,9 @@ def write_scene(directory: pathlib.Path, boxes: list[dict]) -> None:
     (directory / "scene.xml").write_text("\n".join(lines) + "\n")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    # Kept separate from main() so tests build the room from the same
+    # defaults the CLI uses, rather than a copy that drifts from them.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", type=pathlib.Path, required=True,
                         help="scene directory to write (scene.xml, meshes/, room.json)")
@@ -263,7 +265,11 @@ def main() -> None:
     parser.add_argument("--centre-table-gap-m", type=float, default=0.2,
                         help="clearance between the two centre tables")
     parser.add_argument("--centre-pair-center-m", type=float, nargs=2, default=[0.0, 0.0])
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
 
     boxes = room_boxes(args)
     args.out.mkdir(parents=True, exist_ok=True)

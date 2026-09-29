@@ -1055,10 +1055,21 @@ class WebUiTests(unittest.TestCase):
         # picker exists, or a selection would silently do nothing.
         self.assertNotIn("tapPlot(lanes,laneColors)", index)
         self.assertNotIn("frequencyResponsePlot(lanes,laneColors", index)
-        # RAN KPI panel, and it must be the last section on the page.
+        # RAN KPI panel, and the scheduler-derived panels sit at the bottom of
+        # the page: the RAN table, then the per-UE status built from it.
         self.assertIn("RAN KPIs by UE · gNB scheduler metrics", index)
-        self.assertIn("function renderRanCards(ran, gnbs)", index)
-        self.assertIn("renderRanCards(data.ran, data.ran_gnbs)", index)
+        # The scenario is passed in so every gNB it defines gets a card, not
+        # only the first one.
+        self.assertIn("function renderRanCards(ran, gnbs, sionna)", index)
+        self.assertIn("renderRanCards(data.ran, data.ran_gnbs, s)", index)
+        self.assertIn("UE status · attach, serving cell, SNR, rate", index)
+        self.assertLess(
+            index.index("RAN KPIs by UE"),
+            index.index("UE status · attach, serving cell, SNR, rate"),
+            "the UE status panel follows the RAN panel it is built from",
+        )
+        # A UE the scheduler still lists is not necessarily one with a link.
+        self.assertIn("context only / link lost", index)
         for field in ("rnti", "cqi", "dl_ri", "dl_mcs", "dl_brate", "dl_nof_nok",
                       "pusch_snr_db", "pucch_snr_db", "pusch_rsrp_db", "bsr",
                       "ta_ns", "last_phr"):
