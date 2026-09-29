@@ -56,7 +56,7 @@
     .facts dt { color:var(--muted); } .facts dd { margin:0; overflow-wrap:anywhere; }
     .delivery { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; margin-bottom:16px; }
     .delivery strong { display:block; color:var(--green); margin-bottom:4px; } .delivery strong.wait { color:var(--amber); }
-    .tag-ok { color:var(--green); } .tag-wait { color:var(--amber); } .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .tag-ok { color:var(--green); } .tag-wait { color:var(--amber); } .tag-lost { color:var(--red); } .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
     .foot { color:var(--muted); font-size:12px; margin-top:12px; }
     .deadline-grid,.edge-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
     .deadline-card,.edge-card { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; min-width:0; }
@@ -585,7 +585,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         <h2>UE status · attach, serving cell, SNR, rate</h2>
         <div id="ueState" class="foot"></div>
         <div id="ueCards"></div>
-        <div class="foot">One card per UE in the scenario. <b>Attached</b> means a gNB scheduler feed is currently reporting that UE, and the serving cell is the gNB whose feed reports it — which is measured, not assumed from the scenario's link labels, so a robot that ends up on the other cell shows up as such here. SNR is the scheduler's PUSCH SINR for that UE and the rates are its DL/UL bearer rates, both as reported. <b>Path gain</b> and <b>distance</b> come from the Sionna side instead: the traced total path power on each gNB→UE link and the straight-line separation, so a UE that is not attached still shows what the channel is offering it. A UE with no scheduler row anywhere reads as detached with channel figures only. <b>PRACH preamble</b> is the index the UE was launched with, not a reading: srsUE hardcodes preamble 0 and occasion 0 (<span class="mono">proc_ra_nr.cc</span>) instead of drawing one at random as TS 38.321 §5.1.2 specifies, so two UEs left at the default transmit the identical preamble in the identical occasion on every attempt and contention resolution never breaks the tie — one attaches and the other retries forever. The harness assigns distinct indices, which is the contention-free case 3GPP reserves for network-assigned access; it also means real RACH contention is not modelled here. An index shared by two UEs is marked.</div>
+        <div class="foot">One card per UE in the scenario. <b>Attached</b> means the UE moved data — any HARQ transmission or a non-zero rate — in a scheduler report within the last 5 s. <b>Context only / link lost</b> means a gNB still lists the UE but it has moved nothing in that window: the gNB keeps a context until something releases it, so a UE that lost its radio link goes on appearing as a row of zeros, and a single report cannot tell that apart from an idle UE. A UE that is idle on purpose will therefore read as context only; send it traffic to confirm the link. <b>Last traffic</b> is when data last moved. The serving cell is the gNB whose feed reports it — which is measured, not assumed from the scenario's link labels, so a robot that ends up on the other cell shows up as such here. SNR is the scheduler's PUSCH SINR for that UE and the rates are its DL/UL bearer rates, both as reported. <b>Path gain</b> and <b>distance</b> come from the Sionna side instead: the traced total path power on each gNB→UE link and the straight-line separation, so a UE that is not attached still shows what the channel is offering it. A UE with no scheduler row anywhere reads as detached with channel figures only. <b>PRACH preamble</b> is the index the UE was launched with, not a reading: srsUE hardcodes preamble 0 and occasion 0 (<span class="mono">proc_ra_nr.cc</span>) instead of drawing one at random as TS 38.321 §5.1.2 specifies, so two UEs left at the default transmit the identical preamble in the identical occasion on every attempt and contention resolution never breaks the tie — one attaches and the other retries forever. The harness assigns distinct indices, which is the contention-free case 3GPP reserves for network-assigned access; it also means real RACH contention is not modelled here. An index shared by two UEs is marked.</div>
       </section>
     </div>
   </main>
@@ -891,6 +891,22 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       return Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
     }
 
+    // A UE the scheduler still lists is not necessarily a UE with a working
+    // link. The gNB keeps a context until something releases it, and a UE
+    // that lost its radio link minutes ago goes on appearing as a row with
+    // every counter at zero -- which is exactly how an attached-but-idle UE
+    // looks in a single report. The difference only shows over time, so the
+    // last report in which a UE actually moved data (any HARQ transmission,
+    // or a non-zero rate) is remembered per cell and RNTI, and "attached"
+    // is reserved for UEs that did so within the window.
+    const UE_ACTIVE_WINDOW_MS = 5000;
+    const ueLastActivity = new Map();
+    function rowCarriedTraffic(row) {
+      const harq = ['dl_nof_ok','dl_nof_nok','ul_nof_ok','ul_nof_nok']
+        .reduce((sum,key)=>sum+(Number(row?.[key])||0),0);
+      return harq>0 || Number(row?.dl_brate)>0 || Number(row?.ul_brate)>0;
+    }
+
     function renderUeCards(sionna, gnbs, preambles) {
       const ueIds=scenarioUeIds(sionna);
       const preamble=preambles||{};
@@ -908,10 +924,29 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       const assigned=new Map();
       ueIds.forEach((id,index)=>{ if(attached[index])assigned.set(id,attached[index]); });
 
+      const now=Date.now();
+      const tally={active:0,context:0,detached:0};
       const cards=ueIds.map(id=>{
         const hit=assigned.get(id),row=hit?.row;
         const serving=hit?.gnbId;
-        const state=hit?'<span class="tag-ok">attached</span>':'<span class="tag-wait">detached</span>';
+        let lastActive=null;
+        if(hit){
+          const key=`${hit.gnbId}:${row?.rnti}`;
+          if(rowCarriedTraffic(row))ueLastActivity.set(key,now);
+          lastActive=ueLastActivity.get(key)??null;
+        }
+        const quiet=lastActive==null?null:now-lastActive;
+        let state;
+        if(!hit){
+          state='<span class="tag-wait">detached</span>'; tally.detached++;
+        }else if(quiet!=null&&quiet<=UE_ACTIVE_WINDOW_MS){
+          state='<span class="tag-ok">attached</span>'; tally.active++;
+        }else{
+          state='<span class="tag-lost">context only / link lost</span>'; tally.context++;
+        }
+        const lastTraffic=!hit?'—'
+          :lastActive==null?'never seen'
+          :quiet<1000?'now':`${fmt(quiet/1000,0)} s ago`;
         // Strongest traced downlink into this UE, whatever cell it is from.
         // source/destination are not always present on a channel record, so
         // the link id -- which always is -- is the fallback, exactly as the
@@ -932,6 +967,7 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
           :clash?`${index} <span class="tag-wait">shared</span>`:String(index);
         const items=[
           ['Serving cell', serving?esc(serving):'—'],
+          ['Last traffic', esc(lastTraffic)],
           ['PRACH preamble', preambleText],
           ['RNTI', row&&finite(row.rnti)?`0x${Number(row.rnti).toString(16)}`:'—'],
           ['PCI', row?fmt(row.pci,0):'—'],
@@ -947,7 +983,8 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
           `<div class="stat"><b>${value}</b><span>${esc(label)}</span></div>`).join('');
         return `<section data-ue-id="${esc(id)}"><h3>${esc(id)} ${state}</h3><div class="stats">${body}</div></section>`;
       });
-      $('ueState').textContent=`${assigned.size}/${ueIds.length} UEs reported by a gNB scheduler`;
+      $('ueState').textContent=`${tally.active} attached · ${tally.context} context only / link lost · `
+        +`${tally.detached} detached (attached = data moved in the last ${UE_ACTIVE_WINDOW_MS/1000} s)`;
       $('ueCards').innerHTML=cards.join('')||'<div class="empty">No UEs in this scenario.</div>';
     }
 
