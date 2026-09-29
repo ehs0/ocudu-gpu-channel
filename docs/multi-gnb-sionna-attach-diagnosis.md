@@ -369,6 +369,58 @@ trap of `ocudu-multi-gnb-smoke.sh` and `ocudu-multi-ue-smoke.sh`, which shared
 the bug. Verified: the next run exited on its own after its 90 s hold, left no
 stray processes or containers, and wrote 460 MB instead of 4.3 GB.
 
+## The UE launch stagger freezes the network (added 2026-09-29)
+
+The smoke held ue1 back until ue0 was RRC-connected, capped at
+`OCUDU_MGNB_UE_STAGGER_SECONDS`, on the reasoning that this made two-UE
+attach reliable. It does not do what it was written to do.
+
+**What it does.** The broker advances a node's receive stream only as far as
+every incoming lane has supplied samples (`src/broker.cpp`, the
+`common = min(...)` window). While ue1 has not started, its lane into the cell
+is empty, so the cell's receive path waits, the lock-step cell stops, and ue0
+stops with it. The loop's condition — ue0 RRC-connected — cannot be met before
+ue1 exists, and in all 30 measured runs the loop ran to its timeout. When ue1
+starts, the pacer repays the frozen interval faster than real time and ue1
+attempts random access inside that burst. The broker heartbeats show it
+directly: the cell processes zero slots until ue1 appears, then thousands.
+
+**Measured**, 10 runs per arm, alternating order, everything else at the arm's
+settings:
+
+| Cells | Stagger | Pass | Cell's first slot | Notes |
+|---|---|---|---|---|
+| 1 (room scene) | 25 s | 9/10 | t = 35 s | the failure was ue1 never heard, inside the burst |
+| 1 (room scene) | **0** | **10/10** | t = 8 s | both UEs attach on the first preamble |
+| 2 (gate defaults) | 8 s | 10/10 | t = 17–19 s | |
+| 2 (gate defaults) | 0 | 6/10 | t = 8–10 s | ue0 attaches, then loses the link, in **10/10** |
+
+**Why two cells behave the other way.** Both cells run on `dl_arfcn 368500`
+with the same PRACH root sequence (`rsi=1`) and differ only in PCI and
+`gnb_id`. A preamble is identified by its root sequence, so one preamble is
+valid for both cells: gnb0 and gnb1 were logged detecting ue0's preamble 1 ms
+apart, and both allocate from the same first temporary C-RNTI, `0x4601`.
+Started together, the two UEs' access attempts are answered by both cells;
+started in sequence they are not. The mechanism by which ue0 then loses its
+link was not confirmed — the gNB logs copied out of the containers only cover
+the first seconds — so that part remains an inference.
+
+**Conclusion.** The stagger is not a mechanism that improves attach; it
+freezes the network, and in the two-cell gate that side effect is outweighed
+by its hiding a cell-planning defect, which is what made it look useful. The
+root fixes are to drop the stagger for one cell and to give each cell a
+distinct `prach_root_sequence_index` for two. Nothing in a real network
+staggers UE power-on; 3GPP resolves random-access contention with random
+preamble selection, the RAR backoff indicator and contention resolution
+(TS 38.321 §5.1), and co-channel neighbours are planned with distinct
+`prach-RootSequenceIndex` (TS 38.331). The stagger was compensating for what
+this harness lacks: srsUE pins the preamble and the occasion to 0, and every
+ZMQ radio shares the broker's virtual time.
+
+The smoke's default now follows the cell count — 0 for one cell, 8 s for two
+until the root sequences are separated — and
+`scripts/local/run-room-1gnb-2ue.sh` runs the one-cell baseline.
+
 ## Changes made
 
 | Change | File |
@@ -378,6 +430,8 @@ stray processes or containers, and wrote 460 MB instead of 4.3 GB.
 | `OCUDU_MGNB_UE_TX_GAIN` knob, default 50 | `scripts/remote/ocudu-multi-gnb-smoke.sh` |
 | Crosstalk-free diagnostic topology | `examples/topology.sionna-multi-gnb-noxtalk.cuda.yaml` |
 | Crosstalk-free diagnostic scenario | `examples/sionna/sutd/2gnb-2ue-overlap-noxtalk.json` |
+| UE launch stagger default follows the cell count (0 for one cell, 8 s for two) | `scripts/remote/ocudu-multi-gnb-smoke.sh` |
+| One-cell room baseline runner on the Docker smoke | `scripts/local/run-room-1gnb-2ue.sh` |
 
 ## Still open
 
@@ -439,3 +493,14 @@ stray processes or containers, and wrote 460 MB instead of 4.3 GB.
    effect, and setting the TD key changes the FD behaviour instead. Belongs
    upstream in the OCUDU gNB tree
    (`~/ocudu-native-workspace/src/ocudu`), not here.
+10. **The two cells share a PRACH root sequence.** `gen_gnb_config` gives
+    each cell its own PCI and `gnb_id` but leaves `rsi=1` on both, so either
+    cell detects and answers the other's preambles. Give each cell a distinct
+    `prach_root_sequence_index`, then re-measure the two-cell gate with the
+    stagger at 0; if it holds, the stagger can go for two cells as well. See
+    "The UE launch stagger freezes the network" above.
+11. **The broker freezes a node on any empty lane.** The `common = min(...)`
+    window treats a lane that has not started, or has gone quiet, the same as
+    one that is merely late, so one absent radio stops every node it feeds.
+    Past the existing `starvation_deadline`, an empty lane should contribute
+    zeros and let the node advance.

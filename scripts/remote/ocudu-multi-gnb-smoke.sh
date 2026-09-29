@@ -85,16 +85,44 @@ ue_tx_gain="${OCUDU_MGNB_UE_TX_GAIN:-50}"
 # sits on the same cores as the lock-step radios; warning keeps errors only.
 srsue_log_level="${OCUDU_MGNB_SRSUE_LOG_LEVEL:-info}"
 cuda_compiler="${OCUDU_MGNB_CUDA_COMPILER:-}"
-# srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped. The two
-# UEs were assumed not to collide on RACH because they camp on different
-# cells, and that assumption was wrong twice over -- which cell a UE camps on
-# is decided by the geometry at attach, not by the config, and both UEs
-# landed on gnb0 in every measured run; and srsRAN ZMQ radios share the
-# broker's lock-step virtual time, so two UEs started together land in the
-# same PRACH occasion whichever cell they are talking to. The distinct
-# preamble per UE below is what makes several UEs possible at all; this
-# stagger is what makes it reliable. 0 disables it.
-ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
+# srsUE launch stagger: hold ue1 until ue0 is RRC-connected, capped.
+#
+# The stagger does not make attach more reliable. What it actually does is
+# freeze the whole radio network for its full duration: the broker advances a
+# node only as far as every incoming lane has supplied samples, so while ue1
+# does not exist yet the cell's receive path waits on it, the cell stops, and
+# ue0 -- which depends on the cell -- stops with it. The condition the loop
+# waits for (ue0 RRC-connected) therefore cannot occur before ue1 starts, and
+# in all 30 measured runs, one cell and two, the loop ran to its timeout.
+# When ue1 appears the pacer repays the frozen interval faster than real
+# time, and ue1 attempts random access in the middle of that burst.
+#
+# Measured, 10 runs per arm (2026-09-29):
+#   1 cell  -- stagger 25 s: 9/10 pass, cell's first slot at t=35 s
+#              stagger 0   : 10/10 pass, cell's first slot at t=8 s
+#   2 cells -- stagger 8 s : 10/10 pass
+#              stagger 0   : 6/10 pass, and ue0 lost its link in 10/10
+#
+# The two-cell result is not the stagger helping; it is the stagger hiding a
+# cell-planning defect. Both cells share the carrier and the PRACH root
+# sequence (rsi=1), so a preamble sent to one is detected by both and both
+# answer it -- gnb0 and gnb1 were logged detecting the same preamble 1 ms
+# apart. Forcing the UEs to start in sequence keeps those answers from
+# colliding. The fix there is a distinct prach_root_sequence_index per cell,
+# which is how co-channel neighbours are planned in a real network; nothing
+# in a real network staggers UE power-on, and 3GPP resolves RACH contention
+# with random preamble selection, the RAR backoff indicator and contention
+# resolution instead (TS 38.321 section 5.1).
+#
+# So the default follows the cell count: none for one cell, where it only
+# costs a freeze, and the historical 8 s for two cells until the root
+# sequences are separated. Either way the per-UE preamble below is what keeps
+# UEs apart on RACH, since srsUE pins both the preamble and the occasion to 0.
+if [[ "${cells}" == "1" ]]; then
+  ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-0}"
+else
+  ue_stagger_seconds="${OCUDU_MGNB_UE_STAGGER_SECONDS:-8}"
+fi
 # Host to fetch Ubuntu packages from while building the images, e.g.
 # sg.archive.ubuntu.com. Empty keeps Docker's default archive.ubuntu.com.
 # This is a network-locality knob and nothing else: apt verifies every package
