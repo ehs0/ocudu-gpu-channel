@@ -12,7 +12,7 @@ spec.loader.exec_module(checker)
 
 class DemoTopologyTests(unittest.TestCase):
     def test_sutd_dimensions_and_all_ports(self):
-        scenario = json.loads((ROOT/'examples/sionna/multi-gnb-sutd.json').read_text())
+        scenario = json.loads((ROOT/'examples/sionna/sutd/2gnb-2ue.json').read_text())
         topology = yaml.safe_load((ROOT/'examples/topology.sionna-multi-gnb.cuda.yaml').read_text())
         sources = [3000,3002,3004,3006,3010,3012,3014,3016,3101,3103]
         sinks = [3001,3003,3005,3007,3011,3013,3015,3017,3100,3102]

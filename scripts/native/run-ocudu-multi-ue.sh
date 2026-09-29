@@ -77,9 +77,17 @@ if [[ "${OCUDU_NATIVE_SKIP_WORKSPACE_LOCK:-0}" == "1" ]]; then
   # satisfy it. The source pins above are still checked.
   echo "event=skip x86_native_workspace_lock"
 else
+  # A live demo drops files inside the locked checkouts -- Open5GS writes the
+  # subscriber database that docker-compose then mounts back into the core --
+  # and the lock check cannot tell those from an edited source. Setting
+  # OCUDU_NATIVE_ALLOW_UNTRACKED=1 tolerates them; the commit and every
+  # tracked file are still required to match, so a measurement run left at
+  # the default still proves what it was built from.
+  lock_args=()
+  [[ "${OCUDU_NATIVE_ALLOW_UNTRACKED:-0}" == "1" ]] && lock_args+=(--allow-untracked)
   "/usr/bin/python3" "${script_dir}/verify-workspace-lock.py" \
     --root "${native_root}" --repo-root "${repo_root}" \
-    --lock "${script_dir}/native-workspace.lock.json"
+    --lock "${script_dir}/native-workspace.lock.json" "${lock_args[@]}"
 fi
 grep -qx 'ENABLE_ZEROMQ:BOOL=ON' "${native_root}/builds/ocudu-zmq-release/CMakeCache.txt" || usage_error "gNB lacks ZMQ"
 # Ports for the gNB pair and BOTH UE pairs, plus mongo and the core.

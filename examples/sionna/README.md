@@ -5,14 +5,35 @@ bridge and the config renderers. `run_bridge.py --scenario-config <file>`
 reads it, and the native launchers pass it through
 `OCUDU_NATIVE_SIONNA_SCENARIO`.
 
-| File | Scene | Nodes | Links | Runs on the native gate |
-| --- | --- | --- | --- | --- |
-| **`ocudu-rank1-sutd.json`** | `sionna_SUTD_test` | 1 gNB (4T4R) + 1 car UE | 2 | ✅ **default for `run-ocudu-sionna-rank1.sh`** |
-| `ocudu-rank1.json` | `sionna_simple_test` | 1 gNB (4T4R) + 1 car UE | 2 | ✅ |
-| `ocudu-docker.json` | `sionna_simple_test` | 1 gNB + 1 UE, 1×1 | 2 | ✅ via `run-ocudu-sionna-1x1.sh` |
-| `sionna_SUTD_test.json` | `sionna_SUTD_test` | 1 gNB + car UE + pedestrian UE | 5 | ❌ two UEs |
-| `ocudu-docker-multi-ue.json` | `sionna_simple_test` | 1 gNB + 2 UEs | 4 | ❌ two UEs |
-| `multi-gnb.json`, `graph.json` | `sionna_simple_test` | 2 gNB + 2 UE | 8 / 6 | ❌ two gNBs |
+A scenario sits in the directory of the scene it runs on, and its filename is
+its shape: `<gNB count>gnb-<UE count>ue`, plus a suffix only where two
+scenarios of the same shape have to be told apart (`-4t4r` for a four-port
+cell, `-crosstalk` for one that also traces UE-to-UE leakage, `-overlap` for
+the two-cell layout that actually superposes). Nothing in the name is a gate
+or a deployment — those move, and the shape does not.
+
+| File | Nodes | Links | Runs on the native gate |
+| --- | --- | --- | --- |
+| **`sutd/1gnb-1ue-4t4r.json`** | 1 gNB (4T4R) + 1 car UE | 2 | ✅ **default for `run-ocudu-sionna-rank1.sh`** |
+| `sutd/1gnb-2ue.json` | 1 gNB + car UE + pedestrian UE | 4 | ✅ via `run-ocudu-sionna-multi-ue.sh` |
+| `sutd/1gnb-2ue-crosstalk.json` | 1 gNB + car UE + pedestrian UE | 5 | ❌ two UEs |
+| `sutd/2gnb-2ue.json` | 2 gNB (4T4R) + 2 UE | 10 | ❌ two gNBs |
+| `sutd/2gnb-2ue-overlap.json` | 2 gNB (4T4R) + 2 UE | 10 | ❌ two gNBs |
+| `simple/1gnb-1ue.json` | 1 gNB + 1 UE, 1×1 | 2 | ✅ via `run-ocudu-sionna-1x1.sh` |
+| `simple/1gnb-1ue-4t4r.json` | 1 gNB (4T4R) + 1 car UE | 2 | ✅ |
+| `simple/1gnb-2ue.json` | 1 gNB + 2 UEs | 4 | ❌ two UEs |
+| `simple/1gnb-2ue-crosstalk.json` | 1 gNB + 2 UEs | 6 | ❌ two UEs |
+| `simple/2gnb-2ue.json` | 2 gNB (4T4R) + 2 UE | 8 | ❌ two gNBs |
+
+`sutd/` is the OpenStreetMap campus scene that ships in `scenes/`; `simple/`
+is `sionna_simple_test`, an alias for Sionna's built-in `simple_street_canyon`.
+
+The two-cell SUTD pair differ in what they can prove: `2gnb-2ue.json` hands a
+pedestrian lap between two cells but the split is total — at every sampled
+point at most one cell has a traced path, so no receiver ever sums two live
+terms. `2gnb-2ue-overlap.json` moves gnb1 to a second roof so both cells reach
+the same ground, which is the one that exercises superposition. Each file's
+`description` carries the measurement behind its layout.
 
 The native Sionna gates start one gNB and one srsUE process, so a scenario
 with more of either traces fine through the bridge and the web UI but cannot
@@ -21,7 +42,7 @@ when it refuses one.
 
 ## The 1 gNB / 1 UE example
 
-`ocudu-rank1-sutd.json` is the reference single-cell setup:
+`sutd/1gnb-1ue-4t4r.json` is the reference single-cell setup:
 
 - **gNB** — 4T4R, fixed, on the parapet of SUTD Building 2 at 30.5 m
   (roof 24.5 m plus a 6 m mast). At the roof *centre* the building's own roof

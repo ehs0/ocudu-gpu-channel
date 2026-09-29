@@ -1671,6 +1671,7 @@ class StatusStore:
         self._sionna_runtime: dict[str, Any] | None = None
         self._sionna_runtime_seen: float | None = None
         self._sionna_session_id: Any = None
+        self._scene_geometry: Any = None
         self._gpu_usage: dict[str, Any] | None = None
         self._gpu_history: list[dict[str, Any]] = []
         self._telemetry_history: list[dict[str, Any]] = []
@@ -1678,6 +1679,12 @@ class StatusStore:
         self._warmup_targets: dict[tuple[Any, Any], dict[str, int]] = {}
         self._bad_telemetry_frames = 0
         self._gnb_metrics: dict[str, dict[str, Any]] = {}
+        # Static launch parameters, set once at startup rather than fed.
+        self._ue_preambles: dict[str, int] = {}
+
+    def set_ue_preambles(self, preambles: dict[str, int]) -> None:
+        with self._lock:
+            self._ue_preambles = dict(preambles)
 
     def _gnb_feed(self, gnb_id: str) -> dict[str, Any]:
         # Caller holds _lock. Insertion order also defines the legacy source.
@@ -1798,7 +1805,19 @@ class StatusStore:
 
     def update_telemetry(self, link_id: str, payload: dict[str, Any]) -> None:
         with self._lock:
-            observed_unix_ms = time.time_ns() // 1_000_000
+            # Prefer the Broker's own send time. This process is a single
+            # GIL shared by the receive loop, the JSONL tailer and every
+            # HTTP response, so the moment a frame is handled here can lag
+            # the moment it was measured by tens of milliseconds -- which a
+            # chart drawn on arrival times renders as a hole in a stream
+            # that was never interrupted. Older Brokers do not send the
+            # field, so arrival time stays the fallback.
+            sent_unix_ms = payload.get("sent_unix_ms")
+            observed_unix_ms = (
+                sent_unix_ms
+                if isinstance(sent_unix_ms, int) and not isinstance(sent_unix_ms, bool)
+                else time.time_ns() // 1_000_000
+            )
             self._telemetry[link_id] = payload
             self._telemetry_seen[link_id] = time.monotonic()
             slot_processing = payload.get("slot_processing")
@@ -1877,8 +1896,21 @@ class StatusStore:
                     self._warmup_targets.clear()
                     self._sionna = None
                     self._sionna_seen = None
+                    self._scene_geometry = None
                 self._sionna_session_id = session_id
             if payload.get("event") == "sionna_rt_update":
+                # The producer sends the ~70 KB footprints only on the
+                # updates where `scene_revision` moved, so the last set is
+                # latched here and re-attached to every record that omits
+                # them. Without this the 2D fallback view -- the one used
+                # when no triangle mesh sidecar exists, which is the case
+                # for an external channel source -- would blank out on
+                # every update but the first.
+                geometry = payload.get("scene_geometry")
+                if geometry is not None:
+                    self._scene_geometry = geometry
+                elif self._scene_geometry is not None:
+                    payload = {**payload, "scene_geometry": self._scene_geometry}
                 self._sionna = payload
                 self._sionna_seen = time.monotonic()
                 iteration = payload.get("iteration")
@@ -2154,6 +2186,13 @@ class StatusStore:
             "delivery": delivery_status(sionna, telemetry, telemetry_ages),
             "ran": legacy_ran,
             "ran_gnbs": ran_gnbs,
+            # Which PRACH preamble each UE was launched with. srsUE hardcodes
+            # preamble 0 (proc_ra_nr.cc), so two UEs left at the default
+            # collide on every attempt and never resolve; the harness assigns
+            # distinct indices instead. It is a launch parameter, not
+            # something any feed reports, so it is passed in and echoed here
+            # to make the assignment visible next to the UEs it applies to.
+            "ue_preambles": dict(self._ue_preambles),
         }
 
     def realtime_snapshot(
@@ -2554,6 +2593,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Named gNB metrics source; repeat for multiple gNBs. Cannot combine with --gnb-metrics-endpoint.",
     )
     parser.add_argument(
+        "--ue-preamble", action="append", default=[], metavar="ID=INDEX",
+        help=(
+            "PRACH preamble index a UE was launched with; repeat per UE "
+            "(e.g. ue0=0 ue1=1). Display only -- the dashboard cannot read "
+            "it from any feed, and two UEs sharing an index collide on every "
+            "random-access attempt."
+        ),
+    )
+    parser.add_argument(
         "--resource-interval-ms",
         type=float,
         default=RESOURCE_SAMPLE_INTERVAL_SECONDS * 1000.0,
@@ -2581,6 +2629,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         if gnb_id in args.gnb_metrics_sources:
             parser.error(f"duplicate gNB metrics ID: {gnb_id}")
         args.gnb_metrics_sources[gnb_id] = endpoint
+    args.ue_preambles = {}
+    for entry in args.ue_preamble:
+        ue_id, separator, index = entry.partition("=")
+        if not separator or not ue_id.strip() or not index.strip():
+            parser.error("ue-preamble requires ID=INDEX")
+        try:
+            args.ue_preambles[ue_id.strip()] = int(index)
+        except ValueError:
+            parser.error(f"ue-preamble index must be an integer: {entry}")
     for endpoint in args.gnb_metrics_sources.values():
         try:
             parse_ws_endpoint(endpoint)
@@ -2621,6 +2678,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         name="nvidia-process-monitor",
         daemon=True,
     )
+    store.set_ue_preambles(args.ue_preambles)
     metrics_threads = []
     for gnb_id, endpoint in args.gnb_metrics_sources.items():
         # Register before threads run so legacy selection is deterministic.

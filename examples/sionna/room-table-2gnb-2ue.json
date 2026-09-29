@@ -1,0 +1,175 @@
+{
+  "name": "room-humanoid-2gnb-2ue",
+  "scene": "room_table",
+  "simple_road": false,
+  "nodes": {
+    "gnb0": {
+      "start_m": [
+        -4.5,
+        -4.5,
+        2.5
+      ],
+      "mobility": "fixed",
+      "tx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "rx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "gnb1": {
+      "start_m": [
+        4.5,
+        4.5,
+        2.5
+      ],
+      "mobility": "fixed",
+      "tx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "rx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue0": {
+      "mobility": "humanoid",
+      "speed_mps": 1.2,
+      "route_mode": "loop",
+      "route_m": [
+        [
+          -3.5,
+          -3.5,
+          1.5
+        ],
+        [
+          -3.5,
+          -1.5,
+          1.5
+        ],
+        [
+          -1.5,
+          -1.5,
+          1.5
+        ],
+        [
+          -1.5,
+          -3.5,
+          1.5
+        ]
+      ],
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue1": {
+      "mobility": "humanoid",
+      "speed_mps": 1.2,
+      "route_mode": "loop",
+      "route_m": [
+        [
+          3.5,
+          3.5,
+          1.5
+        ],
+        [
+          3.5,
+          1.5,
+          1.5
+        ],
+        [
+          1.5,
+          1.5,
+          1.5
+        ],
+        [
+          1.5,
+          3.5,
+          1.5
+        ]
+      ],
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    }
+  },
+  "links": [
+    {
+      "from": "gnb0",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "serving"
+    },
+    {
+      "from": "gnb1",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "serving"
+    },
+    {
+      "from": "gnb0",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "intercell"
+    },
+    {
+      "from": "gnb1",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "serving"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb1",
+      "direction": "uplink",
+      "model": "serving"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb1",
+      "direction": "uplink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "intercell"
+    },
+    {
+      "from": "ue0",
+      "to": "ue1",
+      "direction": "crosstalk",
+      "model": "crosstalk"
+    },
+    {
+      "from": "ue1",
+      "to": "ue0",
+      "direction": "crosstalk",
+      "model": "crosstalk"
+    }
+  ]
+}

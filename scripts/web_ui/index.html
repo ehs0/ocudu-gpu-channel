@@ -56,7 +56,7 @@
     .facts dt { color:var(--muted); } .facts dd { margin:0; overflow-wrap:anywhere; }
     .delivery { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; margin-bottom:16px; }
     .delivery strong { display:block; color:var(--green); margin-bottom:4px; } .delivery strong.wait { color:var(--amber); }
-    .tag-ok { color:var(--green); } .tag-wait { color:var(--amber); } .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+    .tag-ok { color:var(--green); } .tag-wait { color:var(--amber); } .tag-lost { color:var(--red); } .mono { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
     .foot { color:var(--muted); font-size:12px; margin-top:12px; }
     .deadline-grid,.edge-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
     .deadline-card,.edge-card { border:1px solid var(--line); border-radius:10px; background:#09141d; padding:12px; min-width:0; }
@@ -581,6 +581,12 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         <div id="ranCards"></div>
         <div class="foot">Served by the gNB's own remote-control WebSocket — the same feed the official GUI subscribes to. Enable it by rendering the run with <span class="mono">OCUDU_NATIVE_GNB_METRICS=1</span> and starting the Web UI with <span class="mono">--gnb-metrics-endpoint ws://127.0.0.1:8001</span>. For multiple gNBs, repeat <span class="mono">--gnb-metrics-source gnb0=ws://127.0.0.1:18001</span> with a unique gNB name and endpoint. <b>BLER</b> is derived here as nok / (ok + nok) from the HARQ counters; every other value is reported by the scheduler as-is. An em dash means the scheduler reported nothing for that field in the period, including the values it signals as sentinels rather than omissions: <span class="mono">cqi = -1</span> for "no CSI report", and a SINR or RSRP mean sitting on the <span class="mono">-99.9 dB</span> clamp floor, which is where an unreported RSRP (-inf) and a DTX-pulled PUCCH SINR both land. Two sentinels cannot be told apart from readings and are shown as-is: <b>RI</b> falls back to 1 when no rank was reported, and <b>TA</b> and <b>PHR</b> report 0 when unobserved. This panel is read-only like the rest of the dashboard.</div>
       </section>
+      <section class="panel wide">
+        <h2>UE status · attach, serving cell, SNR, rate</h2>
+        <div id="ueState" class="foot"></div>
+        <div id="ueCards"></div>
+        <div class="foot">One card per UE in the scenario. <b>Attached</b> means the UE moved data — any HARQ transmission or a non-zero rate — in a scheduler report within the last 5 s. <b>Context only / link lost</b> means a gNB still lists the UE but it has moved nothing in that window: the gNB keeps a context until something releases it, so a UE that lost its radio link goes on appearing as a row of zeros, and a single report cannot tell that apart from an idle UE. A UE that is idle on purpose will therefore read as context only; send it traffic to confirm the link. <b>Last traffic</b> is when data last moved. The serving cell is the gNB whose feed reports it — which is measured, not assumed from the scenario's link labels, so a robot that ends up on the other cell shows up as such here. SNR is the scheduler's PUSCH SINR for that UE and the rates are its DL/UL bearer rates, both as reported. <b>Path gain</b> and <b>distance</b> come from the Sionna side instead: the traced total path power on each gNB→UE link and the straight-line separation, so a UE that is not attached still shows what the channel is offering it. A UE with no scheduler row anywhere reads as detached with channel figures only. <b>PRACH preamble</b> is the index the UE was launched with, not a reading: srsUE hardcodes preamble 0 and occasion 0 (<span class="mono">proc_ra_nr.cc</span>) instead of drawing one at random as TS 38.321 §5.1.2 specifies, so two UEs left at the default transmit the identical preamble in the identical occasion on every attempt and contention resolution never breaks the tie — one attaches and the other retries forever. The harness assigns distinct indices, which is the contention-free case 3GPP reserves for network-assigned access; it also means real RACH contention is not modelled here. An index shared by two UEs is marked.</div>
+      </section>
     </div>
   </main>
   <script>
@@ -596,7 +602,13 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
     // every redraw; keeping several intervals in the response tolerates a
     // delayed poll without leaving the new block empty.
     const CHART_WINDOW_MS = 1000;
-    const CHART_POLL_MS = CHART_WINDOW_MS;
+    // Deliberately a fraction of the window, not equal to it. When the two
+    // matched, each block was fetched exactly once: a single late or dropped
+    // poll meant a whole second was drawn stale or skipped outright, and the
+    // block that did arrive appeared all at once. Polling four times per
+    // block redraws the same interval as it fills, and a lost poll costs
+    // 250 ms of freshness rather than an entire block.
+    const CHART_POLL_MS = CHART_WINDOW_MS / 4;
     const STATUS_POLL_MS = 500;
     // The Sionna bridge publishes at --update-hz (10 in the native gates), but
     // render() rebuilds every card and table in the page and cannot run that
@@ -824,12 +836,156 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       return `<section data-gnb-id="${esc(gnbId)}"><h3>${esc(gnbId)}</h3><div class="foot">${status}</div>${stale}<div class="ran-table-wrap"><table class="ran-table"><thead><tr>${groups}</tr><tr>${header}</tr></thead><tbody>${body}</tbody></table></div></section>`;
     }
 
-    function renderRanCards(ran, gnbs) {
-      const entries=Object.entries(gnbs||{});
+    // Every gNB the scenario defines, whether or not a metrics feed exists
+    // for it. A topology with two cells has to show two cards: a panel that
+    // lists only the first one reads as "gnb1 has no scheduler" when the
+    // truth is that no feed was configured for either.
+    function scenarioGnbIds(sionna) {
+      const env=sionna?.environment||{};
+      const ids=new Set([...Object.keys(env.nodes||{}),...Object.keys(sionna?.positions||{})]);
+      return [...ids].filter(id=>(env.nodes?.[id]?.role||id).startsWith('gnb')).sort();
+    }
+
+    function renderRanCards(ran, gnbs, sionna) {
+      const feeds=gnbs||{};
+      const entries=Object.entries(feeds);
+      // Named feeds come first and keep their data; any remaining scenario
+      // gNB is listed after them with whatever the single-feed fallback
+      // holds, so the panel never silently drops a cell.
+      for(const id of scenarioGnbIds(sionna)){
+        if(!(id in feeds))entries.push([id,entries.length?{}:(ran||{})]);
+      }
       if(!entries.length)entries.push(['gnb0',ran||{}]);
       const fresh=entries.filter(([,feed])=>feed.state==='connected'&&feed.ue_list_current_connection!==false&&Number(feed.ue_reports)>0&&feed.ue_list_age_seconds!=null&&!feed.ue_list_stale).length;
       $('ranState').textContent=`${fresh}/${entries.length} gNB scheduler feeds fresh`;
       $('ranCards').innerHTML=entries.map(([gnbId,feed])=>renderRanGroup(gnbId,feed)).join('');
+    }
+
+    // What the scenario calls a UE, in the same way scenarioGnbIds() reads
+    // the gNBs: from the run's own node list, so a topology with more than
+    // two handsets needs no change here.
+    function scenarioUeIds(sionna) {
+      const env=sionna?.environment||{};
+      const ids=new Set([...Object.keys(env.nodes||{}),...Object.keys(sionna?.positions||{})]);
+      return [...ids].filter(id=>(env.nodes?.[id]?.role||id).startsWith('ue')).sort();
+    }
+
+    // The scheduler reports UEs by RNTI, not by scenario name, and nothing in
+    // its feed says "ue0". The link is positional: gNB feeds are keyed by the
+    // gNB id, and within one cell the UEs appear in the order they attached.
+    // That is enough to say which cell is serving a handset and to read its
+    // SINR and rate, which is what this panel claims -- and the card says
+    // "serving cell" rather than naming a row, so the mapping is never
+    // presented as more certain than it is.
+    function ueSchedulerRows(gnbs) {
+      const rows=[];
+      for(const [gnbId,feed] of Object.entries(gnbs||{})){
+        if(feed?.state!=='connected')continue;
+        (feed.ue_list||[]).forEach(row=>rows.push({gnbId,row}));
+      }
+      return rows;
+    }
+
+    function distanceM(a, b) {
+      if(!Array.isArray(a)||!Array.isArray(b))return null;
+      return Math.hypot(a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+    }
+
+    // A UE the scheduler still lists is not necessarily a UE with a working
+    // link. The gNB keeps a context until something releases it, and a UE
+    // that lost its radio link minutes ago goes on appearing as a row with
+    // every counter at zero -- which is exactly how an attached-but-idle UE
+    // looks in a single report. The difference only shows over time, so the
+    // last report in which a UE actually moved data (any HARQ transmission,
+    // or a non-zero rate) is remembered per cell and RNTI, and "attached"
+    // is reserved for UEs that did so within the window.
+    const UE_ACTIVE_WINDOW_MS = 5000;
+    const ueLastActivity = new Map();
+    function rowCarriedTraffic(row) {
+      const harq = ['dl_nof_ok','dl_nof_nok','ul_nof_ok','ul_nof_nok']
+        .reduce((sum,key)=>sum+(Number(row?.[key])||0),0);
+      return harq>0 || Number(row?.dl_brate)>0 || Number(row?.ul_brate)>0;
+    }
+
+    function renderUeCards(sionna, gnbs, preambles) {
+      const ueIds=scenarioUeIds(sionna);
+      const preamble=preambles||{};
+      // Two UEs on one index collide on every attempt and neither backs off
+      // to a different one, so a duplicate is worth flagging in the panel
+      // rather than leaving to be spotted in a log.
+      const counts={};
+      for(const value of Object.values(preamble))counts[value]=(counts[value]||0)+1;
+      const positions=sionna?.positions||{};
+      const channels=sionna?.channels||[];
+      const attached=ueSchedulerRows(gnbs);
+      // Scheduler rows are handed out in order to the UEs the scenario
+      // defines; a cell reporting fewer UEs than the scenario names simply
+      // leaves the rest detached.
+      const assigned=new Map();
+      ueIds.forEach((id,index)=>{ if(attached[index])assigned.set(id,attached[index]); });
+
+      const now=Date.now();
+      const tally={active:0,context:0,detached:0};
+      const cards=ueIds.map(id=>{
+        const hit=assigned.get(id),row=hit?.row;
+        const serving=hit?.gnbId;
+        let lastActive=null;
+        if(hit){
+          const key=`${hit.gnbId}:${row?.rnti}`;
+          if(rowCarriedTraffic(row))ueLastActivity.set(key,now);
+          lastActive=ueLastActivity.get(key)??null;
+        }
+        const quiet=lastActive==null?null:now-lastActive;
+        let state;
+        if(!hit){
+          state='<span class="tag-wait">detached</span>'; tally.detached++;
+        }else if(quiet!=null&&quiet<=UE_ACTIVE_WINDOW_MS){
+          state='<span class="tag-ok">attached</span>'; tally.active++;
+        }else{
+          state='<span class="tag-lost">context only / link lost</span>'; tally.context++;
+        }
+        const lastTraffic=!hit?'—'
+          :lastActive==null?'never seen'
+          :quiet<1000?'now':`${fmt(quiet/1000,0)} s ago`;
+        // Strongest traced downlink into this UE, whatever cell it is from.
+        // source/destination are not always present on a channel record, so
+        // the link id -- which always is -- is the fallback, exactly as the
+        // edge cards do it.
+        let best=null,bestFrom=null;
+        for(const channel of channels){
+          const parts=linkParts(channel.link_id);
+          const from=channel.source||parts.source,to=channel.destination||parts.destination;
+          if(to!==id||!String(from).startsWith('gnb'))continue;
+          if(best===null||Number(channel.total_path_power_db)>Number(best.total_path_power_db)){
+            best=channel; bestFrom=from;
+          }
+        }
+        const range=serving&&positions[serving]?distanceM(positions[id],positions[serving]):null;
+        const index=preamble[id];
+        const clash=index!=null&&counts[index]>1;
+        const preambleText=index==null?'—'
+          :clash?`${index} <span class="tag-wait">shared</span>`:String(index);
+        const items=[
+          ['Serving cell', serving?esc(serving):'—'],
+          ['Last traffic', esc(lastTraffic)],
+          ['PRACH preamble', preambleText],
+          ['RNTI', row&&finite(row.rnti)?`0x${Number(row.rnti).toString(16)}`:'—'],
+          ['PCI', row?fmt(row.pci,0):'—'],
+          ['PUSCH SINR', row?fmtDb(row.pusch_snr_db):'—'],
+          ['DL rate', row?fmtBitrate(row.dl_brate):'—'],
+          ['UL rate', row?fmtBitrate(row.ul_brate):'—'],
+          ['DL MCS', row?fmt(row.dl_mcs,1):'—'],
+          ['DL BLER', row?fmtBler(row.dl_nof_ok,row.dl_nof_nok):'—'],
+          ['Best path gain', best?`${fmt(best.total_path_power_db,1)} dB (${esc(bestFrom)})`:'—'],
+          ['Distance to cell', range!=null?`${fmt(range,2)} m`:'—'],
+        ];
+        const body=items.map(([label,value])=>
+          `<div class="stat"><b>${value}</b><span>${esc(label)}</span></div>`).join('');
+        return `<section data-ue-id="${esc(id)}"><h3>${esc(id)} ${state}</h3><div class="stats">${body}</div></section>`;
+      });
+      $('ueState').textContent=`${tally.active} attached · ${tally.context} context only / link lost · `
+        +`${tally.detached} detached (attached = data moved in the last ${UE_ACTIVE_WINDOW_MS/1000} s)`;
+      $('ueCards').innerHTML=cards.join('')||'<div class="empty">No UEs in this scenario.</div>';
     }
 
     function renderNodeCards(sionna) {
@@ -1204,7 +1360,8 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       renderDeadlineCards(telemetry, feeds.telemetry_age_seconds||{});
       renderEdgeCards(s?.channels,sampleRateHz);
       renderNodeCards(s);
-      renderRanCards(data.ran, data.ran_gnbs);
+      renderRanCards(data.ran, data.ran_gnbs, s);
+      renderUeCards(s, data.ran_gnbs, data.ue_preambles);
       renderRuntime(runtime,gpuUsage,telemetry,delivery,history,s);
     }
     // Two loops with very different costs. render() rebuilds every card,
@@ -1445,6 +1602,21 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       );
     }
 
+    // Labels, drop-line dashes and node markers are all sized in world units,
+    // so a scene an order of magnitude smaller than the street canyon these
+    // numbers were picked for renders them an order of magnitude too large.
+    // Everything that has to stay in proportion to the scene reads this.
+    const REFERENCE_SCENE_SPAN = 300;
+    function sceneScale() {
+      if (!sceneBounds || sceneBounds.isEmpty()) return 1;
+      const size = sceneBounds.getSize(new THREE.Vector3());
+      const span = Math.max(size.x, size.y);
+      if (!Number.isFinite(span) || span <= 0) return 1;
+      // Clamped so a tiny scene keeps readable labels and a huge one does not
+      // grow billboards that swamp the geometry.
+      return Math.min(2, Math.max(0.12, span / REFERENCE_SCENE_SPAN));
+    }
+
     function labelSprite(text, color) {
       const scale = 4;
       const canvas = document.createElement('canvas');
@@ -1466,9 +1638,10 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
       texture.colorSpace = THREE.SRGBColorSpace;
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false, transparent: true }));
       sprite.renderOrder = 10;
-      // A fixed world height keeps the label legible while orbiting; the
-      // width follows the texture aspect so the text is never stretched.
-      const height = 6.5;
+      // The world height tracks the scene so the label keeps the same
+      // apparent size whatever the room measures; the width follows the
+      // texture aspect so the text is never stretched.
+      const height = 6.5 * sceneScale();
       sprite.scale.set(height * (canvas.width / canvas.height), height, 1);
       return sprite;
     }
@@ -1599,12 +1772,23 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         });
         let body;
         if (isGnb) {
+          // The marker is decoration: Sionna places a transmitter at a point
+          // and models its antennas as a PlanarArray, so nothing here reaches
+          // the ray tracer. The size still has to be chosen, and these
+          // numbers were picked for a macro mast in a 300 m street scene --
+          // a 3.2 m head standing in a 10 m room reads as the building.
+          // Scaling it keeps the same apparent size at any scene size; at
+          // room scale it lands near the ~0.25 m a four-element array at
+          // 1.8 GHz actually measures.
+          const unit = sceneScale();
           body = new THREE.Group();
-          const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, position[2], 12), material);
+          const mast = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.35 * unit, 0.5 * unit, position[2], 12), material);
           mast.rotation.x = Math.PI / 2;
           mast.position.set(position[0], position[1], position[2] / 2);
-          const head = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 3.2), material);
-          head.position.set(position[0], position[1], position[2] + 1.2);
+          const head = new THREE.Mesh(
+            new THREE.BoxGeometry(1.4 * unit, 1.4 * unit, 3.2 * unit), material);
+          head.position.set(position[0], position[1], position[2] + 1.2 * unit);
           body.add(mast, head);
         } else if (kind === 'car') {
           body = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.9, 1.5), material);
@@ -1624,23 +1808,35 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
             new THREE.Vector3(position[0], position[1], 0),
             new THREE.Vector3(position[0], position[1], position[2]),
           ]),
-          new THREE.LineDashedMaterial({ color, transparent: true, opacity: 0.55, dashSize: 1.2, gapSize: 1.0 }),
+          new THREE.LineDashedMaterial({
+            color, transparent: true, opacity: 0.55,
+            dashSize: 1.2 * sceneScale(), gapSize: 1.0 * sceneScale(),
+          }),
         );
         drop.computeLineDistances();
         nodeGroup.add(drop);
 
         const label = labelSprite(`${id} · ${kind}`, `#${color.toString(16).padStart(6, '0')}`);
-        label.position.set(position[0], position[1], position[2] + (isGnb ? 7.0 : 4.0));
+        // The label floats above the node by the same proportion as its own
+        // size, or in a small room it would hang far above the ceiling line.
+        label.position.set(position[0], position[1], position[2] + (isGnb ? 7.0 : 4.0) * sceneScale());
         label.userData.isLabel = true;
         label.visible = showLabels;
         nodeGroup.add(label);
       }
     }
 
-    const BOUNCE_GEOMETRY = new THREE.SphereGeometry(0.9, 12, 8);
-    // Neutral on purpose: an interaction point belongs to the scene, not to
-    // any one transmitter, so it must not read as a fifth node colour.
-    const BOUNCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0x2b5f8a });
+    // A unit sphere, scaled per instance: the marker has to stay a little
+    // thicker than the ray that produced it, and how thick that is depends on
+    // the size of the scene.
+    const BOUNCE_GEOMETRY = new THREE.SphereGeometry(1, 12, 8);
+    // Per-instance colour, set from the ray, so a bounce reads as belonging
+    // to the path it sits on rather than as scenery.
+    const BOUNCE_MATERIAL = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    // Rays are 1.0-2.6 screen pixels wide. At the distance this view frames a
+    // scene from, a world radius of this fraction of the scene scale lands
+    // just above that -- visible as a bead on the line, not a ball on it.
+    const BOUNCE_RADIUS_FACTOR = 0.9;
 
     // LineMaterial needs the drawing-buffer size to convert its pixel width,
     // so every live ray material is kept for the resize handler.
@@ -1700,11 +1896,17 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
         for (const line of channel.path_polylines) {
           const normalized = (line.gain_db - minGain) / span;
           const points = line.points.map(point => new THREE.Vector3(point[0], point[1], point[2]));
+          // A crosstalk path is drawn twice, once per handset; its bounces
+          // take the first of the two colours rather than being drawn twice
+          // in the same place.
+          let bounceColor = null;
           owners.forEach((owner, index) => {
+            const color = rayColor(nodeColor(owner, nodeKind(owner, sionna)), normalized);
+            if (bounceColor === null) bounceColor = color;
             const geometry = new LineGeometry();
             geometry.setPositions(line.points.flat());
             const material = new LineMaterial({
-              color: rayColor(nodeColor(owner, nodeKind(owner, sionna)), normalized),
+              color,
               // Screen-space pixels. Stronger paths are drawn thicker as well
               // as more solid, so the carrying rays stand out at any zoom.
               linewidth: 1.0 + 1.6 * normalized,
@@ -1730,17 +1932,24 @@ bash scripts/native/run-ocudu-rank1-4x1.sh   # 4×1 DL MISO + 1×4 UL SIMO</div>
             curve.renderOrder = 5;
             rayGroup.add(curve);
           });
-          for (let i = 1; i < points.length - 1; i++) bouncePoints.push(points[i]);
+          for (let i = 1; i < points.length - 1; i++) {
+            bouncePoints.push({ point: points[i], color: bounceColor });
+          }
         }
       }
       if (bouncePoints.length) {
         const bounces = new THREE.InstancedMesh(BOUNCE_GEOMETRY, BOUNCE_MATERIAL, bouncePoints.length);
+        const radius = BOUNCE_RADIUS_FACTOR * sceneScale();
         const matrix = new THREE.Matrix4();
-        bouncePoints.forEach((point, index) => {
-          matrix.makeTranslation(point.x, point.y, point.z);
+        const scale = new THREE.Vector3(radius, radius, radius);
+        const quaternion = new THREE.Quaternion();
+        bouncePoints.forEach((item, index) => {
+          matrix.compose(item.point, quaternion, scale);
           bounces.setMatrixAt(index, matrix);
+          if (item.color) bounces.setColorAt(index, item.color);
         });
         bounces.instanceMatrix.needsUpdate = true;
+        if (bounces.instanceColor) bounces.instanceColor.needsUpdate = true;
         rayGroup.add(bounces);
       }
       rayGroup.visible = showRays;

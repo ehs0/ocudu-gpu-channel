@@ -16,9 +16,14 @@ duration="0"
 update_hz="500"
 ready_seconds="120"
 
+# Arguments after `--` belong to the bridge. Anything the web server itself
+# needs -- the gNB metrics sources, above all -- has no other way in, so it
+# comes through repeated --web-arg.
+web_args=()
+
 usage()
 {
-  echo "usage: $0 --scenario FILE --status-jsonl FILE [--python FILE] [--port N] [-- BRIDGE_ARGS...]" >&2
+  echo "usage: $0 --scenario FILE --status-jsonl FILE [--python FILE] [--port N] [--web-arg ARG]... [-- BRIDGE_ARGS...]" >&2
   exit 2
 }
 
@@ -34,6 +39,7 @@ while [[ "$#" -gt 0 ]]; do
     --duration) duration="${2:-}"; shift 2 ;;
     --update-hz) update_hz="${2:-}"; shift 2 ;;
     --ready-seconds) ready_seconds="${2:-}"; shift 2 ;;
+    --web-arg) web_args+=("${2:-}"); shift 2 ;;
     --) shift; break ;;
     *) usage ;;
   esac
@@ -77,7 +83,8 @@ bridge_pid="$!"
   --bind "${bind_address}" --port "${port}" \
   --telemetry-endpoint "${telemetry_endpoint}" \
   --status-jsonl "${status_jsonl}" \
-  --index "${repo_root}/scripts/web_ui/index.html" &
+  --index "${repo_root}/scripts/web_ui/index.html" \
+  "${web_args[@]}" &
 web_pid="$!"
 
 deadline=$((SECONDS + ready_seconds))

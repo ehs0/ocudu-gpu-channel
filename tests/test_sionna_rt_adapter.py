@@ -57,6 +57,7 @@ from run_bridge import (  # noqa: E402
     resolve_scene,
     scene_geometry,
     scene_mesh,
+    SceneRevision,
     solver_settings,
     scene_mesh_path,
     write_rectangle_ply,
@@ -64,6 +65,30 @@ from run_bridge import (  # noqa: E402
 
 
 class AdapterTests(unittest.TestCase):
+    def test_scene_revision_moves_only_when_the_geometry_changes(self) -> None:
+        """Footprints ride the update record only on the updates that changed.
+
+        They are ~70 KB against a record written ten times a second, so
+        repeating an unchanged scene cost ~710 KB/s of status JSONL and the
+        same again in parse time in the web UI. A scene that is swapped
+        mid-run -- what an external channel source will do -- still has to
+        arrive, so the compare is on content, not on object identity.
+        """
+
+        tracker = SceneRevision()
+        first = {"objects": [{"id": "road", "kind": "road"}]}
+        self.assertEqual(tracker.observe(first), (1, True))
+        self.assertEqual(tracker.observe(first), (1, False))
+        # An equal value built separately is still the same scene.
+        self.assertEqual(
+            tracker.observe({"objects": [{"id": "road", "kind": "road"}]}),
+            (1, False),
+        )
+        # An in-place edit is a new scene even though the object is the same.
+        first["objects"].append({"id": "block", "kind": "building"})
+        self.assertEqual(tracker.observe(first), (2, True))
+        self.assertEqual(tracker.observe(first), (2, False))
+
     def test_control_timeout_names_endpoint_and_missing_broker(self) -> None:
         class FakeAgain(Exception):
             pass
@@ -661,7 +686,7 @@ class AdapterTests(unittest.TestCase):
         # not inherit whatever the caller happened to type.
         path = (
             pathlib.Path(__file__).resolve().parents[1]
-            / "examples" / "sionna" / "ocudu-rank1-sutd.json"
+            / "examples" / "sionna" / "sutd" / "1gnb-1ue-4t4r.json"
         )
         definition = load_scenario_config(path)
         self.assertEqual(sorted(definition.nodes), ["gnb0", "ue0"])

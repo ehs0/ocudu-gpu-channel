@@ -1,0 +1,119 @@
+{
+  "name": "room-humanoid-1gnb-2ue",
+  "scene": "room_table",
+  "simple_road": false,
+  "nodes": {
+    "gnb0": {
+      "start_m": [
+        0.0,
+        -4.8,
+        2.5
+      ],
+      "mobility": "fixed",
+      "tx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      },
+      "rx_array": {
+        "rows": 1,
+        "cols": 4,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue0": {
+      "mobility": "humanoid",
+      "speed_mps": 1.2,
+      "route_mode": "loop",
+      "route_m": [
+        [
+          -4.0,
+          -3.0,
+          1.5
+        ],
+        [
+          -4.0,
+          3.0,
+          1.5
+        ],
+        [
+          -2.8,
+          3.0,
+          1.5
+        ],
+        [
+          -2.8,
+          -3.0,
+          1.5
+        ]
+      ],
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    },
+    "ue1": {
+      "mobility": "humanoid",
+      "speed_mps": 1.2,
+      "route_mode": "loop",
+      "route_m": [
+        [
+          4.0,
+          3.0,
+          1.5
+        ],
+        [
+          4.0,
+          -3.0,
+          1.5
+        ],
+        [
+          2.8,
+          -3.0,
+          1.5
+        ],
+        [
+          2.8,
+          3.0,
+          1.5
+        ]
+      ],
+      "array": {
+        "rows": 1,
+        "cols": 1,
+        "pattern": "iso",
+        "polarization": "V"
+      }
+    }
+  },
+  "links": [
+    {
+      "from": "gnb0",
+      "to": "ue0",
+      "direction": "downlink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "gnb0",
+      "to": "ue1",
+      "direction": "downlink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "ue0",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "sionna_rt"
+    },
+    {
+      "from": "ue1",
+      "to": "gnb0",
+      "direction": "uplink",
+      "model": "sionna_rt"
+    }
+  ]
+}
