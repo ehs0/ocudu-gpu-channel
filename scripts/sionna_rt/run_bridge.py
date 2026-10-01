@@ -12,6 +12,8 @@ imported or modified; it only sees the impaired IQ emitted by the broker.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import hashlib
 import json
 import math
 import os
@@ -552,7 +554,7 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
     }
     tx_labels = {node.tx_array.label() for node in definition.nodes.values()}
     rx_labels = {node.rx_array.label() for node in definition.nodes.values()}
-    return {
+    environment = {
         "layout": definition.name,
         "scenario_config": (
             str(args.scenario_config) if args.scenario_config is not None else None
@@ -619,6 +621,19 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
         "position_frame_offset_m": list(getattr(args, "position_frame_offset", (0.0, 0.0, 0.0))),
         "position_timeout_s": getattr(args, "position_timeout_s", DEFAULT_POSITION_TIMEOUT_S),
     }
+    # Only the opt-in benchmark features add keys, so every existing gate's
+    # environment record stays as it was.
+    timeline = getattr(args, "timeline", "wallclock")
+    fanout = getattr(args, "fanout_control_endpoint", [])
+    if timeline != "wallclock" or fanout:
+        environment["timeline"] = timeline
+        environment["hold_until_file"] = (
+            str(args.hold_until_file) if getattr(args, "hold_until_file", None) else None
+        )
+        environment["fanout_control_endpoints"] = [
+            {"endpoint": endpoint, "rename": rename} for endpoint, rename in fanout
+        ]
+    return environment
 
 
 def parse_vector(text: str) -> tuple[float, float, float]:
@@ -645,9 +660,190 @@ def parse_range(text: str) -> tuple[float, float]:
     return values  # type: ignore[return-value]
 
 
+# --- Reproducible timeline and fan-out (scheduler benchmark, opt-in) ---------
+#
+# The default ("wallclock") loop places nodes where they are `time.monotonic()
+# - start` seconds into the run, so two bridges, or two runs, sample the same
+# route at different instants. The "grid" timeline places them at
+# `grid_index / update_hz` instead: the channel of grid point k depends only on
+# the scenario (and its solver seed), never on when the solve happened to run.
+# Wall time only decides WHICH grid point is solved next, and lateness is
+# bounded to one step (see GridTimeline.next_point).
+TIMELINE_MODES = ("wallclock", "grid")
+
+
+def parse_fanout(text: str) -> tuple[str, dict[str, str]]:
+    """`ENDPOINT[=old:new,old:new]` -> (endpoint, node rename map).
+
+    The rename map rewrites the node ids inside each link id, so one solved
+    batch can drive a second broker whose topology names the same radios
+    differently (cell b's gnb1/ue2/ue3 mirroring cell a's gnb0/ue0/ue1).
+    """
+
+    endpoint, separator, mapping = text.partition("=")
+    endpoint = endpoint.strip()
+    if not endpoint:
+        raise argparse.ArgumentTypeError("fan-out endpoint must not be empty")
+    rename: dict[str, str] = {}
+    if separator:
+        for item in mapping.split(","):
+            old, colon, new = item.strip().partition(":")
+            if not colon or not old or not new:
+                raise argparse.ArgumentTypeError(
+                    f"fan-out rename {item!r} must be old:new"
+                )
+            if old in rename:
+                raise argparse.ArgumentTypeError(f"fan-out renames {old!r} twice")
+            rename[old] = new
+        if len(set(rename.values())) != len(rename):
+            raise argparse.ArgumentTypeError("fan-out rename targets must be distinct")
+    return endpoint, rename
+
+
+def remap_link_id(link_id: str, rename: Mapping[str, str]) -> str:
+    """Rename the nodes of a `source>destination:model` control link id."""
+
+    nodes, colon, model = link_id.partition(":")
+    source, arrow, destination = nodes.partition(">")
+    if not colon or not arrow or not source or not destination:
+        raise ValueError(f"not a control link id: {link_id!r}")
+    return (
+        f"{rename.get(source, source)}>{rename.get(destination, destination)}"
+        f":{model}"
+    )
+
+
+def profiles_digest(profiles: Mapping[str, MatrixProfile]) -> str:
+    """SHA-256 of a profile batch exactly as the control messages carry it.
+
+    Link order is canonicalised, so the digest identifies the channel, not
+    the dict order. Equal digests at equal grid indices are the evidence that
+    two runs (or two cells) were driven by the same channel.
+    """
+
+    digest = hashlib.sha256()
+    for link_id in sorted(profiles):
+        message = make_matrix_profile_swap(link_id, profiles[link_id])
+        digest.update(json.dumps(message, sort_keys=True, separators=(",", ":")).encode())
+    return digest.hexdigest()
+
+
+class GridTimeline:
+    """Scenario clock on a fixed grid of `1 / update_hz` steps.
+
+    `anchor()` fixes grid point 0 to a wall instant. `next_point()` then
+    returns the next grid point to solve: the one after the last, or, when
+    the loop has fallen a full step behind, the newest point already due --
+    a slow solve skips grid points instead of replaying a backlog, so the
+    scenario clock never trails wall time by more than one step.
+    """
+
+    def __init__(self, update_hz: float) -> None:
+        if not (math.isfinite(update_hz) and update_hz > 0.0):
+            raise ValueError("update_hz must be positive")
+        self.update_hz = float(update_hz)
+        self.anchor_monotonic: float | None = None
+        self.anchor_unix_ms: int | None = None
+        self.last_index: int | None = None
+        self.skipped = 0
+
+    @property
+    def anchored(self) -> bool:
+        return self.anchor_monotonic is not None
+
+    def anchor(self, monotonic_now: float, unix_ms_now: int) -> None:
+        self.anchor_monotonic = monotonic_now
+        self.anchor_unix_ms = unix_ms_now
+        self.last_index = None
+        self.skipped = 0
+
+    def due(self, index: int) -> float:
+        if self.anchor_monotonic is None:
+            raise RuntimeError("timeline is not anchored")
+        return self.anchor_monotonic + index / self.update_hz
+
+    def scenario_time(self, index: int) -> float:
+        return index / self.update_hz
+
+    def next_point(self, monotonic_now: float) -> int:
+        if self.anchor_monotonic is None:
+            raise RuntimeError("timeline is not anchored")
+        following = 0 if self.last_index is None else self.last_index + 1
+        current = math.floor((monotonic_now - self.anchor_monotonic) * self.update_hz)
+        index = max(following, current)
+        self.skipped += index - following
+        self.last_index = index
+        return index
+
+
+def send_fanout(
+    clients: Sequence[tuple[str, dict[str, str], ZmqControlClient]],
+    profiles: Mapping[str, MatrixProfile],
+    *,
+    batch_id: str,
+    executor: concurrent.futures.Executor,
+) -> list[dict[str, Any]]:
+    """Send one batch to every broker concurrently; one record per endpoint.
+
+    Each client is used by exactly one worker per call (REQ sockets are not
+    shared between threads). The endpoints are dispatched together rather
+    than in a fixed order so no cell is systematically the first to switch.
+    """
+
+    def one(item: tuple[str, dict[str, str], ZmqControlClient]) -> dict[str, Any]:
+        endpoint, rename, client = item
+        renamed = {remap_link_id(link_id, rename): profile for link_id, profile in profiles.items()}
+        started = time.monotonic()
+        reply = client.send_matrix_profiles(renamed, batch_id=batch_id)
+        return {
+            "endpoint": endpoint,
+            "rename": rename,
+            "control_transaction_ms": (time.monotonic() - started) * 1000.0,
+            "control_ack_unix_ms": time.time_ns() // 1_000_000,
+            "reply": reply,
+        }
+
+    return list(executor.map(one, clients))
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control-endpoint", default="tcp://127.0.0.1:5559")
+    parser.add_argument(
+        "--fanout-control-endpoint",
+        action="append",
+        type=parse_fanout,
+        default=[],
+        metavar="ENDPOINT[=old:new,...]",
+        help=(
+            "send every solved batch to this broker as well, renaming node ids "
+            "in the link ids (repeatable). All endpoints, including "
+            "--control-endpoint, receive the batch concurrently"
+        ),
+    )
+    parser.add_argument(
+        "--timeline",
+        choices=TIMELINE_MODES,
+        default="wallclock",
+        help=(
+            "wallclock: nodes move with elapsed wall time (default). grid: the "
+            "scenario time of update k is k/update_hz, so a seed reproduces "
+            "the same channel sequence"
+        ),
+    )
+    parser.add_argument(
+        "--hold-until-file",
+        type=pathlib.Path,
+        help=(
+            "grid timeline only: solve and send scenario time 0 once, hold it "
+            "until this file exists, then anchor grid point 0 to that instant"
+        ),
+    )
+    parser.add_argument(
+        "--profile-digest",
+        action="store_true",
+        help="record the SHA-256 of every sent profile batch in the status record",
+    )
     parser.add_argument(
         "--scenario-config",
         type=pathlib.Path,
@@ -788,6 +984,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true",
                         help="trace and print control JSON without connecting to ZMQ")
     args = parser.parse_args(argv)
+    if args.hold_until_file is not None and args.timeline != "grid":
+        parser.error("--hold-until-file needs --timeline grid")
+    if args.timeline == "grid" and args.position_endpoint:
+        # A live feed moves nodes by wall time, which is exactly what the
+        # grid timeline exists to exclude.
+        parser.error("--timeline grid cannot follow a live --position-endpoint")
+    fanout_endpoints = [endpoint for endpoint, _ in args.fanout_control_endpoint]
+    if len(set(fanout_endpoints + [args.control_endpoint])) != len(fanout_endpoints) + 1:
+        parser.error("every control endpoint must be distinct")
     if args.position_timeout_s <= 0.0:
         parser.error("--position-timeout-s must be positive")
     if args.duration < 0.0:
@@ -2109,6 +2314,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     scenario: SionnaScenario | None = None
     client: ZmqControlClient | None = None
+    fanout_clients: list[tuple[str, dict[str, str], ZmqControlClient]] = []
+    executor: concurrent.futures.ThreadPoolExecutor | None = None
     start = 0.0
     next_update = 0.0
     iteration = 0
@@ -2124,8 +2331,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         write_scene_mesh(scene_mesh_path(args.status_jsonl), scenario.scene_mesh)
         environment = scenario_environment(args)
         client = None if args.dry_run else ZmqControlClient(args.control_endpoint)
+        if client is not None and args.fanout_control_endpoint:
+            fanout_clients = [(args.control_endpoint, {}, client)]
+            for endpoint, rename in args.fanout_control_endpoint:
+                fanout_clients.append((endpoint, rename, ZmqControlClient(endpoint)))
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(fanout_clients))
+        grid = GridTimeline(args.update_hz) if args.timeline == "grid" else None
+        hold_pending = grid is not None and args.hold_until_file is not None
+        last_hold_note = 0.0
         start = time.monotonic()
         next_update = start
+        if grid is not None and not hold_pending:
+            grid.anchor(start, time.time_ns() // 1_000_000)
         publish_runtime(
             "ready",
             detail="scene initialized; entering the repeating update loop",
@@ -2136,20 +2353,69 @@ def main(argv: Sequence[str] | None = None) -> int:
                 break
             if args.iterations > 0 and iteration >= args.iterations:
                 break
-            if now < next_update:
-                publish_runtime(
-                    "waiting_for_next_update",
-                    iteration=iteration,
-                    detail="same process is waiting; the scene is not reinitialized",
-                    next_update_in_ms=(next_update - now) * 1000.0,
-                )
-                time.sleep(next_update - now)
-                if stop:
-                    break
-            update_started = time.monotonic()
-            update_started_unix_ms = time.time_ns() // 1_000_000
-            elapsed = time.monotonic() - start
-            positions = scenario.update_positions(elapsed)
+            grid_index: int | None = None
+            timeline_phase: str | None = None
+            if grid is None:
+                if now < next_update:
+                    publish_runtime(
+                        "waiting_for_next_update",
+                        iteration=iteration,
+                        detail="same process is waiting; the scene is not reinitialized",
+                        next_update_in_ms=(next_update - now) * 1000.0,
+                    )
+                    time.sleep(next_update - now)
+                    if stop:
+                        break
+                update_started = time.monotonic()
+                update_started_unix_ms = time.time_ns() // 1_000_000
+                elapsed = time.monotonic() - start
+                scenario_seconds = elapsed
+            else:
+                if hold_pending and iteration > 0:
+                    # Scenario time 0 is already applied; keep it until the
+                    # gate says the measurement starts.
+                    if args.hold_until_file.exists():
+                        hold_pending = False
+                        grid.anchor(time.monotonic(), time.time_ns() // 1_000_000)
+                        publish_runtime(
+                            "anchored",
+                            iteration=iteration,
+                            detail=f"grid point 0 anchored at unix_ms {grid.anchor_unix_ms}",
+                        )
+                    else:
+                        if now - last_hold_note >= 1.0:
+                            publish_runtime(
+                                "holding",
+                                iteration=iteration,
+                                detail="scenario time 0 is applied; waiting for the start file",
+                            )
+                            last_hold_note = now
+                        time.sleep(0.01)
+                        continue
+                if hold_pending:
+                    timeline_phase = "hold"
+                    scenario_seconds = 0.0
+                else:
+                    timeline_phase = "run"
+                    following = 0 if grid.last_index is None else grid.last_index + 1
+                    due = grid.due(following)
+                    now = time.monotonic()
+                    if now < due:
+                        publish_runtime(
+                            "waiting_for_next_update",
+                            iteration=iteration,
+                            detail="grid timeline: waiting for the next grid point",
+                            next_update_in_ms=(due - now) * 1000.0,
+                        )
+                        time.sleep(due - now)
+                        if stop:
+                            break
+                    grid_index = grid.next_point(time.monotonic())
+                    scenario_seconds = grid.scenario_time(grid_index)
+                update_started = time.monotonic()
+                update_started_unix_ms = time.time_ns() // 1_000_000
+                elapsed = scenario_seconds
+            positions = scenario.update_positions(scenario_seconds)
             generation_started = time.monotonic()
             publish_runtime(
                 "tracing_channels",
@@ -2159,6 +2425,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             profiles, statuses, direction_trace_ms = scenario.trace_all_profiles()
             channel_generation_ms = (time.monotonic() - generation_started) * 1000.0
             batch_id = f"sionna-{iteration}"
+            fanout_results: list[dict[str, Any]] | None = None
 
             if client is not None:
                 publish_runtime(
@@ -2167,7 +2434,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     detail=f"sending the {len(configured_links)}-link profile batch and waiting for ACK",
                 )
                 control_started = time.monotonic()
-                reply = client.send_matrix_profiles(profiles, batch_id=batch_id)
+                if executor is not None:
+                    fanout_results = send_fanout(
+                        fanout_clients, profiles, batch_id=batch_id, executor=executor
+                    )
+                    reply = fanout_results[0]["reply"]
+                else:
+                    reply = client.send_matrix_profiles(profiles, batch_id=batch_id)
                 control_transaction_ms: float | None = (
                     time.monotonic() - control_started
                 ) * 1000.0
@@ -2233,12 +2506,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             if args.profile_timing:
                 record["timing_ms"]["generation_stages"] = scenario.generation_stages_ms
+            if args.profile_digest:
+                record["profile_sha256"] = profiles_digest(profiles)
+            if grid is not None:
+                record["timeline"] = {
+                    "mode": "grid",
+                    "phase": timeline_phase,
+                    "grid_index": grid_index,
+                    "scenario_time_s": scenario_seconds,
+                    "anchor_unix_ms": grid.anchor_unix_ms,
+                    "skipped_grid_points": grid.skipped,
+                    # How far behind its grid instant this update started.
+                    "lag_ms": (
+                        (update_started - grid.due(grid_index)) * 1000.0
+                        if grid_index is not None
+                        else None
+                    ),
+                }
+            if fanout_results is not None:
+                record["fanout"] = [
+                    {key: value for key, value in item.items() if key != "reply"}
+                    | {"ok": bool(item["reply"].get("ok"))}
+                    for item in fanout_results
+                ]
             print(json.dumps(record, separators=(",", ":")), flush=True)
             append_status(args.status_jsonl, record)
             iteration += 1
-            next_update += 1.0 / args.update_hz
-            # A slow trace must not produce a burst of stale updates.
-            next_update = max(next_update, time.monotonic())
+            if grid is None:
+                next_update += 1.0 / args.update_hz
+                # A slow trace must not produce a burst of stale updates.
+                next_update = max(next_update, time.monotonic())
         publish_runtime(
             "stopped",
             iteration=iteration,
@@ -2252,6 +2549,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         raise
     finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
+        for _, _, extra in fanout_clients[1:]:
+            extra.close()
         if client is not None:
             client.close()
         if scenario is not None and scenario.position_source is not None:

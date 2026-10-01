@@ -4,6 +4,52 @@
 
 ## Repository State
 
+- [2026-10-01 scheduler benchmark, user request] Two OCUDU cells (gnb0 `rr`,
+  gnb1 `qos`, or swapped) with two srsUEs each, fed the same Sionna batch by
+  bridge fan-out (method "나": the policy is bound at gNB start-up, so
+  alternating 1-s periods were infeasible). New, all opt-in: bridge
+  `--fanout-control-endpoint`, `--timeline grid`, `--hold-until-file`,
+  `--profile-digest`; `scripts/scheduler_benchmark/` (seeded scenario,
+  definitions, traffic, analyzer, campaign, gNB metrics recorder, UI server
+  and page on port 8090); `scripts/native/render-scheduler-benchmark-configs.py`
+  and `run-ocudu-scheduler-benchmark{,-inner}.sh`; container wrappers
+  `/home/dev/ocudu-setup/run{,-isolated}-scheduler-benchmark.sh`;
+  `tests/test_scheduler_benchmark.py`. 120 related unit tests and the renderer
+  self-test pass. Eight live `mixed` runs (seeds 1, 2); campaign
+  `20261001T082912Z`..`084126Z` = seed 1 and 2 swap pairs + seed 1 A/A, 120 s
+  each. Same-seed channel: positions and tap structure identical at every grid
+  point, 89-98% of batches bit-identical, rest within 0.0038 dB / 0.0005 rad.
+  Cell-bias-free effects (qos − rr, mean of two seeds, ±95%): DL PRB
+  utilization +0.95 ± 0.11 points, decision time +3.6 ± 0.3 µs, bulk UE worst
+  DL wait per second +2.0 ± 1.1 ms; aggregate DL −0.14 ± 0.71 Mb/s, Jain
+  −0.002 ± 0.007, interactive (5QI 7) UE p99 delay −43 ± 55 ms and PDB
+  violation −6.7 ± 8.0 points are not resolved. The A/A run shows a real cell
+  bias (cell a bulk p99 +244 ms, aggregate DL −0.84 Mb/s), so single-run CIs
+  must not be read as policy effects. Radio speed 393-654 slots/s varies run
+  to run. Run `083826Z` lost cell a after 60 s to an srsUE abort
+  (`rlc_am_nr.cc:1776`); the gate now fails on an srsUE crash. Committed on
+  `integration-0928` at the user's request, not pushed; the container
+  wrappers under `/home/dev/ocudu-setup` are outside the repository.
+
+- [2026-10-01 renewed Web inspection] The 900-second run `20261001T042042Z`
+  expired normally and cleaned up its Web service. Started the same one-cell,
+  one-gNB, two-UE robot-fight runtime as `20261001T043626Z` for a 3600-second
+  inspection window. `http://127.0.0.1:8080` returned HTTP 200 after startup;
+  leave the runtime to its timed cleanup at approximately 05:36:26 UTC.
+
+- [2026-10-01 live one-cell/two-UE inspection] Started run `20261001T042042Z`
+  with a 900-second inspection window and Web UI at `http://127.0.0.1:8080`.
+  Both UEs initially completed random access, RRC, PDU session and 3/3 gateway
+  pings. UE0 first lost PHY synchronization at 04:22:56.140 UTC during fight
+  13, retried PRACH without completing a second attach, and the gNB released
+  C-RNTI `0x4601` at 04:23:04.697 after its RLF timer reported maximum
+  consecutive undecoded CSI. Fight 14 records UE0 command gaps and 0.7 seconds
+  stale control; from fight 15 UE0 has no brain result or commands while UE1
+  remains active. The gate is configured to stop after 900 seconds and each
+  fight after 20 seconds; the runtime is intentionally left to its timed cleanup.
+
+- [2026-09-30 current container setup complete] Prepared and live-validated the GB10/aarch64 container for one-cell/two-robot execution. The pinned native stack, repository-locked two-UE srsUE patch build, CUDA channel broker, Sionna RT and robot environments are under `/home/dev/ocudu-spark`, `/home/dev/venvs` and `/home/dev/ocudu-setup`. Run `20260930T114817Z` passed both UEs RRC/PDU/ping checks and completed 16 radio fights with zero sequence gaps, queue overflows and ZMQ errors. Use `sudo bash /home/dev/ocudu-setup/run-isolated.sh`; details are in `/home/dev/ocudu-setup/README.md`.
+
 - [2026-09-30 R7 campaign complete] Completed the requested continuation:
   eight radio arena gates, nine requested radio-probe conditions and 96 local
   impairment fights. Final report docs/robot-fight-r7.md, four static figures,
@@ -327,6 +373,7 @@ the results are a property of the emulator rather than of one machine.
 
 - [Current integration] The four approved delay-capacity, fallback, launcher and freshness defects are fixed and regression-tested. Main readiness remains blocked by deadline misses, starvation events and failed moving-SUTD user-plane connectivity. Geometry changes still reset; the inherited static multi-gNB default topology mismatch remains unqualified. See the final validation report for bounded passing results and failed strict gates.
 - No active blocker is recorded for the completed report and archive work.
+- [Scheduler benchmark] The stack runs at 0.39-0.65 of real time on the GB10 with two cells and four UEs, so wall-clock delays and capacities are scaled and not comparable across runs; the UL stays SINR-limited (PUSCH SNR −2..0 dB) outside the emulator; srsUE can abort in RLC AM NR under the backlogged 5QI 9 flow (1 of 8 runs).
 - Rank-1 multi-port implementation is done on this branch (R0–R3 below); the assessment report's
   blueprint status applies to `main`, not to this branch. The downlink live gate still must verify that the selected OCUDU build supplies a usable fixed rank-1 multi-port PDSCH path without relying on unsupported srsUE PMI feedback.
 - Sionna channel-state export is now part of the approved report scope but implementation has not started. S0 is specified; the coefficient-grid/look-ahead defaults, general path-reduction thresholds, attached-run common-delay policy, ingress capacity, FDD scene/material-frequency policy, synthetic-array accuracy gate, and live-mobility input/retrace-transition policy remain explicit pre-S2/S4 decisions.
@@ -485,3 +532,13 @@ the results are a property of the emulator rather than of one machine.
 - Updated historical note references and source/config comments; repaired nine existing archive-relative documentation links. All C++ compilation units/apps are registered in CMake, no exact duplicate tracked files were found, and no executable dead code was proven. Retained diagnostics, native/OAI paths, synthetic tools, CPU reference, tests, scene assets, vendor files, historical reports/plans and licenses. QuickJS archive has no install/build/test consumer; frontend regressions pass without it. No executable statements changed.
 - Validation on RTX 5090 in `validation/release-cleanup-20260914/source`: `python3 -m unittest discover -s tests -p 'test_*.py'` passes 90/90; `python3 scripts/native/render-sionna-rank1-configs.py --self-test` passes; all tracked shell scripts pass `bash -n`. Markdown/HTML checks using existing Markdown dependencies pass 61 local links/anchors in changed documents. Logs: `python-tests.log`, `renderer-test.log`, `links.json` in the parent validation directory. No GPU performance or radio tests rerun.
 - Static verification: README byte-identical (commands, comparison and credits preserved); changed Python ASTs identical and C++/YAML changes comments only; frontend, scenes and tests unchanged; `git diff --check` passes. Contributor tips `066a702` and `e31fe51` remain ancestors. Live runtime and ignored local folders untouched. Cleanup committed on local main without push/tag; earlier uncommitted runtime notes remain outside the cleanup commit.
+
+### 2026-09-30 — current container runtime preparation
+
+- Built ARM64 pinned CPU gNB, user-fork srsUE, Open5GS and MongoDB under `/home/dev/ocudu-spark`, plus separate repository-locked RACH contention patched srsUE. Existing gate source files are unchanged. Native build evidence: `results/s3-stack-20260930T113417Z`; local UE manifest: `builds/srsran4g-zmq-local/BUILD-MANIFEST.txt`.
+- Python environments and package locks are under `/home/dev/venvs/{robot,sionna}` and `/home/dev/ocudu-setup`. Sionna CUDA initialization, 3-second standalone robot fight, namespace/TUN probe and existing gate CTest 12/12 passed. Additional runtime dependencies libLLVM18 and python3-yaml installed.
+- Original mode-750 home blocks inner user-namespace root traversal. Broad chmod was rejected by automatic review and not applied. `run-isolated.sh` instead creates a disposable mount namespace exposing only repository, native workspace, venvs and setup directory under a synthetic home. Actual home permissions remain unchanged.
+- First full radio run `20260930T114249Z` failed UE attachment because both UEs remained in first-time FFTW planning; gdb confirmed `fftwf_measure_execution_time`. Standalone warmup then completed (`UE_PHY_WARMUP_READY=True`) and wrote `/root/.srsran_fftwisdom`.
+- Warm-cache radio run `20260930T114817Z` passed. Both UEs established RRC and PDU sessions and passed gateway ping. Four CUDA Sionna links consumed external arena positions; the broker reported zero sequence gaps, queue overflows and ZMQ errors. Sixteen complete fights ended by ring-out (ue0 nine wins, ue1 seven); fight 17 was the expected partial fight terminated at the 180-second gate boundary. Runtime processes were cleaned up. This run had strict realtime disabled and does not qualify strict deadlines.
+- Follow-up continuity audit of run `20260930T114817Z`: initial attach gate status is passed, but sustained dual-UE connectivity is not. UE0 logged zero `SYNC: detected out-of-sync` events and no RRC release. UE1 logged 230 out-of-sync detections from 11:51:09.543 to 11:51:10.762 UTC, three `Scheduling request failed: releasing RRC connection` events, and repeated PRACH transmissions without a second `Random Access Complete`, `RRC Connected`, or PDU-session success. Fight 15 shows UE1 gaps/stale traffic and fight 16 lacks its final brain result. Treat the run as proof of initial dual attach only; it fails continuous dual-UE stability.
+- Added the user-requested Korean result summary at `/home/dev/channel_emulator/docs/one-cell-two-ue-stability.md`. It separates initial attach success from failed sustained dual-UE stability and records the command, environment, exact UE evidence, robot-traffic impact, gate limitations and artifact paths.
