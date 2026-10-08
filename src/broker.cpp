@@ -433,6 +433,7 @@ struct PortRuntime {
   IqRing tx_ring;
   std::mutex ring_mutex;
   std::size_t batch = 0;
+  std::size_t queue_samples = 0; // tx_ring capacity
   // Index of the owning RadioNodeRuntime, and this port's position in that
   // node's tx/rx port lists (the canonical matrix index from M1 onwards).
   std::size_t node_index = 0;
@@ -733,7 +734,9 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
     auto port = std::make_unique<PortRuntime>();
     port->config = &device;
     port->batch = resolve_batch_samples(config_.runtime, device.sample_rate_hz);
-    port->tx_ring.reset(config_.runtime.queue_samples);
+    port->queue_samples =
+        device.tx_queue_samples != 0 ? device.tx_queue_samples : config_.runtime.queue_samples;
+    port->tx_ring.reset(port->queue_samples);
     if (!capture_.directory.empty() && capture_.samples_per_port > 0) {
       port->capture_limit = capture_.samples_per_port;
       port->capture_skip = capture_.skip_samples;
@@ -965,7 +968,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
       // recv_buf must hold the largest single ZMQ payload the peer can send.
       // The ring capacity is that hard upper bound: a larger payload could
       // never be relayed and is rejected by recv_samples_into().
-      IqBuffer recv_buf(std::max<std::size_t>(config_.runtime.queue_samples, dev.batch));
+      IqBuffer recv_buf(std::max<std::size_t>(dev.queue_samples, dev.batch));
       bool request_outstanding = false;
       // FEWER_COPIES keeps the received message itself and pushes from it.
       zmq_msg_t held;
@@ -1374,7 +1377,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         // multi-port ZMQ radio dead-locks on a burst rather than absorbing it.
         // See `pacing.h` for the OCUDU-side mechanism.
         const auto due = pacer.charge(std::chrono::steady_clock::now(), count);
-        if (due > std::chrono::steady_clock::now()) {
+        if (config_.runtime.pacing && due > std::chrono::steady_clock::now()) {
           diag.state.store("throttle");
           std::this_thread::sleep_until(due);
         }

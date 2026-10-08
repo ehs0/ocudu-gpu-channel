@@ -113,6 +113,11 @@ struct RuntimeConfig {
   // mapped access crosses PCIe (ZERO_COPY_MILESTONES.md Z3-Z6).
   CudaHostMemory cuda_host_memory = CudaHostMemory::Auto;
   CudaStreamPriority cuda_stream_priority = CudaStreamPriority::Default;
+  // Throttle every producer to the sample rate. Set false when a live radio
+  // (e.g. a USRP bridge) is the clock: that source is already real time, and
+  // pacing the UE->radio direction would hold back the UE's zero-padded TX
+  // prefix at real time, so its uplink would never catch up with air time.
+  bool pacing = true;
 };
 
 // A node in the channel-emulation graph. gNBs and UEs are the SAME class -- a
@@ -161,6 +166,11 @@ struct DeviceConfig {
   // matrix_profile_swap replaces that leading tdl wholesale and the scale
   // must survive the swap.
   double tx_scale_db = 0.0;
+  // Capacity of this device's broker TX ring (and the largest single ZMQ
+  // payload it accepts). 0 = runtime.queue_samples. srsRAN's ZMQ TX pads
+  // transmit gaps with one large zero payload, so a UE needs a deep ring
+  // while a live-radio source should keep a shallow one (ring = latency).
+  std::size_t tx_queue_samples = 0;
 };
 
 // A RadioNode: the owner of a common sample epoch and, from M1 onward, of the

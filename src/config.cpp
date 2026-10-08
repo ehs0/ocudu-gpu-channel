@@ -112,6 +112,8 @@ enum class PortList {
   Rx
 };
 
+bool parse_bool(const std::string& value, const std::string& key);
+
 void apply_runtime(RuntimeConfig& runtime, const std::string& key, const std::string& value)
 {
   if (key == "backend") {
@@ -134,6 +136,8 @@ void apply_runtime(RuntimeConfig& runtime, const std::string& key, const std::st
     runtime.cuda_host_memory = parse_cuda_host_memory(value);
   } else if (key == "cuda_stream_priority") {
     runtime.cuda_stream_priority = parse_cuda_stream_priority(value);
+  } else if (key == "pacing") {
+    runtime.pacing = parse_bool(value, key);
   } else {
     throw std::runtime_error("unknown runtime key: " + key);
   }
@@ -166,6 +170,8 @@ void apply_device(DeviceConfig& device, const std::string& key, const std::strin
     device.tx_timing_offset_samples = parse_double(value, key);
   } else if (key == "tx_scale_db") {
     device.tx_scale_db = parse_double(value, key);
+  } else if (key == "tx_queue_samples") {
+    device.tx_queue_samples = parse_size(value, key);
   } else {
     throw std::runtime_error("unknown device key: " + key);
   }
@@ -790,11 +796,13 @@ std::vector<std::string> validate_config(const TopologyConfig& config)
     }
     // The broker ring must hold a pulled batch plus a batch of serve slack;
     // queue_samples == batch_samples deadlocks the puller's room check.
-    if (device.sample_rate_hz != 0 && config.runtime.queue_samples != 0) {
+    const std::size_t device_queue =
+        device.tx_queue_samples != 0 ? device.tx_queue_samples : config.runtime.queue_samples;
+    if (device.sample_rate_hz != 0 && device_queue != 0) {
       const std::size_t batch = resolve_batch_samples(config.runtime, device.sample_rate_hz);
-      if (config.runtime.queue_samples < 2 * batch) {
-        errors.emplace_back("device " + device.id + " needs runtime.queue_samples >= 2 * batch (" +
-                            std::to_string(2 * batch) + "), got " + std::to_string(config.runtime.queue_samples));
+      if (device_queue < 2 * batch) {
+        errors.emplace_back("device " + device.id + " needs queue_samples >= 2 * batch (" +
+                            std::to_string(2 * batch) + "), got " + std::to_string(device_queue));
       }
     }
     if (device.tx_endpoint.empty()) {
