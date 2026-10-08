@@ -211,6 +211,18 @@ fi
 "/usr/bin/python3" "${renderer}" "${renderer_args[@]}" >"${log_dir}/render.log" 2>&1 || {
   cat "${log_dir}/render.log" >&2; usage_error "config rendering failed"
 }
+# Optional gNB ZMQ receive gain (dB, <= 0). The OCUDU ZMQ radio scales its
+# float input by this gain and then converts it to int16 with saturation at
+# +-1.0; srsUE (tx_gain 50) puts ~+42 dB on the wire, so at 0 dB nearly every
+# UL sample saturates. -55 brings the UL back to the gNB's own TX level.
+gnb_rx_gain="${OCUDU_NATIVE_SB_GNB_RX_GAIN_DB:-}"
+if [[ -n "${gnb_rx_gain}" ]]; then
+  [[ "${gnb_rx_gain}" =~ ^(0|-[0-9]+([.][0-9]+)?)$ ]] || usage_error "OCUDU_NATIVE_SB_GNB_RX_GAIN_DB must be <= 0"
+  for gnb_id in gnb0 gnb1; do
+    grep -qx '  rx_gain: 0' "${config_dir}/${gnb_id}.yaml" || usage_error "${gnb_id}.yaml has no 'rx_gain: 0' line"
+    sed -i "s/^  rx_gain: 0\$/  rx_gain: ${gnb_rx_gain}/" "${config_dir}/${gnb_id}.yaml"
+  done
+fi
 for gnb_id in gnb0 gnb1; do
   "${gnb_binary}" -c "${config_dir}/${gnb_id}.yaml" --dryrun >"${log_dir}/${gnb_id}-dryrun.log" 2>&1 || {
     tail -20 "${log_dir}/${gnb_id}-dryrun.log" >&2; usage_error "${gnb_id} dry run failed"
@@ -285,8 +297,10 @@ declare -a inner_args=(
 
 web_pid=""
 if [[ "${web_ui}" == "1" ]]; then
+  # The server must not inherit the gate lock: an orphaned server would
+  # otherwise block every later gate.
   "${sionna_python}" "${bench_dir}/server.py" --port "${web_port}" \
-    --runs-root "${native_root}" --follow-latest >"${log_dir}/web-ui.log" 2>&1 &
+    --runs-root "${native_root}" --follow-latest >"${log_dir}/web-ui.log" 2>&1 {lock_fd}<&- &
   web_pid="$!"
   printf 'Scheduler benchmark UI: http://127.0.0.1:%s\n' "${web_port}"
 fi

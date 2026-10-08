@@ -125,6 +125,7 @@ section { margin-bottom: 36px; }
 .scene-legend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
 .scene-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+.scene-empty[hidden] { display: none; }
 
 .hw { display: flex; flex-direction: column; gap: 14px; padding: 16px; min-width: 0; }
 .hw-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
