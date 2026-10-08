@@ -11,6 +11,8 @@ Reusable workflow and preferences. File ownership and update rules are defined i
 
 ## Repository and Runtime
 
+- Deliver UE/gNB fixes as separate local patches with reproducible application and validation; preserve upstream source checkouts.
+
 - Local source is canonical; the RTX 5090 workstation is a reproducible validation mirror. Keep remote builds, dependencies, logs, captures and datasets outside tracked source unless deliberately promoted.
 - Run all validation on the RTX 5090, including CPU reference tests. Do not run backend tests on the user's PC.
 - Keep workstation credentials in ignored `.config`, with placeholders only in `.config.example`. Load settings through `scripts/remote/common.sh`; run helpers with Bash, never source them from zsh or source `.config` directly.
