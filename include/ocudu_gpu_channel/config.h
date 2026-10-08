@@ -72,6 +72,11 @@ struct RuntimeConfig {
   // bound is 1 ms. Lower it if a live attach shows the added delay eating the
   // slot budget; Msg3 PUSCH is the thinnest margin in this system on record.
   std::size_t rx_ring_batches = 2;
+  // Throttle every producer to the sample rate. Set false when a live radio
+  // (e.g. a USRP bridge) is the clock: that source is already real time, and
+  // pacing the UE->radio direction would hold back the UE's zero-padded TX
+  // prefix at real time, so its uplink would never catch up with air time.
+  bool pacing = true;
 };
 
 // A node in the channel-emulation graph. gNBs and UEs are the SAME class -- a
@@ -98,6 +103,11 @@ struct DeviceConfig {
   // Distinct from LinkConfig::propagation_delay_samples below — that one is a
   // per-link (geometry-driven) physical propagation delay.
   double tx_timing_offset_samples = 0.0;
+  // Capacity of this device's broker TX ring (and the largest single ZMQ
+  // payload it accepts). 0 = runtime.queue_samples. srsRAN's ZMQ TX pads
+  // transmit gaps with one large zero payload, so a UE needs a deep ring
+  // while a live-radio source should keep a shallow one (ring = latency).
+  std::size_t tx_queue_samples = 0;
 };
 
 // A RadioNode: the owner of a common sample epoch and, from M1 onward, of the
