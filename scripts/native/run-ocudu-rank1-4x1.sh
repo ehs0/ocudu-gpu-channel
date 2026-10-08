@@ -87,13 +87,14 @@ else
     --root "${native_root}" --repo-root "${repo_root}" \
     --lock "${script_dir}/native-workspace.lock.json"
 fi
-# bc88865 (the pre-MIMO anchor in the parent tree) is not in this history.
-# f93386b is the last commit here that touched these fixtures and drivers
-# (merge of the rank-1 MISO/SIMO workstream); a change after it still fails.
-git -C "${repo_root}" diff --quiet f93386b -- \
-  examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml \
-  examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml \
-  scripts/remote/ocudu-attach-smoke.sh scripts/remote/common.sh || \
+# Pin the f93386b fixture/driver contents after the examples/ relocation.
+# Only paths changed; content hashes also work in exported validation trees.
+printf '%s  %s\n' \
+  7560250a7eff4ee125999a9eb15c386064a7a1de2cce276721b7ee866ab1cd67 "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml" \
+  720fac823f216db74b8c17d8a6bc92242a462a9be50e9316aa0c7b103fd7699f "${repo_root}/examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml" \
+  84a3f95392931e7a68641dbd57a5e6ad296e93985d633ea52d732a0417abb6c2 "${repo_root}/scripts/remote/ocudu-attach-smoke.sh" \
+  de4c7500a9747c989b7028853999f81341760fa7f47ff1cb0d0431b3236c1b87 "${repo_root}/scripts/remote/common.sh" | \
+  sha256sum --check --quiet --strict - >/dev/null 2>&1 || \
   usage_error "pre-MIMO legacy fixture or driver changed"
 grep -qx 'ENABLE_ZEROMQ:BOOL=ON' "${native_root}/builds/ocudu-zmq-release/CMakeCache.txt" || usage_error "gNB lacks ZMQ"
 for binary in \

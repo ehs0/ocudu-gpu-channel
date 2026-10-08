@@ -69,6 +69,35 @@ models:
   require(config.models.count("clean") == 1, "expected clean model");
   require(ocg::resolve_batch_samples(config.runtime, 23040000) == 23040, "auto batch should resolve to 1 ms");
   require(ocg::validate_config(config).empty(), "config should validate");
+  require(config.runtime.pacing, "existing topologies must keep pacing enabled");
+  require(config.devices[0].tx_queue_samples == 0 && config.devices[1].tx_queue_samples == 0,
+          "existing devices must inherit the runtime queue size");
+
+  // The hardware bridge options must coexist with the CUDA and transmit-scale
+  // options from the other integration branches, without changing peer queues.
+  const char* live_radio_path = "test_live_radio_topology.yaml";
+  std::ifstream baseline(path);
+  std::string live_radio_text((std::istreambuf_iterator<char>(baseline)), std::istreambuf_iterator<char>());
+  const auto runtime_pos = live_radio_text.find("  backend: cpu\n");
+  live_radio_text.insert(runtime_pos, "  pacing: false\n  cuda_host_memory: copy\n  cuda_stream_priority: high\n");
+  const auto ue_pos = live_radio_text.find("  - id: ue0\n") + std::string("  - id: ue0\n").size();
+  live_radio_text.insert(ue_pos, "    tx_queue_samples: 4000000\n    tx_scale_db: -7.0\n");
+  { std::ofstream live_radio_file(live_radio_path); live_radio_file << live_radio_text; }
+  auto live_radio = ocg::load_config_file(live_radio_path);
+  std::remove(live_radio_path);
+  require(!live_radio.runtime.pacing, "live radio must be able to supply the clock");
+  require(live_radio.runtime.cuda_host_memory == ocg::CudaHostMemory::Copy &&
+              live_radio.runtime.cuda_stream_priority == ocg::CudaStreamPriority::High,
+          "live-radio options must preserve CUDA memory and priority selection");
+  require(live_radio.devices[0].tx_queue_samples == 0 &&
+              live_radio.devices[1].tx_queue_samples == 4000000 && live_radio.devices[1].tx_scale_db == -7.0,
+          "a deep UE queue must preserve transmit scaling and the other device's queue");
+  require(ocg::validate_config(live_radio).empty(), "combined live-radio configuration should validate");
+  live_radio.devices[1].tx_queue_samples = 23040;
+  const auto small_queue_errors = ocg::validate_config(live_radio);
+  require(std::any_of(small_queue_errors.begin(), small_queue_errors.end(), [](const auto& error) {
+            return error.find("device ue0 needs queue_samples >= 2 * batch") != std::string::npos;
+          }), "an explicit undersized device queue must be rejected even when the runtime queue is large");
 
   const char* bad_path = "test_bad_topology.yaml";
   std::ofstream bad(bad_path);
