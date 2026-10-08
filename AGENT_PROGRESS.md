@@ -38,6 +38,10 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 
 ## Completed Changes
 
+### Pull-request integration — 2026-10-08
+
+- Merged PR #2 locally with contributor history intact: selectable CUDA gNB profiles for RTX 5090, GB10 and Orin. Preserved the user-reset mission; contributor evidence is in `CUDA_MILESTONES.md`, `SPARK_MILESTONES.md` and `JETSON_MILESTONES.md`.
+
 ### Rank-1 implementation and review — August 2026
 
 - Added two-/four-port topologies, synthetic branch-isolation/coherent-combining gates, live OCUDU/Open5GS/srsUE gates and independent wire `y = Hx` scoring. Preserved the 1×1 regression.
@@ -111,4 +115,4 @@ Historical ledgers:
 
 ## Next Resume Point
 
-The requested condensation is complete. No implementation is queued. Continue in this folder for the next request; prior test results do not constitute release-wide qualification, and earlier runtime notes do not establish current service state.
+Integrate open PRs #2–#6, resolve overlaps while preserving current agent rules, validate the combined tree on RTX 5090, then publish main and confirm all PRs merged.
