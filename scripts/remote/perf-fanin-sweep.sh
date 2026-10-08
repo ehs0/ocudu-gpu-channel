@@ -125,9 +125,9 @@ for cfg in "${CONFIGS[@]}"; do
 
   # Generate YAML
   if [[ "${mode}" == "one-to-n" ]]; then
-    python3 "${project_root}/scripts/gen_topology.py" one-to-n "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" one-to-n "${N}" "${yaml}"
   elif [[ "${mode}" == "m-to-n" ]]; then
-    python3 "${project_root}/scripts/gen_topology.py" m-to-n "${M}" "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" m-to-n "${M}" "${N}" "${yaml}"
   elif [[ "${mode}" == "static-tdl-a" ]]; then
     # Static TDL-A example -- 1-edge (M=1 -> demo YAML) or 8-edge fan-in.
     if [[ "${M}" == "1" ]]; then

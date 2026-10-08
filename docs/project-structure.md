@@ -15,7 +15,7 @@ Tracked project content belongs in:
   - `docs/plans/` — staged implementation plans with measured pre/post numbers (currently: `device-channel-pipeline.md` for the Phase 2 host→device migration).
   - `docs/figures/` — SVG/PNG artwork referenced from the long HTML doc.
   - `docs/blueprint-generated/` — auto-generated architecture blueprints and perf-sweep JSON results; never hand-edit.
-- `scripts/` for reproducible local and remote workflows.
+- `scripts/` for reproducible local and remote workflows; `scripts/README.md` maps each subdirectory.
 
 Local-only content stays ignored:
 

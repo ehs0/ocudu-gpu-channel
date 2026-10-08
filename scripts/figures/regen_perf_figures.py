@@ -17,7 +17,7 @@ makes the same numbers reproducible from a new sweep without touching the doc.
 Run after fetching a fresh sweep.json from the RTX workstation.
 
 Usage:
-  python3 scripts/perf/regen_perf_figures.py SWEEP.json [--out DIR]
+  python3 scripts/figures/regen_perf_figures.py SWEEP.json [--out DIR]
 
 Diagram O (CPU vs CUDA baseline) is not regenerated here because the
 fan-in sweep is CUDA-only. A CPU-vs-CUDA companion needs a separate sweep

@@ -817,7 +817,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
 
   expected_links="$(topology_links "${topology_host}")"
   [[ -n "${expected_links}" ]] || write_summary "topology_has_no_links" 2
-  "${sionna_python}" "${project_root}/scripts/telemetry/check_feed.py" \
+  "${sionna_python}" "${project_root}/scripts/tools/check_feed.py" \
     --endpoint tcp://127.0.0.1:5560 --duration 10 --links "${expected_links}" \
     >"${log_dir}/telemetry-check.json" 2>&1 &
   telemetry_pid="$!"

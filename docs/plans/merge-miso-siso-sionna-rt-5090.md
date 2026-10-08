@@ -135,7 +135,7 @@ Native launchers cannot be scored green on the currently inspected namespace con
 
 Before Docker live gates, inspect the fully rendered Compose file and cleanup paths. Use unique project/container names, ports, and nonoverlapping subnets, and ensure teardown removes only this run's resources. Existing scripts contain fixed-name cleanup and cannot be presumed isolated merely because the source directory differs. Preserve active Open5GS and research jobs.
 
-Use `scripts/telemetry/check_feed.py` with `--links` derived from the actual topology: its default list expects ten particular links and is wrong for a single-cell scenario. It checks feed presence/parsing; additionally verify seqno application, warmup completion, frame age, and IQ effects.
+Use `scripts/tools/check_feed.py` with `--links` derived from the actual topology: its default list expects ten particular links and is wrong for a single-cell scenario. It checks feed presence/parsing; additionally verify seqno application, warmup completion, frame age, and IQ effects.
 
 ## Final acceptance, history checks, and rollback
 

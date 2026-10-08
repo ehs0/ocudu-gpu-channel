@@ -1,5 +1,5 @@
 # Docker rank-1 2x1 DL MISO / 1x2 UL SIMO fixture for the containerised OCUDU gNB + srsUE gate
-# (scripts/remote/ocudu-rank1-smoke.sh).
+# (scripts/remote/ocudu-rank1-2x1-smoke.sh).
 #
 # The channel matrices, model chain and port ordering are identical to the
 # native fixture of the same name. Only the ZMQ endpoint form differs: the

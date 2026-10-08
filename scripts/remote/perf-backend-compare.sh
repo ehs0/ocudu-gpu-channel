@@ -170,7 +170,7 @@ for cfg in "${SYNTHETIC_CONFIGS[@]}" "${TDL_CONFIGS[@]}"; do
     # gen one-to-n N
     read -r _ mode N <<< "${rest}"
     yaml="${yaml_dir}/${label}.src.yaml"
-    python3 "${project_root}/scripts/gen_topology.py" "${mode}" "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" "${mode}" "${N}" "${yaml}"
   else
     yaml="${project_root}/${rest}"
   fi
