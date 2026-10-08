@@ -1,7 +1,5 @@
 # Progress
 
-Current state and condensed outcomes. The [full pre-condensation ledger](archive/progress/AGENT_PROGRESS-before-condense-2026-10-08.md) preserves intermediate runs, failed attempts, exact hashes and pending runtime notes.
-
 > **Entry rules:** One bullet per meaningful change; at most two sentences and 40 words. Record outcomes, decisive checks and blockers; link details and omit repeated context. Apply the [harness rules](AGENT_HARNESS.md#progress-entries) before finishing.
 
 ## Repository State
@@ -94,6 +92,7 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 - User amended the mission on 2026-10-08, resetting `AGENT_GOAL.md` following the supplied reference.
 - User amended `AGENT_GOAL.md` by removing the reset note on 2026-10-08.
 - Published agent-file updates as `1b46173` to `origin/main` on 2026-10-08 at the user's request. Fetch found no remote-only commits; whitespace checks passed, and source/runtime files were unchanged.
+- Removed the introductory paragraph at the user's request; the archive remains linked under Evidence and Archives. Whitespace checks passed, and the user authorized commit and push.
 
 ## Evidence and Archives
 
