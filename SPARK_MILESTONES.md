@@ -600,7 +600,7 @@ D9 수정은 `pusch_codeblock_decoder_cuda_batch.cpp`의 `min_sum_scale`을 0.75
 **멀티 gNB 러너.** `scripts/native/run-ocudu-multi-gnb.sh`(+`-inner.sh`, `render-multi-gnb-configs.py`)를 새로 만들었다. Docker 기반 `scripts/remote/ocudu-multi-gnb-smoke.sh`를 native로 옮긴 것이다. 네임스페이스·프로세스 관리는 native 멀티 UE 게이트 것을 그대로 쓴다. 구성은 다음과 같다.
 - gNB 프로세스 2개. 셀마다 PCI 1/2, `gnb_id` 411/412, ZMQ 포트 2000–2001/2010–2011이 다르다. N2/N3 bind는 `127.0.0.11`/`.12`로 나눴다(같은 주소면 GTP-U 포트가 충돌한다).
 - srsUE 2개, Open5GS 하나.
-- 브로커 토폴로지는 `examples/topology.multi-gnb.cuda.yaml`이다: serving 6 dB, intercell 20 dB, 링크 8개.
+- 브로커 토폴로지는 `examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml`이다: serving 6 dB, intercell 20 dB, 링크 8개.
 - `OCUDU_NATIVE_GNB_ACCELERATION`이 있으면 CUDA gNB(두 셀 모두), 없으면 CPU gNB다.
 - 판정에 **UE가 자기 셀(PCI)에 붙었는지**를 넣었다. 두 UE가 한 셀에만 붙으면 2셀 시험이 아니기 때문이다.
 - aarch64용 노브를 넣었다: `OCUDU_NATIVE_CUDA_ARCH`, `OCUDU_NATIVE_SKIP_WORKSPACE_LOCK`.

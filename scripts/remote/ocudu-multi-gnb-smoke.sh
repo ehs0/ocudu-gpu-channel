@@ -52,7 +52,7 @@ sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 # canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
 # with the serving and intercell models works, which is how the OpenStreetMap
 # SUTD campus scene is selected.
-sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/sionna/multi-gnb.json}"
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/configs/sionna/scenarios/simple_street/multi-gnb.json}"
 # Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
 # to the 5GC from outside the compose network; the base compose publishes 9999
 # only so a human can poke it, and that mapping is enough to abort the whole
@@ -412,7 +412,7 @@ gen_gnb_config() {
     /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
     END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
-  ' "${project_root}/examples/ocudu/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
+  ' "${project_root}/examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
 }
 gen_gnb_config "${gnb0_config}" 3000 1 411 gnb0
 gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
@@ -712,9 +712,9 @@ echo "open5gs: ${h:-?}"
 # decides which cell is stronger.
 if [[ "${topology_name}" == "__default__" ]]; then
   if [[ "${channel_mode}" == "sionna" ]]; then
-    topology_name="examples/topology.sionna-multi-gnb.cuda.yaml"
+    topology_name="examples/configs/topologies/sionna/topology.sionna-multi-gnb.cuda.yaml"
   else
-    topology_name="examples/topology.multi-gnb.cuda.yaml"
+    topology_name="examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml"
   fi
 fi
 case "${topology_name}" in
@@ -817,7 +817,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
 
   expected_links="$(topology_links "${topology_host}")"
   [[ -n "${expected_links}" ]] || write_summary "topology_has_no_links" 2
-  "${sionna_python}" "${project_root}/scripts/telemetry/check_feed.py" \
+  "${sionna_python}" "${project_root}/scripts/tools/check_feed.py" \
     --endpoint tcp://127.0.0.1:5560 --duration 10 --links "${expected_links}" \
     >"${log_dir}/telemetry-check.json" 2>&1 &
   telemetry_pid="$!"

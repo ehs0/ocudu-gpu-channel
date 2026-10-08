@@ -125,7 +125,7 @@ compute-sanitizer --tool memcheck --error-exitcode 99 ./build-cuda-5090/test_pro
 compute-sanitizer --tool memcheck --error-exitcode 99 ./build-cuda-5090/test_runtime_update_parity
 
 "$SIONNA_PYTHON" scripts/sionna_rt/run_bridge.py \
-  --scenario-config examples/sionna/ocudu-rank1.json \
+  --scenario-config examples/configs/sionna/scenarios/simple_street/ocudu-rank1.json \
   --dry-run --iterations 3 --update-hz 2
 ```
 
@@ -135,7 +135,7 @@ Native launchers cannot be scored green on the currently inspected namespace con
 
 Before Docker live gates, inspect the fully rendered Compose file and cleanup paths. Use unique project/container names, ports, and nonoverlapping subnets, and ensure teardown removes only this run's resources. Existing scripts contain fixed-name cleanup and cannot be presumed isolated merely because the source directory differs. Preserve active Open5GS and research jobs.
 
-Use `scripts/telemetry/check_feed.py` with `--links` derived from the actual topology: its default list expects ten particular links and is wrong for a single-cell scenario. It checks feed presence/parsing; additionally verify seqno application, warmup completion, frame age, and IQ effects.
+Use `scripts/tools/check_feed.py` with `--links` derived from the actual topology: its default list expects ten particular links and is wrong for a single-cell scenario. It checks feed presence/parsing; additionally verify seqno application, warmup completion, frame age, and IQ effects.
 
 ## Final acceptance, history checks, and rollback
 

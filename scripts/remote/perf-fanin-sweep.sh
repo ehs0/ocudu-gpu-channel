@@ -125,15 +125,15 @@ for cfg in "${CONFIGS[@]}"; do
 
   # Generate YAML
   if [[ "${mode}" == "one-to-n" ]]; then
-    python3 "${project_root}/scripts/gen_topology.py" one-to-n "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" one-to-n "${N}" "${yaml}"
   elif [[ "${mode}" == "m-to-n" ]]; then
-    python3 "${project_root}/scripts/gen_topology.py" m-to-n "${M}" "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" m-to-n "${M}" "${N}" "${yaml}"
   elif [[ "${mode}" == "static-tdl-a" ]]; then
     # Static TDL-A example -- 1-edge (M=1 -> demo YAML) or 8-edge fan-in.
     if [[ "${M}" == "1" ]]; then
-      cp "${project_root}/examples/topology.tdl-a.cuda.yaml" "${yaml}"
+      cp "${project_root}/examples/configs/topologies/channel_models/topology.tdl-a.cuda.yaml" "${yaml}"
     else
-      cp "${project_root}/examples/topology.perf-tdl-a-fanin-8.cuda.yaml" "${yaml}"
+      cp "${project_root}/examples/configs/topologies/perf/topology.perf-tdl-a-fanin-8.cuda.yaml" "${yaml}"
     fi
   else
     echo "    unknown mode '${mode}' for ${label}" >&2

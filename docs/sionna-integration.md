@@ -175,7 +175,7 @@ wall time when radio processing falls behind.
 | OCUDU | `2563975a74baf94db51b4a41d6ff48e945cbb8f7` |
 | UE image | `ocudu-gpu-channel/srsue-zmq:daa167ae3443b046ce560df646c7dc5f17e5c1dd` |
 | UE executable SHA256 | `eba570b596d251bc8b7acba6126640d40bb53251ce9f88fe6c59deddba45d3e7` |
-| Original moving scenario | `examples/sionna/multi-gnb-sutd.json`; SHA256 `9a67cd16d9aa7d06078598f7f5f48e74df0181bfdc0025448d8a241b02daf01c` |
+| Original moving scenario | `examples/configs/sionna/scenarios/sutd/multi-gnb-sutd.json`; SHA256 `9a67cd16d9aa7d06078598f7f5f48e74df0181bfdc0025448d8a241b02daf01c` |
 | Radio workload | Two real OCUDU gNBs, two real srsUEs, Open5GS and ten CUDA links; PCI1/2, n3, 20 MHz, 23.04 MS/s; four ports per gNB, one per UE |
 | Host | RTX 5090, Intel Core Ultra 9 285K, CUDA 12.8.1, driver 580.173.02 |
 
@@ -254,6 +254,50 @@ during a later materialization. They are not CUDA kernel timings.
 
 The optional UI geometry accessor now runs inside its exception handler. A
 component-build failure disables ray drawing and preserves channel generation;
-it is not a claimed performance optimization. Live profiling under radio
-load remains unmeasured.
+it is not a claimed performance optimization.
 
+For a repeatable diagnostic without launching gNB, UE, or broker processes:
+
+```bash
+python scripts/sionna_rt/profile_replay.py \
+  --replay /path/to/sionna-status.jsonl \
+  --scenario examples/configs/sionna/scenarios/robot_ring/robot-ring-walk.json \
+  --out /path/to/profile.json --samples 40 --rounds 2 --pace-hz 10
+```
+
+This reuses recorded scene-frame positions and velocities, including the
+already-applied arena offset. It writes a summary plus `profile-samples.jsonl`
+with stage timings, profile coefficients, fingerprints and source timestamps.
+Five first-position warmups are excluded; other positions may still incur
+JIT costs. `--pace-hz 0` runs back to back. `--path-polylines 0` disables UI
+geometry, and `--samples-per-src` changes the search budget explicitly. Inspect
+recorded/effective environments and per-round results before comparing runs.
+The measured generation interval excludes live runtime-status writes and does
+not exercise control delivery, radio scheduling, or channel continuity.
+
+On 2026-09-30, a DGX Spark GB10 (driver 580.178.04; Sionna RT 2.0.1,
+Mitsuba 3.8.0, Dr.Jit 1.3.1, CUDA RT backend) replayed 40 positions from R4b
+`20260929T144912Z` twice at 10 Hz, about eight seconds after warmup. Topology:
+one gNB/two UEs, 1×1 antennas, four FDD links at 1842.5/1747.5 MHz,
+23.04 MS/s tap conversion, depth 3, 200k samples/source, LOS/reflection/
+refraction enabled, six UI polylines. No radio/broker or other GPU process
+was running. Solver settings, carriers, sample rate and gain calibration
+matched the recorded environment. Final replay mean/p50/p90/max generation
+times were **23.0/21.9/22.9/79.5 ms** (80 measured updates). Path-solver calls
+accounted for 20.65 ms/update on average; CIR export 0.52 ms and geometry export
+1.36 ms. This is not a live 40 ms deadline pass.
+
+An earlier paced pair measured 21.5 ms mean with geometry and 21.6 ms without;
+there is no demonstrated mean-time improvement from disabling visualization.
+The first unpaced run measured 37.3 ms mean, so cache, pacing and execution
+conditions must be retained with the evidence. Profile hashes across separate
+runs were not all bit-identical; they are diagnostics, not a numerical
+equivalence claim. Historical R4b live generation averaged 87.8 ms, but that
+run also executed the radio stack and broker. The historical/live difference
+does not isolate a cause, and motion alone is not established as its cause.
+
+Raw summaries and samples are under `/workspace/gpuch/sionna-profile-0930/`
+on Spark, copied to `/home/minwoo/ocudu-work/sionna-profile-0930/`. The active
+R7 source tree and launchers were not changed. Focused adapter, external-position
+and Web UI tests passed 83/83 on Spark; a four-update bridge dry run exercised
+the new JSON timing fields. Live profiling under radio load remains unmeasured.

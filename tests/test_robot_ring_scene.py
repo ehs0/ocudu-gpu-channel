@@ -23,8 +23,8 @@ from run_bridge import (  # noqa: E402
     scene_geometry,
 )
 
-SCENARIO = PROJECT_ROOT / "examples" / "sionna" / "robot-ring.json"
-SCENE_DIR = PROJECT_ROOT / "examples" / "sionna" / "scenes" / "robot_ring"
+SCENARIO = PROJECT_ROOT / "examples" / "configs" / "sionna" / "scenarios" / "robot_ring" / "robot-ring.json"
+SCENE_DIR = PROJECT_ROOT / "examples" / "configs" / "sionna" / "scenes" / "robot_ring"
 RENDERER = PROJECT_ROOT / "scripts" / "native" / "render-sionna-multi-ue-configs.py"
 
 
@@ -52,6 +52,11 @@ class RobotRingScenarioTest(unittest.TestCase):
         # No UE<->UE edge: the ring cell is FDD band 3, where one robot's uplink
         # carrier is never heard by the other's downlink receiver.
         self.assertFalse(any(l.direction == "crosstalk" for l in definition.links))
+        crosstalk = load_scenario_config(SCENARIO.with_name("robot-ring-crosstalk.json"))
+        self.assertEqual(
+            {(l.source, l.destination, l.direction) for l in crosstalk.links},
+            links | {("ue0", "ue1", "crosstalk"), ("ue1", "ue0", "crosstalk")},
+        )
         for node_id in ("ue0", "ue1"):
             motion = definition.nodes[node_id].motion
             self.assertEqual(motion.route_mode, "pingpong")
@@ -124,6 +129,8 @@ class RobotRingScenarioTest(unittest.TestCase):
             {(link.source, link.destination) for link in shape.links},
             {("gnb0", "ue0"), ("gnb0", "ue1"), ("ue0", "gnb0"), ("ue1", "gnb0")},
         )
+        crosstalk = renderer.load_live_shape(SCENARIO.with_name("robot-ring-crosstalk.json"))
+        self.assertEqual(len(crosstalk.links), 6)
 
 
 if __name__ == "__main__":

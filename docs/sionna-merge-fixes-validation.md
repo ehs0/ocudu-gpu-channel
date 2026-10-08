@@ -112,11 +112,11 @@ find scripts -name '*.sh' -print0 | xargs -0 -n1 bash -n
 
 The exact remote body of `scripts/remote/gpu-test-sequence.sh` was extracted as `build-review-20260914/gpu-sequence-inner.sh` and invoked through `remote_sh bash -s -- "$w" "$p" "$v/suite-builds"`, with that file as stdin. This avoids overwriting the normal remote workspace. `run-baseline-clean.sh` and `run-fixed-comparison.sh` record all paired-run process arguments and collection code; `summarize-comparison.py` produces `comparison-summary.json`.
 
-Stationary live invocation (replace the scenario with `examples/sionna/multi-gnb-sutd.json` and hold 80 with 60 for the moving case):
+Stationary live invocation (replace the scenario with `examples/configs/sionna/scenarios/sutd/multi-gnb-sutd.json` and hold 80 with 60 for the moving case):
 
 ```bash
 cd "$p"
-bash "$v/live-ocudu-inner.sh" "$w" "$p" "$v/suite-builds" "$v/live-results"   "$w/ocudu" 90 0 master 8 __native__ sionna "$w/venvs/sionna/bin/python"   2 120 19080 "$v/stationary-sutd.json" "$w/tools/cuda-12.8.1/bin/nvcc"   local '' 80 600 0.2 examples/topology.sionna-multi-gnb.cuda.yaml
+bash "$v/live-ocudu-inner.sh" "$w" "$p" "$v/suite-builds" "$v/live-results"   "$w/ocudu" 90 0 master 8 __native__ sionna "$w/venvs/sionna/bin/python"   2 120 19080 "$v/stationary-sutd.json" "$w/tools/cuda-12.8.1/bin/nvcc"   local '' 80 600 0.2 examples/configs/topologies/sionna/topology.sionna-multi-gnb.cuda.yaml
 ```
 
 Final cleanup stopped only recorded test processes, test containers and the test browser. No test listener or GPU compute process remained; all 13 unrelated containers remained running. Contributor tip `066a702` remains an ancestor. No squash, rebase, main merge or remote publication was performed.

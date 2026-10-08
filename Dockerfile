@@ -8,7 +8,7 @@
 #   GPU image (default, validated on RTX 5090 / CUDA 12.8):
 #     docker build -t ocudu-gpu-channel:latest .
 #     docker run --rm --gpus all --network host ocudu-gpu-channel:latest \
-#       --config /opt/ocudu/examples/topology.mvp.cuda.yaml --duration 15s
+#       --config /opt/ocudu/examples/configs/topologies/basic/topology.mvp.cuda.yaml --duration 15s
 #
 #   Single-arch build (faster; pick your GPU's compute capability):
 #     docker build --build-arg CUDA_ARCH=90-real -t ocudu-gpu-channel:h100 .

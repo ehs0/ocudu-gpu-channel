@@ -8,7 +8,7 @@
 # Two config sets:
 #   - synthetic_fanin: gen_topology.py one-to-N for N in {1, 4, 16}
 #                       (cuda_mvp model — single-tap tdl + phase + cfo)
-#   - tdl_profiles:    examples/topology.tdl-{a..e}.cuda.yaml
+#   - tdl_profiles:    examples/configs/topologies/channel_models/topology.tdl-{a..e}.cuda.yaml
 #                       (TR 38.901 23-tap TDL + Jakes fading + LOS for D/E)
 #
 # Output: results/perf-backend-compare/<timestamp>/
@@ -91,18 +91,18 @@ echo "out_dir=${out_dir}"
 # ---- Config lists ----
 # Two sets:
 #   synthetic_fanin: gen_topology one-to-N (cuda_mvp model)
-#   tdl_profiles:    examples/topology.tdl-{a..e}.cuda.yaml
+#   tdl_profiles:    examples/configs/topologies/channel_models/topology.tdl-{a..e}.cuda.yaml
 SYNTHETIC_CONFIGS=(
   "synthetic_fanin one-to-n_N1   gen one-to-n 1"
   "synthetic_fanin one-to-n_N4   gen one-to-n 4"
   "synthetic_fanin one-to-n_N16  gen one-to-n 16"
 )
 TDL_CONFIGS=(
-  "tdl_profiles tdl-a examples/topology.tdl-a.cuda.yaml"
-  "tdl_profiles tdl-b examples/topology.tdl-b.cuda.yaml"
-  "tdl_profiles tdl-c examples/topology.tdl-c.cuda.yaml"
-  "tdl_profiles tdl-d examples/topology.tdl-d.cuda.yaml"
-  "tdl_profiles tdl-e examples/topology.tdl-e.cuda.yaml"
+  "tdl_profiles tdl-a examples/configs/topologies/channel_models/topology.tdl-a.cuda.yaml"
+  "tdl_profiles tdl-b examples/configs/topologies/channel_models/topology.tdl-b.cuda.yaml"
+  "tdl_profiles tdl-c examples/configs/topologies/channel_models/topology.tdl-c.cuda.yaml"
+  "tdl_profiles tdl-d examples/configs/topologies/channel_models/topology.tdl-d.cuda.yaml"
+  "tdl_profiles tdl-e examples/configs/topologies/channel_models/topology.tdl-e.cuda.yaml"
 )
 
 compare_json="${out_dir}/compare.json"
@@ -170,7 +170,7 @@ for cfg in "${SYNTHETIC_CONFIGS[@]}" "${TDL_CONFIGS[@]}"; do
     # gen one-to-n N
     read -r _ mode N <<< "${rest}"
     yaml="${yaml_dir}/${label}.src.yaml"
-    python3 "${project_root}/scripts/gen_topology.py" "${mode}" "${N}" "${yaml}"
+    python3 "${project_root}/scripts/tools/gen_topology.py" "${mode}" "${N}" "${yaml}"
   else
     yaml="${project_root}/${rest}"
   fi
