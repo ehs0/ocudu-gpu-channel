@@ -26,15 +26,15 @@
 # three agree, the impairment is real and the next probe is the srsUE UL
 # waveform (phase compensation / DMRS) against the gNB's expectations.
 #
-# Apply to the gNB fixture used by every native gate (examples/ocudu/
+# Apply to the gNB fixture used by every native gate (examples/configs/ran/ocudu/docker/
 # gnb_zmq_b210_fdd_srsue.yaml). It changes the fixture hash, so run it as an
 # explicit experiment (OCUDU_NATIVE_* knob or a copied fixture), one value per
 # run: post_equalization (today's default), channel_estimator, evm. Compare
 # the PUSCH `sinr=` distribution by PRB count (scripts: see R4c notes,
 # `pusch_stats.py`) and the UL MCS / PUSCH KO% the scheduler settles on.
 #
---- a/examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml
-+++ b/examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml
+--- a/examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml
++++ b/examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml
 @@ cell_cfg: pusch: mcs_table: qam64 @@
    pusch:
      mcs_table: qam64

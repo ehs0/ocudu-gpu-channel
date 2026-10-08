@@ -38,7 +38,7 @@ fail = multi_ue.fail
 replace_exact = multi_ue.replace_exact
 
 # One entry per cell. The ZMQ ports must agree with the port map below, which
-# rewrites examples/topology.multi-gnb.cuda.yaml onto the native loopback plan.
+# rewrites examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml onto the native loopback plan.
 CELLS = (
     {"device_id": "gnb0", "tx_port": 2000, "rx_port": 2001, "pci": 1, "gnb_id": 411, "bind": "127.0.0.11"},
     {"device_id": "gnb1", "tx_port": 2010, "rx_port": 2011, "pci": 2, "gnb_id": 412, "bind": "127.0.0.12"},
@@ -46,7 +46,7 @@ CELLS = (
 # The UEs, IMSIs, netns and IPv4s are the multi-UE gate's: ue0 camps on gnb0,
 # ue1 on gnb1 (the topology's serving/intercell path losses decide that).
 UES = multi_ue.UES
-# examples/topology.multi-gnb.cuda.yaml port -> native port.
+# examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml port -> native port.
 PORT_MAP = {3000: 2000, 3001: 2001, 3002: 2010, 3003: 2011,
             3100: 2100, 3101: 2101, 3102: 2102, 3103: 2103}
 
@@ -138,23 +138,23 @@ def main() -> int:
     log_dir = multi_ue.safe_directory(args.log_dir, "log directory")
     read = multi_ue.read_regular
 
-    gnb_source = read(repo_root / "examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture")
+    gnb_source = read(repo_root / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture")
     stage = os.environ.get("OCUDU_NATIVE_GNB_ACCELERATION")
     outputs = {}
     for cell in CELLS:
         text = render_gnb(gnb_source, cell, log_dir)
         outputs[f"{cell['device_id']}.yaml"] = add_acceleration(text, stage) if stage else text
     outputs["topology.yaml"] = render_topology(
-        read(repo_root / "examples/topology.multi-gnb.cuda.yaml", "multi-gNB topology")
+        read(repo_root / "examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml", "multi-gNB topology")
     )
     outputs["open5gs.yaml"] = multi_ue.render_open5gs(
         read(native_root / "src/ocudu/docker/open5gs/open5gs-5gc.yml", "pinned OCUDU Open5GS template"),
         native_root,
     )
     outputs["subscriber.csv"] = multi_ue.validate_subscriber(
-        read(repo_root / "examples/native/open5gs/subscriber-multi-ue.csv", "subscriber fixture")
+        read(repo_root / "examples/configs/ran/open5gs/subscriber-multi-ue.csv", "subscriber fixture")
     )
-    srsue_source = read(repo_root / "examples/native/srsran/srsue_zmq_multi_ue.conf.in", "srsUE template")
+    srsue_source = read(repo_root / "examples/configs/ran/srsue/srsue_zmq_multi_ue.conf.in", "srsUE template")
     for ue in UES:
         outputs[f"srsue-{ue['device_id']}.conf"] = multi_ue.render_srsue(srsue_source, ue, log_dir)
 

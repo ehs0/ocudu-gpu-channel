@@ -10,9 +10,9 @@ import sys
 import unittest
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
-RENDERER = PROJECT_ROOT / "scripts" / "native" / "render-robot-fight-configs.py"
-FIGHT = PROJECT_ROOT / "examples" / "sionna" / "robot-ring-fight.json"
-WALK = PROJECT_ROOT / "examples" / "sionna" / "robot-ring-walk.json"
+RENDERER = PROJECT_ROOT / "examples" / "robot_fight" / "render-robot-fight-configs.py"
+FIGHT = PROJECT_ROOT / "examples" / "configs" / "sionna" / "scenarios" / "robot_ring" / "robot-ring-fight.json"
+WALK = PROJECT_ROOT / "examples" / "configs" / "sionna" / "scenarios" / "robot_ring" / "robot-ring-walk.json"
 
 
 def load_renderer():

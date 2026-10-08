@@ -179,11 +179,11 @@ def main() -> int:
         legacy.fail("repo and native roots must already be canonical")
 
     gnb_source = legacy.read_regular(
-        repo_root / "examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml",
+        repo_root / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml",
         "immutable legacy gNB fixture",
     )
     topology_source = legacy.read_regular(
-        repo_root / "examples/topology.ocudu-docker.cuda.yaml",
+        repo_root / "examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml",
         "immutable legacy topology",
     )
     open5gs_source = legacy.read_regular(
@@ -191,11 +191,11 @@ def main() -> int:
         "pinned OCUDU Open5GS template",
     )
     nrue_source = legacy.read_regular(
-        repo_root / "examples/native/oai/nrue_zmq_1x1.conf",
+        repo_root / "examples/configs/ran/oai/nrue_zmq_1x1.conf",
         "native OAI nrUE fixture",
     )
     subscriber_source = legacy.read_regular(
-        repo_root / "examples/native/open5gs/subscriber-legacy-1x1.csv",
+        repo_root / "examples/configs/ran/open5gs/subscriber-legacy-1x1.csv",
         "native subscriber template",
     )
 

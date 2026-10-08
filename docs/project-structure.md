@@ -10,7 +10,7 @@ Tracked project content belongs in:
 - `include/` for public C++ headers.
 - `src/` for implementation.
 - `tests/` for unit and integration tests.
-- `examples/` for small reproducible config examples.
+- `examples/` for application demos; `examples/configs/` for the topology, Sionna and RAN configs they and the gates read.
 - `docs/` for the technical reference (`index.html` — also served at the project's GitHub Pages URL), OCUDU interop runbook, distributed-IQ network notes, and:
   - `docs/plans/` — staged implementation plans with measured pre/post numbers (currently: `device-channel-pipeline.md` for the Phase 2 host→device migration).
   - `docs/figures/` — SVG/PNG artwork referenced from the long HTML doc.

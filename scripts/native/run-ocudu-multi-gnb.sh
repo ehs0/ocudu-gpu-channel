@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Native multi-gNB attach gate: two OCUDU gNB processes (two co-channel cells),
 # two srsUEs, Open5GS, and this tree's broker on
-# examples/topology.multi-gnb.cuda.yaml, with no container runtime anywhere.
+# examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml, with no container runtime anywhere.
 #
 # The Docker-free counterpart of scripts/remote/ocudu-multi-gnb-smoke.sh, built
 # on the native multi-UE gate's namespace layout and supervision. Each UE camps
@@ -70,7 +70,7 @@ for path in "${inner}" "${renderer}" "${gnb_binary}" \
   "${native_root}/builds/srsran4g-zmq-release/srsue/src/srsue" \
   "${native_root}/builds/open5gs-v2.7.6/tests/app/5gc" \
   "${native_root}/install/mongodb-6.0.29/bin/mongod" \
-  "${repo_root}/examples/topology.multi-gnb.cuda.yaml"; do
+  "${repo_root}/examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml"; do
   [[ -e "${path}" ]] || usage_error "missing required path: ${path}"
 done
 [[ -c /dev/net/tun ]] || usage_error "/dev/net/tun is absent"

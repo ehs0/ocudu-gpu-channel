@@ -8,7 +8,7 @@ import pytest
 
 pytest.importorskip("mujoco")
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts" / "robot_fight"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "examples" / "robot_fight"))
 
 import arena as arena_mod  # noqa: E402
 

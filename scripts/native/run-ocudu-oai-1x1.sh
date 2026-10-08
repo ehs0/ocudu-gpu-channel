@@ -84,8 +84,8 @@ for path in "${inner}" "${renderer}" "${verifier}" \
   "${native_root}/builds/oai-zmq-release/libdfts.so" \
   "${native_root}/builds/open5gs-v2.7.6/tests/app/5gc" \
   "${native_root}/install/mongodb-6.0.29/bin/mongod" \
-  "${repo_root}/examples/topology.ocudu-docker.cuda.yaml" \
-  "${repo_root}/examples/native/oai/nrue_zmq_1x1.conf"; do
+  "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml" \
+  "${repo_root}/examples/configs/ran/oai/nrue_zmq_1x1.conf"; do
   [[ -e "${path}" ]] || usage_error "missing required path: ${path}"
 done
 [[ -c /dev/net/tun ]] || usage_error "/dev/net/tun is absent"
@@ -104,8 +104,8 @@ fi
 # The gNB-side fixtures must stay byte-identical to the pre-MIMO baseline: the
 # UE process is the only variable this gate is allowed to change.
 git -C "${repo_root}" diff --quiet 0c13a1a -- \
-  examples/topology.ocudu-docker.cuda.yaml \
-  examples/ocudu/gnb_zmq_b210_fdd_srsue.yaml || \
+  examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml \
+  examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml || \
   usage_error "shared legacy fixture changed"
 grep -qx 'ENABLE_ZEROMQ:BOOL=ON' "${native_root}/builds/ocudu-zmq-release/CMakeCache.txt" || usage_error "gNB lacks ZMQ"
 for binary in \
@@ -172,7 +172,7 @@ unshare --user --map-root-user --net --mount --fork --kill-child --propagation p
   --physical-gpu "${physical_gpu}" \
   --hardware-probe "${channel_build}/test_hardware_probe" \
   --probe-broker "${channel_build}/ocudu-gpu-channel" \
-  --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml"
+  --probe-config "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml"
 cleanup_probe
 trap - EXIT
 
@@ -331,7 +331,7 @@ unshare --user --map-root-user --net --mount --fork --kill-child --propagation p
   --outer-uid "$(id -u)" --netns-dir "${postbuild_probe}/run-netns" \
   --physical-gpu "${physical_gpu}" --hardware-probe "${channel_build}/test_hardware_probe" \
   --probe-broker "${channel_build}/ocudu-gpu-channel" \
-  --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml" \
+  --probe-config "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml" \
   >"${log_dir}/postbuild-primitive-probe.log" 2>&1
 rmdir "${postbuild_probe}/run-netns" "${postbuild_probe}"
 
@@ -341,7 +341,7 @@ unshare --user --map-root-user --net --mount --fork --kill-child --propagation p
   --outer-uid "$(id -u)" --netns-dir "${netns_dir}" --physical-gpu "${physical_gpu}" \
   --hardware-probe "${channel_build}/test_hardware_probe" \
   --probe-broker "${channel_build}/ocudu-gpu-channel" \
-  --probe-config "${repo_root}/examples/topology.ocudu-docker.cuda.yaml" --native-root "${native_root}" \
+  --probe-config "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.cuda.yaml" --native-root "${native_root}" \
   --repo-root "${repo_root}" --config-dir "${config_dir}" --log-dir "${log_dir}" \
   --report-dir "${report_dir}" --timestamp "${timestamp}"
 run_status="$?"
