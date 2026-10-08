@@ -132,31 +132,61 @@ process_running()
 start_group()
 {
   local name="$1" output="$2"; shift 2
-  setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 &
+  # The outer gate holds its flock on OCUDU_NATIVE_GATE_LOCK_FD. Close it in
+  # the child: a process that outlives teardown must not keep the lock (a
+  # stray open5gs-scpd once refused seven later runs, S15).
+  local gate_lock_fd="${OCUDU_NATIVE_GATE_LOCK_FD:-}"
+  if [[ "${gate_lock_fd}" =~ ^[0-9]+$ && "${gate_lock_fd}" -gt 2 ]]; then
+    setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 {gate_lock_fd}>&- &
+  else
+    setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 &
+  fi
   started_pid="$!"
   process_names+=("${name}")
   process_pids+=("${started_pid}")
   process_pgids+=("${started_pid}")
 }
 
+# Session members of a group started by start_group (setsid makes pid = pgid
+# = sid). Children the leader forked stay in its session even if they change
+# group, and they can outlive the leader.
+group_alive()
+{
+  ps -eo pgid=,sid=,stat= | awk -v g="$1" '($1 == g || $2 == g) && $3 !~ /^Z/ { found = 1 } END { exit !found }'
+}
+
+signal_group()
+{
+  local signal="$1" pgid="$2" member
+  kill -s "${signal}" -- "-${pgid}" >/dev/null 2>&1 || true
+  for member in $(ps -eo pid=,sid= | awk -v g="${pgid}" '$2 == g { print $1 }'); do
+    kill -s "${signal}" "${member}" >/dev/null 2>&1 || true
+  done
+}
+
 stop_group()
 {
   local index="$1"
-  local pid="${process_pids[index]}" pgid="${process_pgids[index]}"
+  local pid="${process_pids[index]}"
+  local pgid="${process_pgids[index]}"
   local signal deadline
   [[ "${pid}" =~ ^[1-9][0-9]*$ && "${pgid}" =~ ^[1-9][0-9]*$ && "${pgid}" -gt 1 ]] || return 0
-  process_running "${pid}" || return 0
-  for signal in INT TERM KILL; do
-    kill -s "${signal}" -- "-${pgid}" >/dev/null 2>&1 || true
-    deadline=$((SECONDS + 4))
-    while process_running "${pid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
-      sleep 0.1
+  # Wait on the whole group, not the leader: a leader that exits or aborts
+  # during teardown (open5gs 5gc) used to leave its forked daemons running.
+  if group_alive "${pgid}"; then
+    for signal in INT TERM KILL; do
+      signal_group "${signal}" "${pgid}"
+      deadline=$((SECONDS + 4))
+      while group_alive "${pgid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+        sleep 0.1
+      done
+      group_alive "${pgid}" || break
     done
-    process_running "${pid}" || break
-  done
-  if process_running "${pid}"; then
-    printf 'error: %s pid=%s remains alive after bounded KILL\n' "${process_names[index]}" "${pid}" >&2
-    return 124
+    if group_alive "${pgid}"; then
+      printf 'error: %s group %s remains alive after bounded KILL\n' \
+        "${process_names[index]}" "${pgid}" >&2
+      return 124
+    fi
   fi
   wait "${pid}" >/dev/null 2>&1 || true
   return 0
@@ -209,6 +239,30 @@ wait_log()
 
 gnb="${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb"
 srsue="${native_root}/builds/srsran4g-zmq-release/srsue/src/srsue"
+# srsUE with the local patches (srsue-local-patches.lock.json) by default: the
+# pinned one always sends preamble 0 and a UE that loses contention still
+# completes RA, so two UEs on one lock-step broker merge onto one C-RNTI (S16).
+# OCUDU_NATIVE_SRSUE=stock runs the pinned build.
+srsue_variant="${OCUDU_NATIVE_SRSUE:-local}"
+case "${srsue_variant}" in
+  stock) ;;
+  local)
+    srsue="${native_root}/builds/srsran4g-zmq-local/srsue/src/srsue"
+    srsue_manifest="${native_root}/builds/srsran4g-zmq-local/BUILD-MANIFEST.txt"
+    [[ -f "${srsue_manifest}" ]] || usage_error "local srsUE is not built: run scripts/native/build-srsue-local.sh (or OCUDU_NATIVE_SRSUE=stock)"
+    while read -r srsue_patch_path srsue_patch_sha; do
+      grep -qx "patch=${srsue_patch_path##*/} sha256=${srsue_patch_sha}" "${srsue_manifest}" || \
+        usage_error "local srsUE was built from other patches than srsue-local-patches.lock.json; rebuild it"
+    done < <(/usr/bin/python3 -c 'import json,sys
+for p in json.load(open(sys.argv[1]))["patches"]: print(p["path"], p["sha256"])' "${repo_root}/scripts/native/srsue-local-patches.lock.json")
+    ;;
+  *) usage_error "OCUDU_NATIVE_SRSUE must be local or stock" ;;
+esac
+# Preamble per UE: distinct (default, deterministic) or random (the patch's
+# own per-attempt choice). Only the local build reads SRSUE_PRACH_PREAMBLE_INDEX.
+srsue_preambles="${OCUDU_NATIVE_SRSUE_PREAMBLES:-distinct}"
+[[ "${srsue_preambles}" =~ ^(distinct|random)$ ]] || usage_error "OCUDU_NATIVE_SRSUE_PREAMBLES must be distinct or random"
+printf 'event=srsue_select variant=%s preambles=%s binary=%s\n' "${srsue_variant}" "${srsue_preambles}" "${srsue}"
 fivegc="${native_root}/builds/open5gs-v2.7.6/tests/app/5gc"
 mongod="${native_root}/install/mongodb-6.0.29/bin/mongod"
 broker="${channel_build:-${native_root}/builds/ocudu-gpu-channel-cuda-release}/ocudu-gpu-channel"
@@ -369,7 +423,11 @@ for index in "${!ue_ids[@]}"; do
     done
     sleep 2
   fi
-  start_group "srsue-${id}" "${log_dir}/srsue-${id}.log" "${srsue}" "${config_dir}/srsue-${id}.conf"
+  srsue_env=()
+  if [[ "${srsue_variant}" == "local" && "${srsue_preambles}" == "distinct" ]]; then
+    srsue_env=(env "SRSUE_PRACH_PREAMBLE_INDEX=$((index * 8))")
+  fi
+  start_group "srsue-${id}" "${log_dir}/srsue-${id}.log" "${srsue_env[@]}" "${srsue}" "${config_dir}/srsue-${id}.conf"
   srsue_pids+=("${started_pid}")
 done
 

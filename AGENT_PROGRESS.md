@@ -40,6 +40,7 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 
 ### Pull-request integration — 2026-10-08
 
+- Merged PR #3 locally: integrated-GPU zero-copy, CUDA initialization stream ordering, OAI MIMO gates and D10 vendor patches. Contributor live results remain platform- and revision-specific; combined-tree validation is pending.
 - Merged PR #2 locally with contributor history intact: selectable CUDA gNB profiles for RTX 5090, GB10 and Orin. Preserved the user-reset mission; contributor evidence is in `CUDA_MILESTONES.md`, `SPARK_MILESTONES.md` and `JETSON_MILESTONES.md`.
 
 ### Rank-1 implementation and review — August 2026

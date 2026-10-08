@@ -91,6 +91,23 @@ process_running()
   [[ -n "${state}" && "${state:0:1}" != "Z" ]]
 }
 
+# Session members of a group started by start_group (setsid makes pid = pgid
+# = sid). Children the leader forked stay in its session even if they change
+# group, and they can outlive the leader.
+group_alive()
+{
+  ps -eo pgid=,sid=,stat= | awk -v g="$1" '($1 == g || $2 == g) && $3 !~ /^Z/ { found = 1 } END { exit !found }'
+}
+
+signal_group()
+{
+  local signal="$1" pgid="$2" member
+  kill -s "${signal}" -- "-${pgid}" >/dev/null 2>&1 || true
+  for member in $(ps -eo pid=,sid= | awk -v g="${pgid}" '$2 == g { print $1 }'); do
+    kill -s "${signal}" "${member}" >/dev/null 2>&1 || true
+  done
+}
+
 stop_group()
 {
   local index="$1"
@@ -98,19 +115,22 @@ stop_group()
   local pgid="${process_pgids[index]}"
   local signal deadline
   [[ "${pid}" =~ ^[1-9][0-9]*$ && "${pgid}" =~ ^[1-9][0-9]*$ && "${pgid}" -gt 1 ]] || return 0
-  process_running "${pid}" || return 0
-  for signal in INT TERM KILL; do
-    kill -s "${signal}" -- "-${pgid}" >/dev/null 2>&1 || true
-    deadline=$((SECONDS + 4))
-    while process_running "${pid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
-      sleep 0.1
+  # Wait on the whole group, not the leader: a leader that exits or aborts
+  # during teardown (open5gs 5gc) used to leave its forked daemons running.
+  if group_alive "${pgid}"; then
+    for signal in INT TERM KILL; do
+      signal_group "${signal}" "${pgid}"
+      deadline=$((SECONDS + 4))
+      while group_alive "${pgid}" && [[ "${SECONDS}" -lt "${deadline}" ]]; do
+        sleep 0.1
+      done
+      group_alive "${pgid}" || break
     done
-    process_running "${pid}" || break
-  done
-  if process_running "${pid}"; then
-    printf 'error: %s pid=%s remains alive after bounded KILL\n' \
-      "${process_names[index]}" "${pid}" >&2
-    return 124
+    if group_alive "${pgid}"; then
+      printf 'error: %s group %s remains alive after bounded KILL\n' \
+        "${process_names[index]}" "${pgid}" >&2
+      return 124
+    fi
   fi
   wait "${pid}" >/dev/null 2>&1 || true
   return 0
@@ -225,10 +245,23 @@ start_group()
   local name="$1"
   local output="$2"
   shift 2
-  setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 &
+  # The outer gate holds its flock on OCUDU_NATIVE_GATE_LOCK_FD. Close it in
+  # the child: a process that outlives teardown must not keep the lock (a
+  # stray open5gs-scpd once refused seven later runs, S15).
+  local gate_lock_fd="${OCUDU_NATIVE_GATE_LOCK_FD:-}"
+  if [[ "${gate_lock_fd}" =~ ^[0-9]+$ && "${gate_lock_fd}" -gt 2 ]]; then
+    setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 {gate_lock_fd}>&- &
+  else
+    setsid stdbuf -oL -eL "$@" >"${output}" 2>&1 &
+  fi
   local pid="$!"
   local pgid
-  pgid="$(ps -o pgid= -p "${pid}" | tr -d '[:space:]')"
+  # setsid runs in the background child; poll until it has made the group.
+  for _ in $(seq 1 50); do
+    pgid="$(ps -o pgid= -p "${pid}" | tr -d '[:space:]')"
+    [[ "${pgid}" == "${pid}" ]] && break
+    sleep 0.02
+  done
   [[ "${pid}" =~ ^[1-9][0-9]*$ && "${pgid}" == "${pid}" ]] || usage_error "invalid process group for ${name}"
   process_names+=("${name}")
   process_pids+=("${pid}")
@@ -319,19 +352,27 @@ run_stack()
   for required in "${native_root}" "${repo_root}" "${config_dir}" "${log_dir}" "${report_dir}"; do
     [[ "${required}" == /* && -d "${required}" && ! -L "${required}" ]] || usage_error "invalid run directory: ${required}"
   done
-  local gnb="${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb"
+  local gnb="${OCUDU_NATIVE_GNB_BINARY:-${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb}"
   local nrue="${native_root}/builds/oai-zmq-release/nr-uesoftmodem"
-  local oai_build="${native_root}/builds/oai-zmq-release"
+  # The outer script resolves the ZMQ radio module (oai-local-patches.sh; the
+  # S9 reply-poll patched build by default) and exports OCUDU_NATIVE_OAI_SHLIBPATH.
+  local oai_build="${OCUDU_NATIVE_OAI_SHLIBPATH:-${native_root}/builds/oai-zmq-release}"
   local fivegc="${native_root}/builds/open5gs-v2.7.6/tests/app/5gc"
   local mongod="${native_root}/install/mongodb-6.0.29/bin/mongod"
-  local broker="${native_root}/builds/ocudu-gpu-channel-cuda-release/ocudu-gpu-channel"
+  # The broker the outer script just built and probed from this tree; the
+  # shared builds/ocudu-gpu-channel-cuda-release belongs to another checkout.
+  local broker="${OCUDU_NATIVE_CHANNEL_BUILD:-${native_root}/builds/ocudu-gpu-channel-rank1-cuda-release}/ocudu-gpu-channel"
   local add_users="${native_root}/src/ocudu/docker/open5gs/add_users.py"
   local subscriber_verify="${repo_root}/scripts/native/verify-open5gs-subscriber.py"
   for binary in "${gnb}" "${nrue}" "${fivegc}" "${mongod}" "${broker}"; do
     [[ -x "${binary}" ]] || usage_error "missing executable: ${binary}"
   done
   [[ -f "${oai_build}/liboai_zmqdevif.so" ]] || usage_error "missing OAI ZMQ radio module"
-  local uecap_file="${native_root}/src/oai/targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports1.xml"
+  # A rendered uecap.xml (render-1x1-bw-configs.py, for a bandwidth the stock
+  # capability does not list) wins over the stock file; the env knob over both.
+  local uecap_default="${native_root}/src/oai/targets/PROJECTS/GENERIC-NR-5GC/CONF/uecap_ports1.xml"
+  [[ -f "${config_dir}/uecap.xml" ]] && uecap_default="${config_dir}/uecap.xml"
+  local uecap_file="${OCUDU_NATIVE_OAI_UECAP_FILE:-${uecap_default}}"
   [[ -f "${uecap_file}" ]] || usage_error "missing OAI UE capability file: ${uecap_file}"
 
   prepare_namespace
@@ -397,17 +438,29 @@ while time.monotonic() < deadline:
         time.sleep(.25)
 raise SystemExit(2)
 PY
-  start_group broker "${log_dir}/broker.log" env CUDA_VISIBLE_DEVICES="${physical_gpu}" "${broker}" --config "${config_dir}/topology.yaml" --duration 25s
+  # The broker's --duration clock starts with the broker, so a CUDA gNB's
+  # device initialisation (~20 s) is added on top of the fixed 25 s window.
+  local startup_allowance="${OCUDU_NATIVE_BROKER_STARTUP_ALLOWANCE_SECONDS:-0}"
+  # OCUDU_NATIVE_BROKER_WRAPPER / OCUDU_NATIVE_GNB_WRAPPER / OCUDU_NATIVE_NRUE_WRAPPER
+  # prefix the broker, gNB or nrUE command (a script that ends in `exec ... "$@"`):
+  # a profiler (S9 nsys) or a CPU placement (S10 `taskset -c`).
+  # Platform CPU placement resolved by the outer gate (platform-profile.py);
+  # empty on a host without a profile, which leaves the scheduler alone.
+  local broker_pin=() gnb_pin=() nrue_pin=()
+  [[ -n "${OCUDU_NATIVE_BROKER_CPUS:-}" ]] && broker_pin=(taskset -c "${OCUDU_NATIVE_BROKER_CPUS}")
+  [[ -n "${OCUDU_NATIVE_GNB_CPUS:-}" ]] && gnb_pin=(taskset -c "${OCUDU_NATIVE_GNB_CPUS}")
+  [[ -n "${OCUDU_NATIVE_NRUE_CPUS:-}" ]] && nrue_pin=(taskset -c "${OCUDU_NATIVE_NRUE_CPUS}")
+  start_group broker "${log_dir}/broker.log" env CUDA_VISIBLE_DEVICES="${physical_gpu}" ${OCUDU_NATIVE_BROKER_ENV:-} "${broker_pin[@]}" ${OCUDU_NATIVE_BROKER_WRAPPER:-} "${broker}" --config "${config_dir}/topology.yaml" --duration "$((25 + startup_allowance))s"
   broker_pid="${started_pid}"
   broker_index=$((${#process_pids[@]} - 1))
   # Absolute bound: the fixed 25-second run plus ten seconds for grouped
   # drain and orderly worker shutdown, independent of how quickly UE attach
   # and ping complete.
-  broker_exit_deadline=$((SECONDS + 35))
+  broker_exit_deadline=$((SECONDS + 35 + startup_allowance))
   wait_log "${log_dir}/broker.log" 'event=radio_node_resolved id=ue0' "${broker_pid}" 15 || usage_error "broker did not become ready"
-  start_group gnb "${log_dir}/gnb-console.log" "${gnb}" -c "${config_dir}/gnb.yaml"
+  start_group gnb "${log_dir}/gnb-console.log" "${gnb_pin[@]}" ${OCUDU_NATIVE_GNB_WRAPPER:-} "${gnb}" -c "${config_dir}/gnb.yaml"
   gnb_pid="${started_pid}"
-  wait_log "${log_dir}/gnb-console.log" '==== gNB started ===' "${gnb_pid}" 15 || usage_error "gNB did not start"
+  wait_log "${log_dir}/gnb-console.log" '==== gNB started ===' "${gnb_pid}" "${OCUDU_NATIVE_GNB_START_TIMEOUT_SECONDS:-15}" || usage_error "gNB did not start"
   sleep 3
   # Cell identity: band 3 FDD, DL 1842.5 MHz, 106 PRB at 15 kHz. The SSB
   # start subcarrier is offsetToPointA * 12 + k_SSB = 40 * 12 + 6 = 486, read
@@ -432,16 +485,43 @@ PY
   # EPERM -- an AssertFatal abort. With the capability absent, OAI takes its
   # own graceful default-priority path (the same one it takes for any
   # unprivileged user outside a namespace).
+  # S8: the cell's PRB count, SSB offset and 3/4 sampling (-E only where it
+  # gives the gNB's rate) come from render-1x1-bw-configs.py `oai_ue_args`;
+  # OCUDU_NATIVE_OAI_UE_RADIO_ARGS replaces the whole radio set (TDD n78).
+  local oai_sampling=(-E)
+  [[ "${OCUDU_NATIVE_OAI_UE_SAMPLING:--E}" == "-" ]] && oai_sampling=()
+  local oai_radio=("${oai_sampling[@]}" -r "${OCUDU_NATIVE_OAI_UE_PRB:-106}" --numerology 0 --band 3
+    -C 1842500000 --ssb "${OCUDU_NATIVE_OAI_UE_SSB:-486}" --CO -95000000)
+  # The renderer writes nrue-radio.args for any bandwidth but 20 MHz; the
+  # per-value knobs above or OCUDU_NATIVE_OAI_UE_RADIO_ARGS still override it.
+  if [[ -z "${OCUDU_NATIVE_OAI_UE_RADIO_ARGS:-}${OCUDU_NATIVE_OAI_UE_PRB:-}" && -f "${config_dir}/nrue-radio.args" ]]; then
+    read -r -a oai_radio <"${config_dir}/nrue-radio.args"
+  fi
+  [[ -n "${OCUDU_NATIVE_OAI_UE_RADIO_ARGS:-}" ]] && read -r -a oai_radio <<<"${OCUDU_NATIVE_OAI_UE_RADIO_ARGS}"
+  printf 'event=nrue_radio_args %s uecap=%s\n' "${oai_radio[*]}" "${uecap_file}" >"${log_dir}/nrue-radio.log"
+  # The UE writes nrL1_UE_stats-0.log (and friends) into its working directory
+  # and asserts if it cannot. Inside the userns the gate's cwd may belong to an
+  # unmapped uid, so start the UE from the log directory the gate owns.
+  pushd "${log_dir}" >/dev/null
+  # The gate's UE RX gain (oai-gate-defaults.sh oai_gate_ue_rx_gain), if any.
+  local -a ue_rx_gain=()
+  [[ -n "${OAI_GATE_UE_RX_GAIN_DB:-}" ]] && ue_rx_gain=(--zmq.'[0]'.rx_gain_db "${OAI_GATE_UE_RX_GAIN_DB}")
+  # The gate's continuous FO compensation (oai-gate-defaults.sh oai_gate_ue_fo_comp).
+  local -a ue_fo=()
+  [[ -n "${OAI_GATE_UE_CONT_FO_COMP:-}" ]] && ue_fo=(--cont-fo-comp "${OAI_GATE_UE_CONT_FO_COMP}")
+  printf 'event=nrue_fo_comp cont_fo_comp=%s\n' "${OAI_GATE_UE_CONT_FO_COMP:-off}" >>"${log_dir}/nrue-radio.log"
   start_group nrue "${log_dir}/nrue.log" nsenter --net="/run/netns/${nested_name}" -- \
     setpriv --bounding-set -sys_nice \
-    "${nrue}" -O "${config_dir}/nrue.conf" \
-    -E -r 106 --numerology 0 --band 3 -C 1842500000 --ssb 486 --CO -95000000 \
+    "${nrue_pin[@]}" ${OCUDU_NATIVE_NRUE_WRAPPER:-} "${nrue}" -O "${config_dir}/nrue.conf" \
+    "${oai_radio[@]}" \
     --ue-fo-compensation \
     --uecap_file "${uecap_file}" \
     --device.name oai_zmqdevif \
     --loader.oai_zmqdevif.shlibpath "${oai_build}" \
     --zmq.'[0]'.tx_channels tcp://10.201.0.2:2101 \
-    --zmq.'[0]'.rx_channels tcp://10.201.0.1:2100
+    --zmq.'[0]'.rx_channels tcp://10.201.0.1:2100 \
+    "${ue_rx_gain[@]}" "${ue_fo[@]}"
+  popd >/dev/null
   nrue_pid="${started_pid}"
 
   local deadline=$((SECONDS + 30))
