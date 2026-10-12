@@ -1,0 +1,32 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scene version="2.1.0">
+  <bsdf type="itu-radio-material" id="concrete">
+    <string name="type" value="concrete" />
+    <float name="thickness" value="0.2" />
+  </bsdf>
+  <shape type="ply" id="mesh-ground">
+    <string name="filename" value="meshes/ground.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_block_ne">
+    <string name="filename" value="meshes/building_block_ne.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_block_nw">
+    <string name="filename" value="meshes/building_block_nw.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_block_sw">
+    <string name="filename" value="meshes/building_block_sw.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-building_block_se">
+    <string name="filename" value="meshes/building_block_se.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+</scene>

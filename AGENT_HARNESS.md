@@ -17,6 +17,7 @@ Reusable workflow and preferences. File ownership and update rules are defined i
 - Run all validation on the RTX 5090, including CPU reference tests. Do not run backend tests on the user's PC.
 - Keep workstation credentials in ignored `.config`, with placeholders only in `.config.example`. Load settings through `scripts/remote/common.sh`; run helpers with Bash, never source them from zsh or source `.config` directly.
 - Bootstrap remote dependencies in user space; do not use sudo/apt without an explicit change to that constraint.
+- Keep third-party code out of the tree and out of submodules: install it outside via a tracked setup script, list name, version, licence and location in the example README, and import it from one adapter module.
 - Build UEs from `https://github.com/zhouyou-gu/srsRAN_4G.git`, pinning each baseline/fixed image to an exact commit. Do not silently substitute upstream or release images.
 - Retain contributor history through normal merges, verify ancestry, and commit integration fixes separately; do not squash or rebase contributions.
 - When asked to consolidate into main, merge in the current folder, preserve pending edits, and report conflicts. Resolve conflicts when authorized; local merge authorization does not imply publication.

@@ -27,6 +27,7 @@ The latest row covers combined-tree checks on RTX 5090; other rows are historica
 
 | Scope / revision | Recorded result | Limit |
 |---|---|---|
+| V2X demo, GB10, 2026-10-12 | Python 221 passed, 7 skipped; V2X 29/29; four live gates, 40 dB pass, 34/30 dB fail on ue0 re-attach | Starvations each run; radio ~0.95 real time; no per-slot deadline data |
 | PRs #2–#6 integration, 2026-10-08 | CPU/CUDA CTest 12/12 each; GPU sequence 9/9; Python 208 passed + one new focused test, 3 skipped; both frontend checks; 98 shell scripts | No new live-radio, CMX, GB10 or Orin qualification |
 | Channel fixes `16af288` | CTest 12/12, Python 75/75, nine GPU stages, Node disconnect and shell checks passed; earlier extended CUDA sanitizer runs clean | Does not establish strict real-time operation |
 | Main merge `e59e095` | Python 90/90, both Node frontend regressions and shell syntax passed | Launcher/dashboard checks; no new radio qualification |
@@ -38,6 +39,13 @@ The latest row covers combined-tree checks on RTX 5090; other rows are historica
 Reports: [integration guide](docs/sionna-integration.md), [merge validation](docs/main-merge-validation.md), [channel fix validation](docs/sionna-merge-fixes-validation.md), [metrics recovery](docs/metrics-recovery-validation.md), and [rank-1 results](docs/rank1-feasibility-report.md).
 
 ## Completed Changes
+
+### V2X intersection demo — 2026-10-12
+
+- Added `examples/v2x_intersection/`: SUMO 1.28.0 (external, `~/venvs/v2x` via `setup-external.sh`) drives two vehicles; roadside UDP crosses the live 5G link to A's controller; A's position drives Sionna. Committed on branch `v2x-intersection-demo`, unpushed.
+- One `layout.py` generates the SUMO network, Sionna scene and both scenarios; tests pin layout/scene/network agreement. V2X tests 29/29 and full Python suite 221 passed, 7 skipped.
+- Live GB10 runs ([README results](examples/v2x_intersection/README.md#measured-results-gb10-2026-10-12)): 40 dB LOS and blocked pass, V2X keeps A 29 m clear versus 12.1 m. At 34 dB ue0 never re-attaches; fallback-free V2X then collides 6/6.
+- Found and fixed controller chattering from episode plots: added a yield latch held until B clears. The 30 dB run predates it and is cited for link figures only.
 
 ### Pull-request integration — 2026-10-08
 
@@ -123,4 +131,4 @@ Historical ledgers:
 
 ## Next Resume Point
 
-PRs #2–#6 are merged and published; combined-tree validation is complete. No further merge work, live-radio rerun or deployment is queued.
+The V2X intersection demo is committed on local branch `v2x-intersection-demo` (not merged or pushed). Optional multi-UE phase (B with its own UE) is not started.
