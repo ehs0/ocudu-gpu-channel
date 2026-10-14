@@ -626,6 +626,8 @@ def scenario_environment(args: argparse.Namespace) -> dict[str, Any]:
     }
     # Only the opt-in benchmark features add keys, so every existing gate's
     # environment record stays as it was.
+    if getattr(args, "tap_doppler_bin_hz", 0.0):
+        environment["tap_doppler_bin_hz"] = args.tap_doppler_bin_hz
     timeline = getattr(args, "timeline", "wallclock")
     fanout = getattr(args, "fanout_control_endpoint", [])
     if timeline != "wallclock" or fanout:
@@ -779,12 +781,36 @@ class GridTimeline:
         return index
 
 
+def positions_instant_unix_ns(
+    scenario: Any,
+    grid: GridTimeline | None,
+    grid_index: int | None,
+    sampled_wall_ns: int,
+) -> int:
+    """The wall-clock instant the traced positions describe.
+
+    Tap phases are the channel at this instant, so it is the profile's
+    ``phase_time_unix_ns``: a live feed sample's own publish stamp, a grid
+    point's due time, or otherwise the moment the bridge took the positions.
+    """
+
+    source = getattr(scenario, "position_source", None)
+    if source is not None and "external" in scenario.position_sources.values():
+        sample = source.last_sample
+        if sample is not None and sample.t_unix_ms is not None:
+            return int(sample.t_unix_ms) * 1_000_000
+    if grid is not None and grid_index is not None and grid.anchor_unix_ms is not None:
+        return int(grid.anchor_unix_ms) * 1_000_000 + round(grid_index / grid.update_hz * 1.0e9)
+    return sampled_wall_ns
+
+
 def send_fanout(
     clients: Sequence[tuple[str, dict[str, str], ZmqControlClient]],
     profiles: Mapping[str, MatrixProfile],
     *,
     batch_id: str,
     executor: concurrent.futures.Executor,
+    phase_time_unix_ns: int | None = None,
 ) -> list[dict[str, Any]]:
     """Send one batch to every broker concurrently; one record per endpoint.
 
@@ -797,7 +823,9 @@ def send_fanout(
         endpoint, rename, client = item
         renamed = {remap_link_id(link_id, rename): profile for link_id, profile in profiles.items()}
         started = time.monotonic()
-        reply = client.send_matrix_profiles(renamed, batch_id=batch_id)
+        reply = client.send_matrix_profiles(
+            renamed, batch_id=batch_id, phase_time_unix_ns=phase_time_unix_ns
+        )
         return {
             "endpoint": endpoint,
             "rename": rename,
@@ -895,6 +923,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument("--gain-offset-db", type=float, default=60.0,
                         help="fixed Sionna-field to normalized-IQ calibration")
+    parser.add_argument(
+        "--tap-doppler-bin-hz",
+        type=float,
+        default=0.0,
+        help=(
+            "opt in to per-tap Doppler: split each delay bin by Doppler at this "
+            "width, send each tap's Doppler and the instant its phases belong "
+            "to, and let the emulator rotate the taps between updates. 0 (the "
+            "default) sends constant taps, exactly as before"
+        ),
+    )
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--samples-per-src", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=42)
@@ -1004,6 +1043,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("--iterations must be >= 0")
     if args.update_hz <= 0.0:
         parser.error("--update-hz must be positive")
+    if not (math.isfinite(args.tap_doppler_bin_hz) and args.tap_doppler_bin_hz >= 0.0):
+        parser.error("--tap-doppler-bin-hz must be >= 0")
     if args.carrier_frequency_hz is not None:
         args.downlink_frequency_hz = args.carrier_frequency_hz
         args.uplink_frequency_hz = args.carrier_frequency_hz
@@ -2133,6 +2174,7 @@ class SionnaScenario:
                         rays,
                         sample_rate_hz=self.args.sample_rate_hz,
                         gain_offset_db=self.args.gain_offset_db,
+                        doppler_bin_hz=getattr(self.args, "tap_doppler_bin_hz", 0.0) or None,
                     )
                     lane_profiles.append(
                         LaneProfile(rx_port, tx_port, tuple(taps))
@@ -2418,7 +2460,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 update_started = time.monotonic()
                 update_started_unix_ms = time.time_ns() // 1_000_000
                 elapsed = scenario_seconds
+            positions_wall_ns = time.time_ns()
             positions = scenario.update_positions(scenario_seconds)
+            phase_time_unix_ns = (
+                positions_instant_unix_ns(scenario, grid, grid_index, positions_wall_ns)
+                if args.tap_doppler_bin_hz
+                else None
+            )
             generation_started = time.monotonic()
             publish_runtime(
                 "tracing_channels",
@@ -2439,11 +2487,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 control_started = time.monotonic()
                 if executor is not None:
                     fanout_results = send_fanout(
-                        fanout_clients, profiles, batch_id=batch_id, executor=executor
+                        fanout_clients, profiles, batch_id=batch_id, executor=executor,
+                        phase_time_unix_ns=phase_time_unix_ns,
                     )
                     reply = fanout_results[0]["reply"]
                 else:
-                    reply = client.send_matrix_profiles(profiles, batch_id=batch_id)
+                    reply = client.send_matrix_profiles(
+                        profiles, batch_id=batch_id, phase_time_unix_ns=phase_time_unix_ns
+                    )
                 control_transaction_ms: float | None = (
                     time.monotonic() - control_started
                 ) * 1000.0
@@ -2460,7 +2511,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "dry_run": True,
                     "batch_id": batch_id,
                     "messages": [
-                        make_matrix_profile_swap(link_id, profile, batch_id=batch_id)
+                        make_matrix_profile_swap(
+                            link_id, profile, batch_id=batch_id,
+                            phase_time_unix_ns=phase_time_unix_ns,
+                        )
                         for link_id, profile in profiles.items()
                     ],
                 }
@@ -2507,6 +2561,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "channels": statuses,
                 "control_reply": reply,
             }
+            if phase_time_unix_ns is not None:
+                record["phase_time_unix_ns"] = phase_time_unix_ns
             if args.profile_timing:
                 record["timing_ms"]["generation_stages"] = scenario.generation_stages_ms
             if args.profile_digest:

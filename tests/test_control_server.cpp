@@ -847,6 +847,62 @@ int main()
     ctl_b->fixed_mimo_declared = false;
   }
 
+  // Per-tap Doppler and the phase time are optional: absent reads as 0, which
+  // is the constant-tap profile every existing client sends.
+  {
+    ctl_a->nt_hint = 2;
+    ctl_a->nr_hint = 1;
+    const std::string ok = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "phase_time_unix_ns":1791955563159000000,
+      "lanes":[
+        {"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0.0,"doppler_hz":-85.25}]},
+        {"rx_port":0,"tx_port":1,"taps":[{"delay_samples":1.0}]}
+      ]
+    })");
+    require(contains(ok, "\"ok\":true"), "a matrix with tap Doppler and a phase time is accepted");
+    require(ctl_a->shadow_matrix_profile.lanes[0].taps[0].doppler_hz == -85.25,
+            "tap Doppler reaches the matrix shadow");
+    require(ctl_a->shadow_matrix_profile.lanes[1].taps[0].doppler_hz == 0.0,
+            "an absent tap Doppler is zero");
+    require(ctl_a->shadow_matrix_profile.phase_time_unix_ns ==
+                static_cast<std::uint64_t>(1791955563159000000.0),
+            "the phase time reaches the matrix shadow at JSON double resolution");
+
+    const std::string scalar = server.handle_message(R"({"type":"profile_swap","link_id":"ue0-gnb0",
+      "phase_time_unix_ns":5000,"taps":[{"delay_samples":2.0,"doppler_hz":12.5}]})");
+    require(contains(scalar, "\"ok\":true"), "a scalar profile with tap Doppler is accepted");
+    require(ctl_a->shadow_profile.taps[0].doppler_hz == 12.5 &&
+                ctl_a->shadow_profile.phase_time_unix_ns == 5000,
+            "tap Doppler and phase time reach the scalar shadow");
+
+    const std::string plain = server.handle_message(R"({"type":"profile_swap","link_id":"ue0-gnb0",
+      "taps":[{"delay_samples":2.0}]})");
+    require(contains(plain, "\"ok\":true") && ctl_a->shadow_profile.taps[0].doppler_hz == 0.0 &&
+                ctl_a->shadow_profile.phase_time_unix_ns == 0,
+            "a profile without the new fields stages zero Doppler and no phase time");
+
+    for (const std::string bad : {R"("phase_time_unix_ns":-1)", R"("phase_time_unix_ns":1.5)",
+                                  R"("phase_time_unix_ns":"now")"}) {
+      const auto before = ctl_a->seqno.load();
+      const auto reply = server.handle_message(
+          "{\"type\":\"profile_swap\",\"link_id\":\"ue0-gnb0\"," + bad +
+          ",\"taps\":[{\"delay_samples\":0}]}");
+      require(contains(reply, "\"ok\":false"), "a malformed phase time is rejected");
+      require(ctl_a->seqno.load() == before, "a malformed phase time cannot advance sequence");
+    }
+    const auto before = ctl_a->seqno.load();
+    const auto reply = server.handle_message(R"({
+      "type":"matrix_profile_swap","link_id":"ue0-gnb0","nt":2,"nr":1,
+      "lanes":[
+        {"rx_port":0,"tx_port":0,"taps":[{"delay_samples":0.0,"doppler_hz":"fast"}]},
+        {"rx_port":0,"tx_port":1,"taps":[{"delay_samples":1.0}]}
+      ]
+    })");
+    require(contains(reply, "\"ok\":false") && ctl_a->seqno.load() == before,
+            "a non-numeric tap Doppler is rejected before staging");
+  }
+
   // A correlation_swap needs the link to have declared the block: enabling the
   // machinery on a topology that never asked for it would be the worse default.
   {

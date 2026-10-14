@@ -34,6 +34,7 @@ sionna_ready_seconds="180"
 sionna_position_endpoint=""
 sionna_position_offset=""
 sionna_position_timeout_s=""
+sionna_tap_doppler_bin_hz=""
 # Multi-UE gate: run length, strict-realtime pass-through, side processes and wire
 # capture. The defaults are the values this gate always used.
 run_duration_seconds="240"
@@ -74,6 +75,7 @@ while [[ "$#" -gt 0 ]]; do
     --sionna-position-endpoint) sionna_position_endpoint="${2:-}"; shift 2 ;;
     --sionna-position-offset) sionna_position_offset="${2:-}"; shift 2 ;;
     --sionna-position-timeout-s) sionna_position_timeout_s="${2:-}"; shift 2 ;;
+    --sionna-tap-doppler-bin-hz) sionna_tap_doppler_bin_hz="${2:-}"; shift 2 ;;
     --run-duration-seconds) run_duration_seconds="${2:-}"; shift 2 ;;
     --strict-realtime) strict_realtime="${2:-}"; shift 2 ;;
     --ue-exec) ue_exec="${2:-}"; shift 2 ;;
@@ -111,15 +113,21 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   [[ -z "${sionna_position_endpoint}" || "${sionna_position_endpoint}" == ipc:///* ]] || \
     usage_error "Sionna position endpoint must be ipc://"
 fi
-# Extra bridge arguments for the live position feed; empty without a feed so
+# Extra bridge arguments (live position feed, opt-in tap Doppler); empty by default so
 # the scripted-route runs keep their exact command line.
-sionna_position_args=()
+sionna_bridge_args=()
 if [[ -n "${sionna_position_endpoint}" ]]; then
-  sionna_position_args+=(--position-endpoint "${sionna_position_endpoint}")
+  sionna_bridge_args+=(--position-endpoint "${sionna_position_endpoint}")
   [[ -n "${sionna_position_offset}" ]] && \
-    sionna_position_args+=(--position-frame-offset "${sionna_position_offset}")
+    sionna_bridge_args+=(--position-frame-offset "${sionna_position_offset}")
   [[ -n "${sionna_position_timeout_s}" ]] && \
-    sionna_position_args+=(--position-timeout-s "${sionna_position_timeout_s}")
+    sionna_bridge_args+=(--position-timeout-s "${sionna_position_timeout_s}")
+fi
+# Opt-in per-tap Doppler; empty keeps the constant-tap command line.
+if [[ -n "${sionna_tap_doppler_bin_hz}" ]]; then
+  [[ "${sionna_tap_doppler_bin_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || \
+    usage_error "invalid Sionna tap Doppler bin: ${sionna_tap_doppler_bin_hz}"
+  sionna_bridge_args+=(--tap-doppler-bin-hz "${sionna_tap_doppler_bin_hz}")
 fi
 [[ "${run_duration_seconds}" =~ ^[1-9][0-9]*$ && "${run_duration_seconds}" -ge 160 ]] || \
   usage_error "invalid run duration: ${run_duration_seconds}"
@@ -466,7 +474,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --scenario-config "${sionna_scenario_config}" \
     --control-endpoint "${control_endpoint}" --duration 0 \
     --update-hz "${sionna_update_hz}" --status-jsonl "${sionna_status_jsonl}" \
-    ${sionna_position_args[@]+"${sionna_position_args[@]}"}
+    ${sionna_bridge_args[@]+"${sionna_bridge_args[@]}"}
   sionna_pid="${started_pid}"
   wait_log "${log_dir}/sionna-bridge.log" '"event":"sionna_rt_update"' \
     "${sionna_pid}" "${sionna_ready_seconds}" || \

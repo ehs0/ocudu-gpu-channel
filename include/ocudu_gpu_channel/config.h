@@ -83,6 +83,11 @@ enum class FadingSpectrum {
 //
 // Two taps with the same `delay_samples` are rejected by the validator --
 // collapse them into one with the summed complex gain instead.
+//
+// `doppler_hz` is set only by a runtime profile (profile_swap /
+// matrix_profile_swap), never by YAML. A nonzero value makes `phase_rad` the
+// tap's phase at the profile's reference instant and rotates the tap by
+// 2*pi*doppler_hz*t after it; see docs/plans/sionna-tap-doppler.md.
 struct TapSpec {
   double delay_samples = 0.0;
   double gain_db = 0.0;
@@ -90,6 +95,7 @@ struct TapSpec {
   bool is_los = false;
   double los_k_db = 0.0;
   double los_angle_rad = 0.0;
+  double doppler_hz = 0.0;
 };
 
 struct RuntimeConfig {

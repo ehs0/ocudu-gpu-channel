@@ -411,6 +411,20 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
           }
         }
 
+        // Per-tap Doppler of a runtime profile, timed by the link's rotation
+        // clock so every lane of the link turns from the same instant.
+        thread_local std::vector<TapRotation> rotation;
+        const TapRotation* rotation_ptr = nullptr;
+        if (taps_have_doppler(effective_taps)) {
+          const TapRotationTime when = tap_rotation_time(
+              state.link->rotation, state.link->clock.slot_start_samples,
+              static_cast<double>(sample_rate_hz));
+          rotation.resize(effective_taps.size());
+          for (std::size_t k = 0; k != effective_taps.size(); ++k) {
+            rotation[k] = tap_rotation(effective_taps[k].doppler_hz, when.t0_s, when.dt_s);
+          }
+          rotation_ptr = rotation.data();
+        }
         if (step.fading_enabled) {
           // Time comes from the physical link, and the same value is handed to
           // every lane of that link this slot. The call does not advance it.
@@ -421,11 +435,11 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
                                 state.link->clock.slot_start_samples,
                                 state.link->fading.lane_grids[static_cast<std::size_t>(state.lane_index)]
                                                         [step_index],
-                                state.los_coefficient);
+                                state.los_coefficient, rotation_ptr);
         } else {
           apply_tdl_step(current.data(), next.data(), current.size(),
                          effective_taps, effective_polyphase,
-                         step_state.delay_line);
+                         step_state.delay_line, rotation_ptr);
         }
         break;
       }

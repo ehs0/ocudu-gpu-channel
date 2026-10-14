@@ -288,6 +288,28 @@ __global__ void apply_channel_kernel(
     __syncthreads();
   }
 
+  // -------- Per-tap Doppler rotation of a runtime profile: start angle and
+  // per-sample step for this slot, the same expressions as tap_rotation() and
+  // tap_rotation_time() on the host (delay.h, physical_link.h).
+  __shared__ float dop_start[kDeviceMaxTaps];
+  __shared__ float dop_step[kDeviceMaxTaps];
+  const bool doppler_on = (s->has_doppler != 0);
+  if (doppler_on) {
+    if (threadIdx.x < n_taps) {
+      constexpr double kTwoPiD = 6.28318530717958647692;
+      const int kt = threadIdx.x;
+      const double fs = (double)sample_rate_hz;
+      const double since_anchor =
+          (double)(s->slot_start_samples - s->rot_anchor_samples) / fs;
+      const double t0 = s->rot_age_s + s->rot_rate * since_anchor;
+      const double dt = s->rot_rate / fs;
+      const double f = s->tap_doppler_hz[kt];
+      dop_start[kt] = (float)fmod(kTwoPiD * f * t0, kTwoPiD);
+      dop_step[kt] = (float)(kTwoPiD * f * dt);
+    }
+    __syncthreads();
+  }
+
   // -------- Per-sample work.
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx >= count) {
@@ -369,9 +391,18 @@ __global__ void apply_channel_kernel(
       x_q += h * sq;
     }
 
-    // Static phase rotation + g_k(t) modulation + per-tap gain.
-    const float cph = s->tap_cos_phi[kt];
-    const float sph = s->tap_sin_phi[kt];
+    // Static phase rotation (turned by the tap's Doppler, if any) + g_k(t)
+    // modulation + per-tap gain.
+    float cph = s->tap_cos_phi[kt];
+    float sph = s->tap_sin_phi[kt];
+    if (doppler_on) {
+      const float theta = dop_start[kt] + dop_step[kt] * (float)idx;
+      float ds, dc;
+      sincosf(theta, &ds, &dc);
+      const float turned_cos = cph * dc - sph * ds;
+      sph = cph * ds + sph * dc;
+      cph = turned_cos;
+    }
     const float rot_i = x_i * cph - x_q * sph;
     const float rot_q = x_i * sph + x_q * cph;
     const float xi = rot_i * g_i - rot_q * g_q;
@@ -622,6 +653,23 @@ void refresh_all_taps_from_live(DeviceLinkState& s, int n_taps, const TapSpec* t
     s.tap_gain_amp[k] = 0.0F;
     s.tap_is_los[k]   = 0;
   }
+}
+
+void refresh_tap_doppler(DeviceLinkState& s,
+                         int n_taps,
+                         const TapSpec* taps,
+                         std::uint64_t anchor_samples,
+                         double age_at_anchor_s,
+                         double rate)
+{
+  s.has_doppler = 0;
+  for (int k = 0; k < kDeviceMaxTaps; ++k) {
+    s.tap_doppler_hz[k] = k < n_taps ? taps[k].doppler_hz : 0.0;
+    s.has_doppler |= s.tap_doppler_hz[k] != 0.0 ? 1 : 0;
+  }
+  s.rot_anchor_samples = anchor_samples;
+  s.rot_age_s = age_at_anchor_s;
+  s.rot_rate = rate;
 }
 
 void launch_generate_fading_grid_kernel(

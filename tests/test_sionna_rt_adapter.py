@@ -33,6 +33,7 @@ from run_bridge import (  # noqa: E402
     DEFAULT_ROAD_WIDTH_M,
     DEFAULT_UPLINK_FREQUENCY_HZ,
     DOWNLINK_LINKS,
+    GridTimeline,
     LINKS,
     MODEL_ID,
     Motion,
@@ -49,6 +50,7 @@ from run_bridge import (  # noqa: E402
     link_layout,
     load_scenario_config,
     parse_args,
+    positions_instant_unix_ns,
     prepare_scene_with_simple_road,
     scenario_environment,
     path_polylines,
@@ -242,6 +244,68 @@ class AdapterTests(unittest.TestCase):
             max_gain_db=20.0,
         )
         self.assertEqual([tap.delay_samples for tap in taps], [3.0, 4.0])
+
+    def test_tap_doppler_is_off_by_default_and_absent_from_messages(self) -> None:
+        rays = [Ray(1.0 / 16.0, 1.0 + 0.0j, 40.0), Ray(1.0 / 16.0, 0.5j, -30.0)]
+        taps = rays_to_taps(rays, sample_rate_hz=16.0)
+        self.assertEqual(len(taps), 1)
+        self.assertEqual(taps[0].doppler_hz, 0.0)
+        message = make_matrix_profile_swap(
+            "gnb0>ue0:sionna_rt",
+            MatrixProfile(nt=1, nr=1, lanes=(LaneProfile(0, 0, tuple(taps)),)),
+        )
+        self.assertEqual(
+            set(message["lanes"][0]["taps"][0]), {"delay_samples", "gain_db", "phase_rad"}
+        )
+        self.assertNotIn("phase_time_unix_ns", message)
+
+    def test_tap_doppler_splits_a_delay_bin_by_doppler(self) -> None:
+        # Same delay bin; 40.2 and 39.9 Hz share the 1 Hz bin 40, -30 Hz does not.
+        rays = [
+            Ray(1.0 / 16.0, 1.0 + 0.0j, 40.2),
+            Ray(1.01 / 16.0, 0.5 + 0.0j, 39.9),
+            Ray(1.0 / 16.0, 0.5j, -30.0),
+        ]
+        taps = rays_to_taps(rays, sample_rate_hz=16.0, doppler_bin_hz=1.0)
+        self.assertEqual([tap.delay_samples for tap in taps], [1.0, 1.0])
+        self.assertAlmostEqual(taps[0].doppler_hz, -30.0)
+        # Power-weighted mean of the merged pair: (1 * 40.2 + 0.25 * 39.9) / 1.25.
+        self.assertAlmostEqual(taps[1].doppler_hz, (40.2 + 0.25 * 39.9) / 1.25)
+        self.assertAlmostEqual(taps[1].gain_db, 20.0 * math.log10(1.5))
+        message = make_profile_swap("gnb0>ue0:sionna_rt", taps, phase_time_unix_ns=1234)
+        self.assertEqual(message["phase_time_unix_ns"], 1234)
+        self.assertAlmostEqual(message["taps"][1]["doppler_hz"], taps[1].doppler_hz)
+        with self.assertRaises(ValueError):
+            rays_to_taps(rays, sample_rate_hz=16.0, doppler_bin_hz=0.0)
+
+    def test_tap_doppler_option_is_opt_in(self) -> None:
+        args = parse_args([])
+        self.assertEqual(args.tap_doppler_bin_hz, 0.0)
+        self.assertNotIn("tap_doppler_bin_hz", scenario_environment(args))
+        args = parse_args(["--tap-doppler-bin-hz", "1"])
+        self.assertEqual(scenario_environment(args)["tap_doppler_bin_hz"], 1.0)
+        with self.assertRaises(SystemExit):
+            parse_args(["--tap-doppler-bin-hz", "-1"])
+
+    def test_phase_time_is_the_instant_the_positions_describe(self) -> None:
+        class Sample:
+            t_unix_ms = 1_700_000_000_123
+
+        class Source:
+            last_sample = Sample()
+
+        class Scenario:
+            position_source = Source()
+            position_sources = {"ue0": "external", "gnb0": "scripted"}
+
+        self.assertEqual(
+            positions_instant_unix_ns(Scenario(), None, None, 5), 1_700_000_000_123_000_000
+        )
+        Scenario.position_sources = {"ue0": "scripted"}
+        grid = GridTimeline(10.0)
+        grid.anchor(0.0, 1_000)
+        self.assertEqual(positions_instant_unix_ns(Scenario(), grid, 3, 5), 1_300_000_000)
+        self.assertEqual(positions_instant_unix_ns(Scenario(), None, None, 5), 5)
 
     def test_invalid_or_missing_paths_become_quiet_outage(self) -> None:
         taps = rays_to_taps(

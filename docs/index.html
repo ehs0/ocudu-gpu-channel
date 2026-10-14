@@ -469,6 +469,8 @@
     <tr><td class="mono">radio node</td><td>one or more ports that are one radio: they share a sample epoch, a throttle, a cursor set and one channel call. Declared under <code>radio_nodes:</code>, where <b>writing order is the matrix index</b> (<a href="#mimo-nodes">&sect;22</a>)</td></tr>
     <tr><td class="mono">physical link</td><td>the directed pair of radio nodes, and the owner of one channel realization: one seed, one absolute-time origin, one correlation factor (<a href="#mimo-matrix">&sect;24</a>)</td></tr>
     <tr><td class="mono">lane</td><td>one <span class="mono">(rx_port, tx_port)</span> coefficient of a physical link, and an ordinary edge to the engine. A physical link expands to <span class="mono">Nt&nbsp;&times;&nbsp;Nr</span> lanes</td></tr>
+    <tr><td class="mono">tap Doppler</td><td>optional <code>doppler_hz</code> of one tap in a runtime profile: the tap keeps its gain and delay and turns its phase by 2&pi;&middot;<code>doppler_hz</code>&middot;t until the next profile, so taps of different Doppler fade against each other between updates (<a href="plans/sionna-tap-doppler.md">plan</a>). Absent means 0, a constant tap</td></tr>
+    <tr><td class="mono">phase time</td><td>optional <code>phase_time_unix_ns</code> of a runtime profile: the wall-clock instant its tap phases describe. Tap Doppler rotation then starts that old, and runs at the measured wall-per-sample rate of the emulated stream; without it, rotation starts at the profile's first slot in sample time</td></tr>
     <tr><td class="mono">Nt / Nr</td><td>transmit / receive port counts of a physical link's two radios, taken from the node declarations rather than from any matrix block</td></tr>
     <tr><td class="mono">edge</td><td>a directed channel from one node to another, configured under <code>links:</code> in the YAML topology with a named <code>model</code>. <b>This doc says "edge" in prose</b> (a node's "incoming edges" are the edges pointing at it); the YAML key <code>links:</code> and the runtime identifiers <code>link_id</code> / <code>link_key</code> keep the word "link" because they are API names</td></tr>
     <tr><td class="mono">incoming edges</td><td>for destination node <span class="mono">d</span>, the subset of links where <span class="mono">link.to == d</span>. Resolved once per server thread at broker startup (<code>src/broker.cpp</code>); this list is the index space for cursors (§9), staged slots (§10), per-edge <code>stage_link()</code> calls (§11), and the kernel's per-thread edge loop (§12)</td></tr>
@@ -2935,11 +2937,11 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
         <td>Replace the entire per-edge tap layout at runtime &mdash; up to
         <code>kDeviceMaxTaps = 32</code> taps plus an optional fading
         sub-config (v2.0).</td>
-        <td><code>link_id, taps[], fading?, take_effect_at_slot?, batch_id?, force?</code></td>
+        <td><code>link_id, taps[{…, doppler_hz?}], fading?, phase_time_unix_ns?, take_effect_at_slot?, batch_id?, force?</code></td>
         <td><code>applied_at_slot, warmup_until_slot</code></td></tr>
     <tr><td><code>matrix_profile_swap</code></td>
         <td>Replace all antenna-pair tap profiles on a prepared physical link.</td>
-        <td><code>link_id, nt, nr, lanes[{rx_port, tx_port, taps[]}], take_effect_at_slot?, batch_id?</code></td>
+        <td><code>link_id, nt, nr, lanes[{rx_port, tx_port, taps[{…, doppler_hz?}]}], phase_time_unix_ns?, take_effect_at_slot?, batch_id?</code></td>
         <td><code>applied_at_slot, warmup_until_slot, seqno</code></td></tr>
     <tr><td><code>correlation_swap</code></td>
         <td>Update spatial correlation on an eligible prepared link.</td>
@@ -3014,6 +3016,12 @@ models:     desired:     [ tdl{(0, -3 dB, 0)} · phase 0.1 rad · cfo 150 Hz ]
   matrix update neither restarts nor prematurely ends a warmup already in progress.
   <code>control_warmup_begin</code> and <code>control_warmup_end</code> describe
   actual reset intervals, not every accepted control update.</p>
+  <p>A tap with a nonzero <b>tap Doppler</b> rotates per sample on both backends
+  until the next profile, from the time base the <b>phase time</b> sets; a Doppler
+  change counts as a weight change and keeps history. Without either field a
+  profile is constant, bit for bit as before. The Sionna bridge sends both only with
+  <code>--tap-doppler-bin-hz</code>; the measurement, the choices and the remaining
+  limits are in <a href="plans/sionna-tap-doppler.md">the tap-Doppler plan</a>.</p>
   <p>Scalar and matrix control delays must be finite and within <b>0&ndash;1023
   samples</b>. CUDA preallocates <b>1031 history samples per lane</b>, the shared
   limit plus the eight-sample filter span. Device-state construction and refresh

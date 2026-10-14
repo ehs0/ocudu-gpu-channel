@@ -1218,6 +1218,13 @@ public:
             throw std::runtime_error("matrix profile lane index is outside the active matrix");
           }
           const auto& lane_profile = matrix.lanes[lane_index];
+          if (outcome.matrix_profile_activated) {
+            const TapRotationTime when = tap_rotation_time(
+                link.rotation, link.rotation.anchor_samples, static_cast<double>(sample_rate_hz));
+            refresh_tap_doppler(*h_state, lane_profile.n_taps, lane_profile.taps,
+                                link.rotation.anchor_samples, link.rotation.age_at_anchor_s,
+                                when.rate);
+          }
           if (outcome.history_reset_required) {
             refresh_all_taps_from_live(*h_state, lane_profile.n_taps,
                                        lane_profile.taps);
@@ -1241,6 +1248,11 @@ public:
           refresh_all_taps_from_live(*h_state, link.live_profile.n_taps,
                                      link.live_profile.taps);
           if (outcome.profile_activated) {
+            const TapRotationTime when = tap_rotation_time(
+                link.rotation, link.rotation.anchor_samples, static_cast<double>(sample_rate_hz));
+            refresh_tap_doppler(*h_state, link.live_profile.n_taps, link.live_profile.taps,
+                                link.rotation.anchor_samples, link.rotation.age_at_anchor_s,
+                                when.rate);
             // v2.2 W1: zero this lane's cross-slot ring so the new layout does
             // not convolve with the previous profile's tail. Every lane of the
             // link reaches this in the SAME slot, because the decision that

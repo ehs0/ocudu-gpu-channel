@@ -47,6 +47,101 @@ struct PhysicalLinkClock {
   std::uint64_t slot_start_samples = 0;
 };
 
+// Time base of per-tap Doppler rotation (docs/plans/sionna-tap-doppler.md).
+//
+// A runtime profile gives each tap its phase at one instant. From the slot the
+// profile takes effect (the anchor), tap k at link sample n is rotated by
+// 2*pi*f_D,k*t(n), with
+//   t(n) = age_at_anchor_s + rate * (n - anchor_samples) / fs.
+// An unstamped profile is valid at its first slot: age 0, rate 1, sample time.
+// A stamped one (phase_time_unix_ns) is valid at a wall-clock instant: age is
+// how old its phases already are when it takes effect, and rate is wall
+// seconds per sample second. The tracer's positions advance in wall time while
+// the emulated stream need not run at real time, so without the rate a tap
+// rotated over one update would miss the next trace by
+// 2*pi*f_D*(rate - 1)*interval_in_sample_time.
+//
+// rate is the median over the last kRateWindow stamped anchors of
+// (wall interval) / (sample interval): the median, because a stream stall puts
+// seconds of wall time into one interval and must not set the rate of the next.
+// Fewer than two stamped anchors give rate 1.
+struct TapRotationClock {
+  static constexpr int kRateWindow = 16;
+  std::uint64_t anchor_samples = 0;
+  double age_at_anchor_s = 0.0;
+  bool wall_time = false;
+  // Ring of (wall ns, link sample clock) at stamped anchors, oldest first from
+  // window_next once full.
+  std::uint64_t window_wall_ns[kRateWindow] = {};
+  std::uint64_t window_samples[kRateWindow] = {};
+  int window_count = 0;
+  int window_next = 0;
+};
+
+inline void anchor_tap_rotation(TapRotationClock& clock,
+                                std::uint64_t slot_start_samples,
+                                std::uint64_t phase_time_unix_ns,
+                                std::uint64_t wall_now_unix_ns)
+{
+  clock.anchor_samples = slot_start_samples;
+  clock.wall_time = phase_time_unix_ns != 0;
+  if (!clock.wall_time) {
+    clock.age_at_anchor_s = 0.0;
+    return;
+  }
+  clock.age_at_anchor_s =
+      static_cast<double>(static_cast<std::int64_t>(wall_now_unix_ns - phase_time_unix_ns)) * 1.0e-9;
+  clock.window_wall_ns[clock.window_next] = wall_now_unix_ns;
+  clock.window_samples[clock.window_next] = slot_start_samples;
+  clock.window_next = (clock.window_next + 1) % TapRotationClock::kRateWindow;
+  clock.window_count = std::min(clock.window_count + 1, TapRotationClock::kRateWindow);
+}
+
+inline double tap_rotation_rate(const TapRotationClock& clock, double sample_rate_hz)
+{
+  if (!clock.wall_time || clock.window_count < 2) {
+    return 1.0;
+  }
+  const int n = clock.window_count;
+  const int first = clock.window_count < TapRotationClock::kRateWindow ? 0 : clock.window_next;
+  double rates[TapRotationClock::kRateWindow - 1];
+  int used = 0;
+  for (int i = 1; i < n; ++i) {
+    const int a = (first + i - 1) % TapRotationClock::kRateWindow;
+    const int b = (first + i) % TapRotationClock::kRateWindow;
+    const double samples = static_cast<double>(clock.window_samples[b] - clock.window_samples[a]);
+    const double wall_s = static_cast<double>(static_cast<std::int64_t>(
+                              clock.window_wall_ns[b] - clock.window_wall_ns[a])) * 1.0e-9;
+    if (samples > 0.0) {
+      rates[used++] = wall_s / (samples / sample_rate_hz);
+    }
+  }
+  if (used == 0) {
+    return 1.0;
+  }
+  std::nth_element(rates, rates + used / 2, rates + used);
+  return rates[used / 2];
+}
+
+// Tap time of the slot's first sample (t0_s) and per sample (dt_s).
+struct TapRotationTime {
+  double t0_s = 0.0;
+  double dt_s = 0.0;
+  double rate = 1.0;
+};
+
+inline TapRotationTime tap_rotation_time(const TapRotationClock& clock,
+                                         std::uint64_t slot_start_samples,
+                                         double sample_rate_hz)
+{
+  const double rate = tap_rotation_rate(clock, sample_rate_hz);
+  const double since_anchor =
+      static_cast<double>(slot_start_samples - clock.anchor_samples) / sample_rate_hz;
+  return TapRotationTime{.t0_s = clock.age_at_anchor_s + rate * since_anchor,
+                         .dt_s = rate / sample_rate_hz,
+                         .rate = rate};
+}
+
 // This slot's Jakes grids for every lane of one physical link (M3.3).
 //
 // Indexed [lane][chain step], lane order l = r*Nt + t. Filled by a pass that
@@ -178,6 +273,9 @@ struct PhysicalLinkRuntime {
   MatrixProfileShadow live_matrix_profile;
   bool live_matrix_profile_active = false;
   bool chain_has_leading_tdl = false;
+  // Re-anchored whenever a profile takes effect; read only for taps that
+  // carry a Doppler shift.
+  TapRotationClock rotation;
   // v2.2 warmup window. The cross-slot ring it refers to is per LANE, so the
   // zero-fill has to sweep every lane of the link -- see the caller.
   std::uint64_t warmup_until_slot = 0;
@@ -254,6 +352,24 @@ inline LinkSnapOutcome snap_physical_link(PhysicalLinkRuntime& link,
         matrix_profile_activated = true;
         history_reset_required = !preserve_history;
       }
+    }
+  }
+
+  // The new tap phases hold from this slot: anchor their Doppler rotation here.
+  if (profile_activated || matrix_profile_activated) {
+    const std::uint64_t phase_time = matrix_profile_activated
+                                         ? link.live_matrix_profile.phase_time_unix_ns
+                                         : link.live_profile.phase_time_unix_ns;
+    const std::uint64_t wall_now = phase_time != 0 ? wall_clock_unix_ns() : 0;
+    anchor_tap_rotation(link.rotation, link.clock.slot_start_samples, phase_time, wall_now);
+    if (phase_time != 0) {
+      // One line per stamped profile: with the tracer's own log (joined on
+      // seqno) it is enough to recompute the phase jump at every boundary.
+      std::cout << "event=tap_rotation_anchor slot=" << snap_idx << " link_id=" << link_id
+                << " seqno=" << link.live_seqno
+                << " anchor_samples=" << link.clock.slot_start_samples
+                << " wall_unix_ns=" << wall_now << " phase_time_unix_ns=" << phase_time
+                << '\n';
     }
   }
 

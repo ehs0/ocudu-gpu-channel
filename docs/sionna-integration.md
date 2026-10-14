@@ -58,7 +58,7 @@ labels (`tx_carrier`/`rx_carrier`).
 
 | Incoming matrix profile | History and warmup |
 |---|---|
-| Identical profile, or only tap gain/phase changes | Preserve recent input samples and existing warmup state; update coefficients on CPU/CUDA |
+| Identical profile, or only tap gain/phase/Doppler changes | Preserve recent input samples and existing warmup state; update coefficients on CPU/CUDA |
 | First profile, changed tap counts/ordered delays, or other channel settings | Reset lane history and start the existing warmup |
 | Different antenna dimensions | Reject; dimensions must match the prepared link |
 
@@ -83,6 +83,10 @@ be preallocated. Batch rejection/abort and subsequent recovery are tested.
 
 This remains snapshot replacement at link update boundaries. It does not add
 buffered, sample-aligned channel streaming or seamless geometry changes.
+With `--tap-doppler-bin-hz` the bridge also sends each tap's Doppler and the
+instant its phases describe, and both backends rotate the taps between
+updates; the measured benefit, boundary mismatch and limits are in the
+[tap-Doppler plan](plans/sionna-tap-doppler.md). Off by default.
 See [matrix history](sionna-matrix-history.md) and
 [delay/fallback validation](sionna-merge-fixes-validation.md).
 

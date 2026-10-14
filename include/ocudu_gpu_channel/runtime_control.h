@@ -131,6 +131,9 @@ struct ProfileShadow {
   // the snapped profile is stored but kernel output is unchanged until
   // a YAML reload re-establishes the dispatch.
   bool       force = false;
+  // Wall-clock instant (Unix ns) at which the tap phases were valid, or 0.
+  // Read only when a tap has doppler_hz; see TapRotationClock (physical_link.h).
+  std::uint64_t phase_time_unix_ns = 0;
 };
 
 // One complete, physical-link-scoped MIMO channel update. Lane order is the
@@ -144,10 +147,14 @@ struct MatrixProfileShadow {
   int           nr = 0;
   int           lane_count = 0;
   ProfileShadow lanes[kMaxCorrelatedLanes]{};
+  // As ProfileShadow::phase_time_unix_ns, for every lane of the matrix.
+  std::uint64_t phase_time_unix_ns = 0;
 };
 
 // Only gain/phase changes can reuse a matrix's input history. Compare named
 // fields (not POD bytes/padding), and do not hide delay changes with a tolerance.
+// Doppler and the phase time are part of the tap weight, like gain and phase:
+// they touch no input history, so they are deliberately not compared.
 inline bool matrix_history_compatible(const MatrixProfileShadow& before,
                                       const MatrixProfileShadow& after)
 {

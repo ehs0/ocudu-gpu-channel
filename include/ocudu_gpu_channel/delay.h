@@ -95,12 +95,46 @@ inline void prepare_tdl_state(const std::vector<TapSpec>& taps,
   }
 }
 
+// Per-tap Doppler rotation for one slot: tap k at slot sample n is turned by
+//   theta_k(n) = start_rad + step_rad * n,
+//   start_rad  = 2*pi*f_D,k*t0 (reduced mod 2*pi in double), step_rad = 2*pi*f_D,k*dt,
+// where t0 is the tap time of the slot's first sample and dt the tap time per
+// sample (PhysicalLinkRuntime::rotation, physical_link.h). The device kernel
+// evaluates the same expressions; keep them identical.
+struct TapRotation {
+  float start_rad = 0.0F;
+  float step_rad = 0.0F;
+};
+
+inline TapRotation tap_rotation(double doppler_hz, double t0_s, double dt_s)
+{
+  constexpr double two_pi = 2.0 * std::numbers::pi;
+  return TapRotation{
+      .start_rad = static_cast<float>(std::fmod(two_pi * doppler_hz * t0_s, two_pi)),
+      .step_rad = static_cast<float>(two_pi * doppler_hz * dt_s)};
+}
+
+// True when any tap carries a Doppler shift. A profile without one takes the
+// unrotated path, instruction for instruction the pre-Doppler code.
+inline bool taps_have_doppler(const std::vector<TapSpec>& taps)
+{
+  for (const auto& tap : taps) {
+    if (tap.doppler_hz != 0.0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Multi-tap windowed-sinc convolution shared by both backends. For each output
 // sample n, sum over taps k:
 //   y[n] = sum_k a_k * sum_{i=0..7} polyphase[k][i] * x[(n - floor(tau_k)) + 3 - i]
 // where a_k = 10^(gain_db_k/20) * exp(j * phase_rad_k). Indices below zero read
 // from the `delay_line` ring (previous-slot tail). The ring is rolled forward
 // after the convolution so the next call's negative-index reads stay valid.
+//
+// `rotation`, when not null, holds one TapRotation per tap and multiplies a_k
+// by exp(j * theta_k(n)) -- the per-tap Doppler. Null leaves a_k constant.
 //
 // `taps` and `polyphase` are read-only views into the link's prepared state;
 // `delay_line` is the cross-slot history ring, mutated in place. `in` and
@@ -111,7 +145,8 @@ inline void apply_tdl_step(const IqSample* in,
                            std::size_t count,
                            const std::vector<TapSpec>& taps,
                            const std::vector<std::array<float, kTdlFracFilterTaps>>& polyphase,
-                           std::vector<IqSample>& delay_line)
+                           std::vector<IqSample>& delay_line,
+                           const TapRotation* rotation = nullptr)
 {
   const auto count_pd = static_cast<std::ptrdiff_t>(count);
   const auto ring_size = static_cast<std::ptrdiff_t>(delay_line.size());
@@ -150,8 +185,16 @@ inline void apply_tdl_step(const IqSample* in,
         x.q += h[static_cast<std::size_t>(i)] * s.q;
       }
       const float gain = static_cast<float>(std::pow(10.0, tap.gain_db / 20.0));
-      const float cos_phi = static_cast<float>(std::cos(tap.phase_rad));
-      const float sin_phi = static_cast<float>(std::sin(tap.phase_rad));
+      float cos_phi = static_cast<float>(std::cos(tap.phase_rad));
+      float sin_phi = static_cast<float>(std::sin(tap.phase_rad));
+      if (rotation != nullptr) {
+        const float theta = rotation[k].start_rad + rotation[k].step_rad * static_cast<float>(n);
+        const float c = std::cos(theta);
+        const float s = std::sin(theta);
+        const float turned_cos = cos_phi * c - sin_phi * s;
+        sin_phi = cos_phi * s + sin_phi * c;
+        cos_phi = turned_cos;
+      }
       const float rotated_i = x.i * cos_phi - x.q * sin_phi;
       const float rotated_q = x.i * sin_phi + x.q * cos_phi;
       acc.i += gain * rotated_i;
@@ -374,10 +417,11 @@ inline void apply_tdl_step_fading(const IqSample* in,
                                   std::uint64_t sample_rate_hz,
                                   std::uint64_t slot_start_samples,
                                   const FadingGrid& grid,
-                                  std::complex<float> los_coefficient = {1.0F, 0.0F})
+                                  std::complex<float> los_coefficient = {1.0F, 0.0F},
+                                  const TapRotation* rotation = nullptr)
 {
   if (!fading.enabled) {
-    apply_tdl_step(in, out, count, taps, polyphase, delay_line);
+    apply_tdl_step(in, out, count, taps, polyphase, delay_line, rotation);
     return;
   }
   using complex_f = std::complex<float>;
@@ -474,8 +518,16 @@ inline void apply_tdl_step_fading(const IqSample* in,
         x.q += h[static_cast<std::size_t>(i)] * s.q;
       }
       const float gain = static_cast<float>(std::pow(10.0, tap.gain_db / 20.0));
-      const float cos_phi_s = static_cast<float>(std::cos(tap.phase_rad));
-      const float sin_phi_s = static_cast<float>(std::sin(tap.phase_rad));
+      float cos_phi_s = static_cast<float>(std::cos(tap.phase_rad));
+      float sin_phi_s = static_cast<float>(std::sin(tap.phase_rad));
+      if (rotation != nullptr) {
+        const float theta = rotation[k].start_rad + rotation[k].step_rad * static_cast<float>(n);
+        const float c = std::cos(theta);
+        const float s = std::sin(theta);
+        const float turned_cos = cos_phi_s * c - sin_phi_s * s;
+        sin_phi_s = cos_phi_s * s + sin_phi_s * c;
+        cos_phi_s = turned_cos;
+      }
       const float static_i = x.i * cos_phi_s - x.q * sin_phi_s;
       const float static_q = x.i * sin_phi_s + x.q * cos_phi_s;
       const float xi = static_i * g_k.real() - static_q * g_k.imag();

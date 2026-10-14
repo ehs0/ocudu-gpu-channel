@@ -159,6 +159,17 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
   target_link_libraries(test_broker PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME broker COMMAND test_broker)
 
+  add_executable(test_tap_doppler tests/test_tap_doppler.cpp)
+  target_link_libraries(test_tap_doppler PRIVATE ocudu_gpu_channel_lib)
+  add_test(NAME tap_doppler COMMAND test_tap_doppler)
+
+  # Not a pass/fail test: prints output fingerprints for A/B comparison
+  # of two revisions (tests/channel_fingerprint.cpp).
+  add_executable(channel_fingerprint tests/channel_fingerprint.cpp)
+  target_link_libraries(channel_fingerprint PRIVATE ocudu_gpu_channel_lib)
+  add_executable(channel_timing_probe tests/channel_timing_probe.cpp)
+  target_link_libraries(channel_timing_probe PRIVATE ocudu_gpu_channel_lib)
+
   # The Sionna adapter conversion tests use only the Python standard library;
   # Sionna RT and pyzmq remain optional live-integration dependencies.
   find_package(Python3 COMPONENTS Interpreter QUIET)

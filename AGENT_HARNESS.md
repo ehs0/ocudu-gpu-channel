@@ -31,6 +31,7 @@ Reusable workflow and preferences. File ownership and update rules are defined i
 - Prefer configurable topologies and per-edge models. Assume a single link only when the task requires it.
 - Follow the srsRAN GRC broker: independent per-direction REQ pullers and REP servers with symmetric throttling. Hold requests until processed IQ exists; never zero-fill replies.
 - Bound pacing debt to one publication unit so blocked time cannot become a later burst.
+- Stamp externally computed channel state with the instant it describes, not its apply slot; measure control-latency jitter and the stream's wall/sample rate before choosing a time reference.
 - Before blaming peer back pressure, inspect executor sharing: a retry can deadlock when its thread also services the drain.
 - When moving ownership, preserve values that differed per old owner. Share the decision without accidentally sharing distinct lane coefficients.
 - Check where foreign-stack parameters bind: CLI, initialization, signaling or relative files. Do not assume later signaling repairs initialization defaults.

@@ -119,6 +119,17 @@ struct DeviceLinkState {
   float tap_alpha[kDeviceMaxTaps][kDeviceMaxFadingSubrays];        // sub-ray angles (uniform [0, 2pi))
   float tap_phi[kDeviceMaxTaps][kDeviceMaxFadingSubrays];          // sub-ray initial phases
 
+  // ---- Per-tap Doppler of a runtime profile (written at the snap) --------
+  // has_doppler == 0 skips the rotation entirely. Otherwise tap k turns by
+  // 2*pi*tap_doppler_hz[k]*t, with t at the slot's first sample
+  //   rot_age_s + rot_rate * (slot_start_samples - rot_anchor_samples) / fs,
+  // the host's TapRotationClock (physical_link.h) copied here at the snap.
+  int    has_doppler;
+  double tap_doppler_hz[kDeviceMaxTaps];   // double: the host TapSpec value, unrounded
+  unsigned long long rot_anchor_samples;
+  double rot_age_s;
+  double rot_rate;
+
   // ---- Cross-slot state (kernel reads + writes each serve) --------------
   IqSample delay_line[kDeviceMaxDelayLine];
   // Absolute sample index of the slot this state is about to be used for. Read
@@ -184,6 +195,16 @@ void refresh_tap0_from_live(DeviceLinkState& s);
 void refresh_all_taps_from_live(DeviceLinkState& s,
                                 int n_taps,
                                 const TapSpec* taps);
+
+// Copies a runtime profile's per-tap Doppler and the link's rotation time base
+// into `s`. Called on every profile snap, history-preserving or not, because
+// either way the taps took new phases at a new anchor.
+void refresh_tap_doppler(DeviceLinkState& s,
+                         int n_taps,
+                         const TapSpec* taps,
+                         std::uint64_t anchor_samples,
+                         double age_at_anchor_s,
+                         double rate);
 
 // Per-edge channel kernel.
 //

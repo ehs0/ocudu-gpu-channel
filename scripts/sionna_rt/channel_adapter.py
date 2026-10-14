@@ -26,11 +26,17 @@ class Ray:
 
 @dataclass(frozen=True)
 class Tap:
-    """One tap accepted by the emulator's runtime ``profile_swap``."""
+    """One tap accepted by the emulator's runtime ``profile_swap``.
+
+    ``doppler_hz`` is zero unless the bridge opted into per-tap Doppler; a
+    zero is left out of the control message, so the emulator reads it as
+    absent and the tap stays constant until the next profile.
+    """
 
     delay_samples: float
     gain_db: float
     phase_rad: float
+    doppler_hz: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -57,38 +63,25 @@ def control_link_id(source: str, destination: str, model: str) -> str:
     return f"{source}>{destination}:{model}"
 
 
-def rays_to_taps(
+def bin_rays(
     rays: Iterable[Ray],
     *,
     sample_rate_hz: float,
-    gain_offset_db: float = 0.0,
-    max_taps: int = 32,
     max_delay_samples: float = 1023.0,
-    min_gain_db: float = -100.0,
-    max_gain_db: float = 20.0,
     delay_quantum_samples: float = 1.0 / 16.0,
-    outage_gain_db: float = -100.0,
-) -> list[Tap]:
-    """Quantize, coherently merge, prune, and convert Sionna CIR paths.
+) -> dict[int, list[Ray]]:
+    """Group the usable paths by fractional-sample delay bin, in input order.
 
-    Sionna can return many paths and arbitrarily close delays. The emulator
-    accepts at most 32 unique delays, so paths in the same fractional-sample
-    bin are summed as complex coefficients before the strongest bins are
-    retained. ``gain_offset_db`` is a fixed calibration offset between
-    Sionna's physical field scale and the normalized IQ scale used by the
-    software radios; it preserves all relative and temporal path changes.
+    A tap is one bin: ``rays_to_taps`` sums each bin's coefficients. The
+    grouping is exposed so diagnostics can see which paths a tap merged.
     """
 
     if sample_rate_hz <= 0.0:
         raise ValueError("sample_rate_hz must be positive")
-    if max_taps <= 0:
-        raise ValueError("max_taps must be positive")
     if delay_quantum_samples <= 0.0:
         raise ValueError("delay_quantum_samples must be positive")
-    if not (min_gain_db <= outage_gain_db <= max_gain_db):
-        raise ValueError("outage_gain_db must be inside the accepted gain range")
 
-    bins: dict[int, complex] = {}
+    bins: dict[int, list[Ray]] = {}
     for ray in rays:
         delay = float(ray.delay_seconds) * sample_rate_hz
         coeff = complex(ray.coefficient)
@@ -102,17 +95,82 @@ def rays_to_taps(
         quantized_delay = bin_index * delay_quantum_samples
         if quantized_delay > max_delay_samples:
             continue
-        bins[bin_index] = bins.get(bin_index, 0.0j) + coeff
+        bins.setdefault(bin_index, []).append(ray)
+    return bins
 
-    candidates: list[tuple[int, complex, float]] = []
-    for bin_index, coeff in bins.items():
+
+def rays_to_taps(
+    rays: Iterable[Ray],
+    *,
+    sample_rate_hz: float,
+    gain_offset_db: float = 0.0,
+    max_taps: int = 32,
+    max_delay_samples: float = 1023.0,
+    min_gain_db: float = -100.0,
+    max_gain_db: float = 20.0,
+    delay_quantum_samples: float = 1.0 / 16.0,
+    outage_gain_db: float = -100.0,
+    doppler_bin_hz: float | None = None,
+) -> list[Tap]:
+    """Quantize, coherently merge, prune, and convert Sionna CIR paths.
+
+    Sionna can return many paths and arbitrarily close delays. The emulator
+    accepts at most 32 taps, so paths in the same fractional-sample bin are
+    summed as complex coefficients before the strongest bins are retained.
+    ``gain_offset_db`` is a fixed calibration offset between Sionna's
+    physical field scale and the normalized IQ scale used by the software
+    radios; it preserves all relative and temporal path changes.
+
+    ``doppler_bin_hz`` opts into per-tap Doppler: a bin is then also split by
+    Doppler, ``round(doppler_hz / doppler_bin_hz)``, so paths that rotate at
+    different rates stay separate taps (possibly at the same delay), and each
+    tap carries the power-weighted mean Doppler of its paths. The measurement
+    behind this choice is in docs/plans/sionna-tap-doppler.md.
+    """
+
+    if max_taps <= 0:
+        raise ValueError("max_taps must be positive")
+    if not (min_gain_db <= outage_gain_db <= max_gain_db):
+        raise ValueError("outage_gain_db must be inside the accepted gain range")
+    if doppler_bin_hz is not None and not (doppler_bin_hz > 0.0 and math.isfinite(doppler_bin_hz)):
+        raise ValueError("doppler_bin_hz must be positive")
+
+    bins: dict[tuple[int, int], tuple[complex, float]] = {}
+    for bin_index, members in bin_rays(
+        rays,
+        sample_rate_hz=sample_rate_hz,
+        max_delay_samples=max_delay_samples,
+        delay_quantum_samples=delay_quantum_samples,
+    ).items():
+        groups: dict[int, list[Ray]] = {}
+        for ray in members:
+            key = (
+                0
+                if doppler_bin_hz is None
+                else int(math.floor(float(ray.doppler_hz) / doppler_bin_hz + 0.5))
+            )
+            groups.setdefault(key, []).append(ray)
+        for doppler_index, group in groups.items():
+            coeff = 0.0j
+            for ray in group:
+                coeff += complex(ray.coefficient)
+            doppler = 0.0
+            if doppler_bin_hz is not None:
+                power = [abs(complex(ray.coefficient)) ** 2 for ray in group]
+                doppler = sum(
+                    p * float(ray.doppler_hz) for p, ray in zip(power, group)
+                ) / sum(power)
+            bins[(bin_index, doppler_index)] = (coeff, doppler)
+
+    candidates: list[tuple[tuple[int, int], complex, float, float]] = []
+    for key, (coeff, doppler) in bins.items():
         magnitude = abs(coeff)
         if magnitude == 0.0:
             continue
         gain_db = 20.0 * math.log10(magnitude) + gain_offset_db
         if gain_db < min_gain_db:
             continue
-        candidates.append((bin_index, coeff, min(gain_db, max_gain_db)))
+        candidates.append((key, coeff, min(gain_db, max_gain_db), doppler))
 
     # Tap count is bounded by the device ABI. Select by power, then restore
     # causal delay ordering for the profile sent to the C++ backend.
@@ -122,11 +180,12 @@ def rays_to_taps(
 
     taps = [
         Tap(
-            delay_samples=round(bin_index * delay_quantum_samples, 9),
+            delay_samples=round(key[0] * delay_quantum_samples, 9),
             gain_db=round(gain_db, 9),
             phase_rad=round(cmath.phase(coeff), 9),
+            doppler_hz=round(doppler, 9),
         )
-        for bin_index, coeff, gain_db in candidates
+        for key, coeff, gain_db, doppler in candidates
     ]
     if taps:
         return taps
@@ -136,14 +195,29 @@ def rays_to_taps(
     return [Tap(delay_samples=0.0, gain_db=outage_gain_db, phase_rad=0.0)]
 
 
+def tap_payload(tap: Tap) -> dict[str, Any]:
+    """One tap as the control plane reads it; a zero Doppler is omitted."""
+
+    payload = asdict(tap)
+    if payload["doppler_hz"] == 0.0:
+        del payload["doppler_hz"]
+    return payload
+
+
 def make_profile_swap(
     link_id: str,
     taps: Sequence[Tap],
     *,
     batch_id: str | None = None,
     take_effect_at_slot: int | None = None,
+    phase_time_unix_ns: int | None = None,
 ) -> dict[str, Any]:
-    """Build one v2 control-plane profile-swap request."""
+    """Build one v2 control-plane profile-swap request.
+
+    ``phase_time_unix_ns`` is the wall-clock instant the tap phases belong to;
+    the emulator rotates Doppler taps from that instant, not from the slot
+    the profile happens to land in.
+    """
 
     if not link_id:
         raise ValueError("link_id must not be empty")
@@ -153,7 +227,7 @@ def make_profile_swap(
     message: dict[str, Any] = {
         "type": "profile_swap",
         "link_id": link_id,
-        "taps": [asdict(tap) for tap in taps],
+        "taps": [tap_payload(tap) for tap in taps],
         # Sionna already supplied instantaneous complex path coefficients.
         # Enabling the emulator's stochastic Jakes process would double-model
         # mobility, so the bridge explicitly disables it.
@@ -168,6 +242,8 @@ def make_profile_swap(
         message["batch_id"] = batch_id
     if take_effect_at_slot is not None:
         message["take_effect_at_slot"] = int(take_effect_at_slot)
+    if phase_time_unix_ns is not None:
+        message["phase_time_unix_ns"] = int(phase_time_unix_ns)
     return message
 
 
@@ -177,6 +253,7 @@ def make_matrix_profile_swap(
     *,
     batch_id: str | None = None,
     take_effect_at_slot: int | None = None,
+    phase_time_unix_ns: int | None = None,
 ) -> dict[str, Any]:
     """Build one physical-link-atomic Nr x Nt profile replacement."""
 
@@ -205,7 +282,7 @@ def make_matrix_profile_swap(
             {
                 "rx_port": lane.rx_port,
                 "tx_port": lane.tx_port,
-                "taps": [asdict(tap) for tap in lane.taps],
+                "taps": [tap_payload(tap) for tap in lane.taps],
             }
             for lane in sorted(
                 profile.lanes, key=lambda item: item.rx_port * profile.nt + item.tx_port
@@ -216,6 +293,8 @@ def make_matrix_profile_swap(
         message["batch_id"] = batch_id
     if take_effect_at_slot is not None:
         message["take_effect_at_slot"] = int(take_effect_at_slot)
+    if phase_time_unix_ns is not None:
+        message["phase_time_unix_ns"] = int(phase_time_unix_ns)
     return message
 
 
@@ -281,6 +360,7 @@ def channel_status(
                 "gain_db": tap.gain_db,
                 "phase_rad": tap.phase_rad,
                 "phase_deg": math.degrees(tap.phase_rad),
+                "doppler_hz": tap.doppler_hz,
             }
         )
     return {
@@ -339,13 +419,20 @@ class ZmqControlClient:
         return reply
 
     def send_profiles(
-        self, profiles: Mapping[str, Sequence[Tap]], *, batch_id: str
+        self,
+        profiles: Mapping[str, Sequence[Tap]],
+        *,
+        batch_id: str,
+        phase_time_unix_ns: int | None = None,
     ) -> dict[str, Any]:
         self.request({"type": "batch_begin", "id": batch_id})
         try:
             for link_id, taps in profiles.items():
                 self.request(
-                    make_profile_swap(link_id, taps, batch_id=batch_id)
+                    make_profile_swap(
+                        link_id, taps, batch_id=batch_id,
+                        phase_time_unix_ns=phase_time_unix_ns,
+                    )
                 )
             return self.request({"type": "batch_commit", "id": batch_id})
         except Exception:
@@ -356,13 +443,20 @@ class ZmqControlClient:
             raise
 
     def send_matrix_profiles(
-        self, profiles: Mapping[str, MatrixProfile], *, batch_id: str
+        self,
+        profiles: Mapping[str, MatrixProfile],
+        *,
+        batch_id: str,
+        phase_time_unix_ns: int | None = None,
     ) -> dict[str, Any]:
         self.request({"type": "batch_begin", "id": batch_id})
         try:
             for link_id, profile in profiles.items():
                 self.request(
-                    make_matrix_profile_swap(link_id, profile, batch_id=batch_id)
+                    make_matrix_profile_swap(
+                        link_id, profile, batch_id=batch_id,
+                        phase_time_unix_ns=phase_time_unix_ns,
+                    )
                 )
             return self.request({"type": "batch_commit", "id": batch_id})
         except Exception:

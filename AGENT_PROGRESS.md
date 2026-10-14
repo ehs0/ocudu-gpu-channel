@@ -27,6 +27,7 @@ The latest row covers combined-tree checks on RTX 5090; other rows are historica
 
 | Scope / revision | Recorded result | Limit |
 |---|---|---|
+| Tap Doppler, GB10, 2026-10-14 | Fingerprints identical to `10d2531`; CTest 13/13; Python 227 passed, 6 skipped, 2 order-dependent web failures | No live gate run |
 | V2X demo, GB10, 2026-10-12 | Python 221 passed, 7 skipped; V2X 29/29; four live gates, 40 dB pass, 34/30 dB fail on ue0 re-attach | Starvations each run; radio ~0.95 real time; no per-slot deadline data |
 | PRs #2–#6 integration, 2026-10-08 | CPU/CUDA CTest 12/12 each; GPU sequence 9/9; Python 208 passed + one new focused test, 3 skipped; both frontend checks; 98 shell scripts | No new live-radio, CMX, GB10 or Orin qualification |
 | Channel fixes `16af288` | CTest 12/12, Python 75/75, nine GPU stages, Node disconnect and shell checks passed; earlier extended CUDA sanitizer runs clean | Does not establish strict real-time operation |
@@ -40,6 +41,14 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 
 ## Completed Changes
 
+### Per-tap Sionna Doppler — 2026-10-14
+
+- Replayed 6,000 live V2X updates (`scripts/sionna_rt/measure_tap_doppler.py`): rotating taps by Sionna Doppler cuts boundary NMSE from +3.0 to −5.7 dB p50. Splitting delay bins at 1 Hz holds merging error at −41 dB for three taps.
+- Added opt-in tap `doppler_hz` and profile `phase_time_unix_ns` through bridge, control server, CPU and CUDA, with a wall/sample rate correction. Design, measurements and limits: [plan](docs/plans/sionna-tap-doppler.md); branch `sionna-tap-doppler`.
+- Default output matches `10d2531` bit for bit (six fixtures, CPU/CUDA); `tap_doppler` analytic checks fail under seven mutations. CTest 13/13; CUDA slot p50 33→38 µs with Doppler on.
+- Live off/on gate could not start: `/home/dev` became mode 750 at 06:01 on 2026-10-14, so the gate's namespace root cannot enter the workspace.
+- `tests/test_v2x_web.py` fails 2/3 after `test_sionna_web_ui.py` in one pytest run (both import `server`); it passes alone. Not fixed.
+
 ### V2X intersection demo — 2026-10-12
 
 - Added `examples/v2x_intersection/`: SUMO 1.28.0 (external, `~/venvs/v2x` via `setup-external.sh`) drives two vehicles; roadside UDP crosses the live 5G link to A's controller; A's position drives Sionna. Committed on branch `v2x-intersection-demo`, unpushed.
@@ -50,6 +59,7 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 - Corrected the README: the dashboard's telemetry estimates per-slot deadline misses (1.9 % ue0, 4.6 % gnb0 in one snapshot); only the log-based analysis lacks them.
 - Fixed dashboard stutter: per-poll ray LineMaterials forced shader recompiles (7.6 of 10 profiled s) and leaked geometry; status poll fetched 5.3 MB history. Main thread now 85% idle; committed with the dashboard.
 - Run `20261014T052435Z` minutes 5–13 had 43–71 starvations/min from my CPU-rendered Chromium profiling on the same host; exclude that window from emulator figures.
+- Committed the dashboard, README telemetry note and these entries as `889442f` on `v2x-intersection-demo`; tap Doppler work stays uncommitted. Unpushed.
 
 ### Pull-request integration — 2026-10-08
 
@@ -136,3 +146,5 @@ Historical ledgers:
 ## Next Resume Point
 
 The V2X intersection demo is committed on local branch `v2x-intersection-demo` (not merged or pushed). Optional multi-UE phase (B with its own UE) is not started.
+
+Tap Doppler awaits its live off/on V2X runs once the gate can enter `/home/dev`; analyse them with `scripts/sionna_rt/analyze_tap_doppler_run.py` and fill the plan's Live section.

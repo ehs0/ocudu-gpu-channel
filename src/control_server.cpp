@@ -428,6 +428,29 @@ bool get_bool(const std::unordered_map<std::string, JsonValue>& o,
   return it->second.b;
 }
 
+// Optional `phase_time_unix_ns`: when the message's tap phases were valid, as a
+// non-negative integer count of Unix ns (0 or absent: no wall-clock reference).
+// JSON numbers arrive as doubles, so present-day values resolve to 256 ns.
+std::uint64_t get_phase_time_unix_ns(const std::unordered_map<std::string, JsonValue>& o)
+{
+  const double value = get_number(o, "phase_time_unix_ns", 0.0);
+  if (!std::isfinite(value) || value < 0.0 || value != std::floor(value) ||
+      value >= 18446744073709551616.0) {
+    throw JsonParseError("field 'phase_time_unix_ns' must be a non-negative integer");
+  }
+  return static_cast<std::uint64_t>(value);
+}
+
+// Optional per-tap `doppler_hz` (absent: 0, the tap does not rotate).
+double get_doppler_hz(const std::unordered_map<std::string, JsonValue>& o)
+{
+  const double value = get_number(o, "doppler_hz", 0.0);
+  if (!std::isfinite(value)) {
+    throw JsonParseError("field 'doppler_hz' must be finite");
+  }
+  return value;
+}
+
 std::string get_string(const std::unordered_map<std::string, JsonValue>& o,
                        const char* key, const std::string& fallback)
 {
@@ -829,6 +852,7 @@ std::string handle_profile_swap(
       staged.taps[k].is_los        = get_bool  (t, "is_los", false);
       staged.taps[k].los_k_db      = get_number(t, "los_k_db", 0.0);
       staged.taps[k].los_angle_rad = get_number(t, "los_angle_rad", 0.0);
+      staged.taps[k].doppler_hz    = get_doppler_hz(t);
     } catch (const std::exception& e) {
       return emit_rejection(ctx, std::string("profile_swap: taps[") + std::to_string(k) + "]: " + e.what());
     }
@@ -879,6 +903,7 @@ std::string handle_profile_swap(
   // chain-eligibility check (default reject for non-tdl-leading chains).
   try {
     staged.force = get_bool(fields, "force", false);
+    staged.phase_time_unix_ns = get_phase_time_unix_ns(fields);
   } catch (const std::exception& e) {
     return emit_rejection(ctx, e.what());
   }
@@ -993,9 +1018,11 @@ std::string handle_matrix_profile_swap(
 
   bool force = false;
   double tea = 0.0;
+  std::uint64_t phase_time_unix_ns = 0;
   try {
     force = get_bool(fields, "force", false);
     tea = get_number(fields, "take_effect_at_slot", 0.0);
+    phase_time_unix_ns = get_phase_time_unix_ns(fields);
   } catch (const std::exception& e) {
     return emit_rejection(ctx, e.what());
   }
@@ -1007,6 +1034,7 @@ std::string handle_matrix_profile_swap(
   staged.nt = nt;
   staged.nr = nr;
   staged.lane_count = lane_count;
+  staged.phase_time_unix_ns = phase_time_unix_ns;
   bool seen[kMaxCorrelatedLanes] = {};
   for (std::size_t entry_index = 0; entry_index < it_lanes->second.arr.size(); ++entry_index) {
     const auto& lane_value = it_lanes->second.arr[entry_index];
@@ -1062,6 +1090,7 @@ std::string handle_matrix_profile_swap(
         tap.is_los = get_bool(tap_value.obj, "is_los", false);
         tap.los_k_db = get_number(tap_value.obj, "los_k_db", 0.0);
         tap.los_angle_rad = get_number(tap_value.obj, "los_angle_rad", 0.0);
+        tap.doppler_hz = get_doppler_hz(tap_value.obj);
         if (!std::isfinite(tap.delay_samples) || tap.delay_samples < 0.0 ||
             tap.delay_samples > kMaxProfileDelaySamples) {
           return emit_rejection(ctx, "matrix_profile_swap: tap delay_samples out of range [0, 1023]");
