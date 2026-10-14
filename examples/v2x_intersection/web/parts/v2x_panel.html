@@ -1,0 +1,10 @@
+      <section class="panel wide">
+        <h2>Vehicle dynamics and V2X reception · current episode</h2>
+        <div class="v2x-charts">
+          <figure><figcaption>Speed (m/s) · <i class="key key-a"></i>A <i class="key key-b"></i>B <i class="key key-target"></i>A target</figcaption><canvas id="v2xSpeedChart" width="560" height="200"></canvas></figure>
+          <figure><figcaption>A acceleration (m/s²) · braking below 0 · band = controller state</figcaption><canvas id="v2xAccelChart" width="560" height="200"></canvas></figure>
+          <figure><figcaption>V2X one-way delay (ms) per received message</figcaption><canvas id="v2xRxChart" width="560" height="200"></canvas></figure>
+        </div>
+        <div class="state-legend" id="v2xStateLegend"></div>
+        <div class="scroll"><table><thead><tr><th>Episode</th><th>Mode</th><th>Outcome</th><th>Min gap m</th><th>First warning s</th><th>First brake s</th><th>V2X rx</th><th>One-way p50 ms</th><th>RTF</th></tr></thead><tbody id="v2xResults"></tbody></table></div>
+      </section>

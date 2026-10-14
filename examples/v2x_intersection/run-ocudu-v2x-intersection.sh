@@ -18,6 +18,9 @@
 #   OCUDU_NATIVE_V2X_EPISODES        0 (episodes back to back until the gate ends)
 #   OCUDU_NATIVE_V2X_DRIVE_EXTRA     extra drive.py words, e.g. "--fallback none"
 #   OCUDU_NATIVE_MUE_DURATION_SECONDS 420 (broker --duration; attach takes 60-150 s)
+#   OCUDU_NATIVE_V2X_WEB_PORT        8080: the V2X dashboard (web/server.py); 0 = none
+#   OCUDU_NATIVE_WEB_PORT            8081 here: the gate's shared web UI, which the
+#                                    V2X dashboard proxies for the radio panels
 #   V2X_PYTHON                       ~/venvs/v2x/bin/v2x-python (setup-external.sh)
 # plus every knob of the multi-UE gate (OCUDU_NATIVE_SIONNA_*, OCUDU_NATIVE_MUE_*).
 set -euo pipefail
@@ -50,4 +53,21 @@ V2X_EPISODES='${OCUDU_NATIVE_V2X_EPISODES:-0}' V2X_DRIVE_EXTRA='${OCUDU_NATIVE_V
 bash '${script_dir}/launch/root_exec.sh' {run_dir} {log_dir} '{ue_ids}' '{ue_ips}' {ue_gateway}"
 export OCUDU_NATIVE_MUE_UE_EXEC="V2X_RUN='${v2x_run}' \
 bash '${script_dir}/launch/ue_exec.sh' {ue_id} {ue_ip} {ue_index} {run_dir} {log_dir}"
-exec bash "${repo_root}/scripts/native/run-ocudu-sionna-multi-ue.sh" "$@"
+export OCUDU_NATIVE_WEB_PORT="${OCUDU_NATIVE_WEB_PORT:-8081}"
+v2x_web_port="${OCUDU_NATIVE_V2X_WEB_PORT:-8080}"
+web_pid=""
+if [[ "${v2x_web_port}" != 0 ]]; then
+  "${v2x_python}" "${script_dir}/web/server.py" --port "${v2x_web_port}" \
+    --upstream "http://127.0.0.1:${OCUDU_NATIVE_WEB_PORT}" --positions-endpoint "${positions}" \
+    --logs-root "${OCUDU_NATIVE_ROOT}/results/logs/ocudu-multi-ue" \
+    >"${v2x_run}/web.log" 2>&1 &
+  web_pid="$!"
+  printf 'V2X dashboard: http://127.0.0.1:%s (radio panels from the shared UI on %s)\n' \
+    "${v2x_web_port}" "${OCUDU_NATIVE_WEB_PORT}"
+fi
+set +e
+bash "${repo_root}/scripts/native/run-ocudu-sionna-multi-ue.sh" "$@"
+status="$?"
+set -e
+[[ -n "${web_pid}" ]] && kill "${web_pid}" 2>/dev/null
+exit "${status}"

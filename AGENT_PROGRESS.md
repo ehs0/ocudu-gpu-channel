@@ -46,6 +46,10 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 - One `layout.py` generates the SUMO network, Sionna scene and both scenarios; tests pin layout/scene/network agreement. V2X tests 29/29 and full Python suite 221 passed, 7 skipped.
 - Live GB10 runs ([README results](examples/v2x_intersection/README.md#measured-results-gb10-2026-10-12)): 40 dB LOS and blocked pass, V2X keeps A 29 m clear versus 12.1 m. At 34 dB ue0 never re-attaches; fallback-free V2X then collides 6/6.
 - Found and fixed controller chattering from episode plots: added a yield latch held until B clears. The 30 dB run predates it and is cited for link figures only.
+- Added the V2X dashboard (`web/`): SUMO-network 3D scene, vehicle panels, and the shared radio panels proxied from the gate UI moved to 8081. Committed on `v2x-intersection-demo`; V2X tests 32/32, headless Chromium render checked.
+- Corrected the README: the dashboard's telemetry estimates per-slot deadline misses (1.9 % ue0, 4.6 % gnb0 in one snapshot); only the log-based analysis lacks them.
+- Fixed dashboard stutter: per-poll ray LineMaterials forced shader recompiles (7.6 of 10 profiled s) and leaked geometry; status poll fetched 5.3 MB history. Main thread now 85% idle; committed with the dashboard.
+- Run `20261014T052435Z` minutes 5–13 had 43–71 starvations/min from my CPU-rendered Chromium profiling on the same host; exclude that window from emulator figures.
 
 ### Pull-request integration — 2026-10-08
 

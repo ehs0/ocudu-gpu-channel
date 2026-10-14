@@ -61,6 +61,7 @@ are stdlib-only, so the UE namespace side runs on `/usr/bin/python3`.
 | `run-ocudu-v2x-intersection.sh` | Live gate: the native multi-UE Sionna gate with `launch/root_exec.sh` and `launch/ue_exec.sh` as its hooks. |
 | `channel_profile.py` | Traces A's downlink along its lane exactly as the bridge does (Sionna venv). |
 | `analyze.py`, `plot_run.py` | Per-episode join of vehicle, V2X, channel, UE and broker logs; figures. |
+| `web/` | The V2X dashboard: `server.py`, `index.html` (built by `build_index.py` from the shared dashboard and `parts/`). See *Dashboard*. |
 | `setup-external.sh`, `requirements.txt` | External install (see above). |
 | `../configs/sionna/scenes/v2x_intersection/` | Scene and scenario generator; see its README. |
 | `../../tests/test_v2x_*.py` | Wire formats (and the bridge's own parser on our feed), controller rules, geometry consistency (layout ↔ scene ↔ scenarios ↔ SUMO network), SUMO episodes, loopback closed loop. |
@@ -171,6 +172,7 @@ OCUDU_NATIVE_V2X_SITE=blocked OCUDU_NATIVE_V2X_MODES=v2x,v2x:none,no-v2x \
 | `OCUDU_NATIVE_V2X_DRIVE_EXTRA` | — | Extra `drive.py` words for every episode (e.g. `--b-start-x 112`). |
 | `OCUDU_NATIVE_MUE_DURATION_SECONDS` | `420` | Broker run length; attach takes 1–2 min, each episode ~13 s. |
 | `OCUDU_NATIVE_SIONNA_AWGN_SNR_DB` | `40` | The multi-UE gate's noise floor relative to a 0 dB tap: the link budget knob for the degraded runs below. |
+| `OCUDU_NATIVE_V2X_WEB_PORT` / `OCUDU_NATIVE_WEB_PORT` | `8080` / `8081` | V2X dashboard / the shared web UI it proxies (`0` = no V2X dashboard). |
 | `V2X_PYTHON` | `~/venvs/v2x/bin/v2x-python` | The external interpreter. |
 
 The gate's own verdict (`attach-summary.json`) still judges attach, PCI and
@@ -180,6 +182,41 @@ transport; the V2X files land in `<log dir>/v2x/` (`roadside_tx.csv`,
 ```
 ~/venvs/v2x/bin/v2x-python examples/v2x_intersection/analyze.py <log dir> --out <dir>
 ~/venvs/v2x/bin/v2x-python examples/v2x_intersection/plot_run.py <log dir> --out <dir>
+```
+
+## Dashboard
+
+The gate starts the V2X dashboard on `http://127.0.0.1:8080`
+(`OCUDU_NATIVE_V2X_WEB_PORT`) and moves the shared web UI to 8081
+(`OCUDU_NATIVE_WEB_PORT`). `web/server.py` serves `web/index.html`, proxies the
+shared UI's `/api/status`, `/api/realtime` and `/api/scene_mesh`, and adds:
+
+- `/api/road`: SUMO's own lane and junction shapes for the layout's network
+  (sumolib), the stop lines and the building blocks;
+- `/api/vehicles`: the newest positions-feed frame (both vehicles, 20 Hz);
+- `/api/v2x`: the running episode's last rows of `vehicles.csv` and
+  `v2x_rx.csv` (flushed every step) and the last twelve results.
+
+Panels: the scene (the SUMO network in 3D: lanes, markings, stop lines,
+crossings, buildings, both vehicles with brake lights, the gNB, the rays of
+gnb0 → ue0 and A's trail coloured by the strongest DL tap), timing, vehicle
+state, vehicle dynamics and V2X reception, node and antenna status, system
+resources and the Sionna runtime loop, estimated nominal-slot deadline
+utilization, impulse and frequency response with tap details. The radio panels
+are the shared dashboard's rendering code, taken unchanged by
+`web/build_index.py`, which assembles `web/index.html` from
+`scripts/web_ui/index.html` and `web/parts/`; rerun it after changing either.
+
+SUMO's own viewer, `sumo-gui`, is a desktop application (X11, optional
+OpenSceneGraph 3D) and cannot be embedded in a web page; the dashboard draws
+the same network geometry itself.
+
+Standalone (a running gate's shared UI on 8081, or a `run_local.py` output):
+
+```
+~/venvs/v2x/bin/v2x-python examples/v2x_intersection/web/server.py --port 8080 \
+    --upstream http://127.0.0.1:8081 --positions-endpoint ipc://$OCUDU_NATIVE_ROOT/run/v2x/positions.sock \
+    --logs-root $OCUDU_NATIVE_ROOT/results/logs/ocudu-multi-ue
 ```
 
 ## Measured results (GB10, 2026-10-12)
@@ -240,9 +277,15 @@ p50s), episode p95 at most 141 ms. A at 13.9 m/s moves ~1 m in that time.
 | `blocked`, 40 dB | 41 / 144 / 196 µs | 25 | 948 /s |
 | `blocked`, 34 dB | 41 / 217 / 242 µs | 219 | 941 /s |
 
-The broker logs one average per second, not per-slot completion times, so a
-per-slot deadline-miss ratio is **not available**; the per-second averages stay
-below the 1 ms slot in every second of every run. The radio ran at ~0.95 of
+The broker log holds one average per second, not per-slot completion times,
+so `analyze.py` cannot compute a per-slot deadline-miss ratio from it; the
+per-second averages stay below the 1 ms slot in every second of every run. The
+live dashboard's *estimated nominal-slot deadline utilization* (broker
+telemetry, `sample_proportional_call_time`) does estimate it per slot: a
+snapshot of the 2026-10-13 one-hour `blocked`, 40 dB run (~2.0 M nominal slots
+per node) showed 1.9 % estimated misses on ue0 RX and 4.6 % on gnb0 RX, p95
+253–872 µs, max 9.8–12.7 ms. These runs do not record that telemetry, so the
+table above has no per-slot column. The radio ran at ~0.95 of
 real time (948 of 1000 slots/s) and every run had rx starvations, so these
 runs do not meet the strict real-time gate. Each channel batch whose tap
 delays change re-warms the edge's history (`control_warmup`, ~6 400 per run

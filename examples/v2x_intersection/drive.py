@@ -293,6 +293,9 @@ def main(argv=None) -> int:
                     "b_visible": int(visible), "reason": out.reason,
                 })
             veh_csv.writerow(row)
+        # Flushed every step: the dashboard (web/server.py) tails these files live.
+        veh_file.flush()
+        rx_file.flush()
         step += 1
         if collision_time is not None:
             ended = "collision"
