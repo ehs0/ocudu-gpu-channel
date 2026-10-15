@@ -293,6 +293,23 @@ details and the investigation are in the milestone document.
    goal is blacklisted for 30 s only, after which the same frontier can win
    again. Not fixed yet.
 
+   **Planned fix — the server sends the fused map down.** The mission server
+   already holds the fused map as 16 × 16-cell tiles with a capture time per
+   tile. It would send each ONLINE robot the tiles that changed since that
+   robot's last acknowledged map revision (downlink `map_tiles`, the uplink
+   tile codec, acknowledged like events, newest-first, rate-limited so it
+   cannot crowd out tasks), and the robot would keep them as a second layer
+   next to its own grid: its own scans stay authoritative for obstacle
+   avoidance, while frontier selection uses the union (a cell known in either
+   layer is not unknown). Cause (a) goes away while the link is up, and after
+   an outage the resume handshake brings the robot up to date; while OFFLINE
+   the robot still explores on its own, with the shared knowledge it had when
+   the link dropped (the shadow-region policy is unchanged). Downlink load is
+   bounded by the map size (~100 tiles, ≈ 25 kB for the whole building).
+   Causes (b) and (c) need their own fixes: a minimum frontier size / a
+   clearing pass for isolated occupied cells, and remembering reached or
+   refused goals for the whole episode instead of 30 s.
+
 ## Limits
 
 See the milestone document for the full list. In short: the live gate has not
