@@ -1,0 +1,5 @@
+# Installed outside the repository by setup-external.sh (default ~/venvs/rescue).
+# numpy is the version Isaac Sim 6.2 pins; the demo code itself needs numpy >= 2.
+numpy==2.3.1
+pyzmq==27.2.0
+pytest==9.1.1

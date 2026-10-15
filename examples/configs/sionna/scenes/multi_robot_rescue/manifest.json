@@ -1,0 +1,895 @@
+{
+  "name": "multi_robot_rescue",
+  "units": "Sionna XYZ metres, z up; origin at the building's outer south-west corner; equals the site frame",
+  "source": "examples/multi_robot_rescue/layout.py",
+  "building_m": {
+    "x": [
+      0.0,
+      40.0
+    ],
+    "y": [
+      0.0,
+      24.0
+    ],
+    "wall_height": 3.0,
+    "roof": [
+      3.0,
+      3.3
+    ]
+  },
+  "rooms": [
+    {
+      "name": "S1",
+      "x_m": [
+        0.0,
+        10.0
+      ],
+      "y_m": [
+        0.0,
+        10.0
+      ],
+      "door_x_m": 7.0
+    },
+    {
+      "name": "S2",
+      "x_m": [
+        10.0,
+        20.0
+      ],
+      "y_m": [
+        0.0,
+        10.0
+      ],
+      "door_x_m": 13.0
+    },
+    {
+      "name": "S3",
+      "x_m": [
+        20.0,
+        30.0
+      ],
+      "y_m": [
+        0.0,
+        10.0
+      ],
+      "door_x_m": 27.0
+    },
+    {
+      "name": "S4",
+      "x_m": [
+        30.0,
+        40.0
+      ],
+      "y_m": [
+        0.0,
+        10.0
+      ],
+      "door_x_m": 33.0
+    },
+    {
+      "name": "N1",
+      "x_m": [
+        0.0,
+        10.0
+      ],
+      "y_m": [
+        14.0,
+        24.0
+      ],
+      "door_x_m": 7.0
+    },
+    {
+      "name": "N2",
+      "x_m": [
+        10.0,
+        20.0
+      ],
+      "y_m": [
+        14.0,
+        24.0
+      ],
+      "door_x_m": 13.0
+    },
+    {
+      "name": "N3",
+      "x_m": [
+        20.0,
+        30.0
+      ],
+      "y_m": [
+        14.0,
+        24.0
+      ],
+      "door_x_m": 27.0
+    },
+    {
+      "name": "N4",
+      "x_m": [
+        30.0,
+        40.0
+      ],
+      "y_m": [
+        14.0,
+        24.0
+      ],
+      "door_x_m": 32.0
+    }
+  ],
+  "shadow_room": "N4",
+  "boxes": [
+    {
+      "id": "roof",
+      "x_m": [
+        0.0,
+        40.0
+      ],
+      "y_m": [
+        0.0,
+        24.0
+      ],
+      "z_m": [
+        3.0,
+        3.3
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "ext_south_0",
+      "x_m": [
+        0.0,
+        40.0
+      ],
+      "y_m": [
+        0.0,
+        0.3
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "ext_north_0",
+      "x_m": [
+        0.0,
+        40.0
+      ],
+      "y_m": [
+        23.700000000000003,
+        24.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "ext_east_0",
+      "x_m": [
+        39.7,
+        40.0
+      ],
+      "y_m": [
+        0.0,
+        24.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "ext_west_0",
+      "x_m": [
+        0.0,
+        0.3
+      ],
+      "y_m": [
+        0.0,
+        10.5
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "ext_west_1",
+      "x_m": [
+        0.0,
+        0.3
+      ],
+      "y_m": [
+        13.5,
+        24.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "corr_south_0",
+      "x_m": [
+        0.3,
+        6.4
+      ],
+      "y_m": [
+        9.9,
+        10.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_1",
+      "x_m": [
+        7.6,
+        12.4
+      ],
+      "y_m": [
+        9.9,
+        10.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_2",
+      "x_m": [
+        13.6,
+        26.4
+      ],
+      "y_m": [
+        9.9,
+        10.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_3",
+      "x_m": [
+        27.6,
+        32.4
+      ],
+      "y_m": [
+        9.9,
+        10.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_4",
+      "x_m": [
+        33.6,
+        39.7
+      ],
+      "y_m": [
+        9.9,
+        10.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_0",
+      "x_m": [
+        0.3,
+        6.4
+      ],
+      "y_m": [
+        13.9,
+        14.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_1",
+      "x_m": [
+        7.6,
+        12.4
+      ],
+      "y_m": [
+        13.9,
+        14.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_2",
+      "x_m": [
+        13.6,
+        26.4
+      ],
+      "y_m": [
+        13.9,
+        14.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_3",
+      "x_m": [
+        27.6,
+        30.0
+      ],
+      "y_m": [
+        13.9,
+        14.1
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "brick"
+    },
+    {
+      "id": "n4_south_0",
+      "x_m": [
+        30.0,
+        31.4
+      ],
+      "y_m": [
+        13.85,
+        14.15
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "metal"
+    },
+    {
+      "id": "n4_south_1",
+      "x_m": [
+        32.6,
+        39.7
+      ],
+      "y_m": [
+        13.85,
+        14.15
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "metal"
+    },
+    {
+      "id": "part_s10_0",
+      "x_m": [
+        9.9,
+        10.1
+      ],
+      "y_m": [
+        0.3,
+        10.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n10_0",
+      "x_m": [
+        9.9,
+        10.1
+      ],
+      "y_m": [
+        14.0,
+        23.7
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_s20_0",
+      "x_m": [
+        19.9,
+        20.1
+      ],
+      "y_m": [
+        0.3,
+        10.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n20_0",
+      "x_m": [
+        19.9,
+        20.1
+      ],
+      "y_m": [
+        14.0,
+        23.7
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_s30_0",
+      "x_m": [
+        29.9,
+        30.1
+      ],
+      "y_m": [
+        0.3,
+        10.0
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n30_0",
+      "x_m": [
+        29.85,
+        30.15
+      ],
+      "y_m": [
+        14.0,
+        23.7
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "metal"
+    },
+    {
+      "id": "n4_lining_north",
+      "x_m": [
+        30.0,
+        39.7
+      ],
+      "y_m": [
+        23.599999999999998,
+        23.7
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "metal"
+    },
+    {
+      "id": "n4_lining_east",
+      "x_m": [
+        39.6,
+        39.7
+      ],
+      "y_m": [
+        14.0,
+        23.7
+      ],
+      "z_m": [
+        0.0,
+        3.0
+      ],
+      "material": "metal"
+    },
+    {
+      "id": "rubble_corr_a",
+      "x_m": [
+        23.2,
+        24.8
+      ],
+      "y_m": [
+        10.1,
+        12.4
+      ],
+      "z_m": [
+        0.0,
+        1.2
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_corr_b",
+      "x_m": [
+        16.4,
+        17.6
+      ],
+      "y_m": [
+        13.0,
+        13.8
+      ],
+      "z_m": [
+        0.0,
+        0.8
+      ],
+      "material": "wood"
+    },
+    {
+      "id": "rubble_s1",
+      "x_m": [
+        3.0,
+        5.0
+      ],
+      "y_m": [
+        3.25,
+        4.75
+      ],
+      "z_m": [
+        0.0,
+        0.9
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_s2",
+      "x_m": [
+        15.25,
+        16.75
+      ],
+      "y_m": [
+        4.75,
+        7.25
+      ],
+      "z_m": [
+        0.0,
+        1.1
+      ],
+      "material": "wood"
+    },
+    {
+      "id": "rubble_s3",
+      "x_m": [
+        22.5,
+        25.5
+      ],
+      "y_m": [
+        3.5,
+        4.5
+      ],
+      "z_m": [
+        0.0,
+        0.7
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_s4",
+      "x_m": [
+        35.4,
+        36.6
+      ],
+      "y_m": [
+        6.4,
+        7.6
+      ],
+      "z_m": [
+        0.0,
+        1.4
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n1",
+      "x_m": [
+        4.1,
+        5.9
+      ],
+      "y_m": [
+        18.1,
+        19.9
+      ],
+      "z_m": [
+        0.0,
+        1.0
+      ],
+      "material": "wood"
+    },
+    {
+      "id": "rubble_n2",
+      "x_m": [
+        13.75,
+        16.25
+      ],
+      "y_m": [
+        19.4,
+        20.6
+      ],
+      "z_m": [
+        0.0,
+        0.8
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n3",
+      "x_m": [
+        24.3,
+        25.7
+      ],
+      "y_m": [
+        16.8,
+        19.2
+      ],
+      "z_m": [
+        0.0,
+        1.3
+      ],
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n4",
+      "x_m": [
+        34.0,
+        36.0
+      ],
+      "y_m": [
+        18.0,
+        19.0
+      ],
+      "z_m": [
+        0.0,
+        1.0
+      ],
+      "material": "metal"
+    }
+  ],
+  "materials": {
+    "brick": {
+      "itu_type": "brick",
+      "thickness_m": 0.2
+    },
+    "concrete": {
+      "itu_type": "concrete",
+      "thickness_m": 0.3
+    },
+    "metal": {
+      "itu_type": "metal",
+      "thickness_m": 0.3
+    },
+    "plasterboard": {
+      "itu_type": "plasterboard",
+      "thickness_m": 0.2
+    },
+    "wood": {
+      "itu_type": "wood",
+      "thickness_m": 0.1
+    }
+  },
+  "radio_sites": {
+    "entrance": {
+      "gnb_m": [
+        -1.0,
+        12.0,
+        2.5
+      ],
+      "parked_ue_m": [
+        -4.0,
+        8.0,
+        1.0
+      ],
+      "description": "portable gNB on a tripod just outside the west doorway: the corridor is in line of sight, rooms are reached through walls and doors, the steel-lined N4 is the deep shadow"
+    },
+    "street": {
+      "gnb_m": [
+        -12.0,
+        12.0,
+        4.0
+      ],
+      "parked_ue_m": [
+        -6.0,
+        8.0,
+        1.0
+      ],
+      "description": "gNB 12 m west of the entrance on the corridor axis: the corridor is in line of sight, the far rooms only through several walls"
+    }
+  },
+  "robot_spawns": {
+    "robot_1": [
+      1.2,
+      12.9,
+      0.0
+    ],
+    "robot_2": [
+      1.2,
+      12.0,
+      0.0
+    ],
+    "robot_3": [
+      1.2,
+      11.1,
+      0.0
+    ]
+  },
+  "robot_antenna_height_m": 0.35,
+  "shapes": [
+    {
+      "id": "ground",
+      "material": "concrete"
+    },
+    {
+      "id": "roof",
+      "material": "concrete"
+    },
+    {
+      "id": "ext_south_0",
+      "material": "concrete"
+    },
+    {
+      "id": "ext_north_0",
+      "material": "concrete"
+    },
+    {
+      "id": "ext_east_0",
+      "material": "concrete"
+    },
+    {
+      "id": "ext_west_0",
+      "material": "concrete"
+    },
+    {
+      "id": "ext_west_1",
+      "material": "concrete"
+    },
+    {
+      "id": "corr_south_0",
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_1",
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_2",
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_3",
+      "material": "brick"
+    },
+    {
+      "id": "corr_south_4",
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_0",
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_1",
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_2",
+      "material": "brick"
+    },
+    {
+      "id": "corr_north_3",
+      "material": "brick"
+    },
+    {
+      "id": "n4_south_0",
+      "material": "metal"
+    },
+    {
+      "id": "n4_south_1",
+      "material": "metal"
+    },
+    {
+      "id": "part_s10_0",
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n10_0",
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_s20_0",
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n20_0",
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_s30_0",
+      "material": "plasterboard"
+    },
+    {
+      "id": "part_n30_0",
+      "material": "metal"
+    },
+    {
+      "id": "n4_lining_north",
+      "material": "metal"
+    },
+    {
+      "id": "n4_lining_east",
+      "material": "metal"
+    },
+    {
+      "id": "rubble_corr_a",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_corr_b",
+      "material": "wood"
+    },
+    {
+      "id": "rubble_s1",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_s2",
+      "material": "wood"
+    },
+    {
+      "id": "rubble_s3",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_s4",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n1",
+      "material": "wood"
+    },
+    {
+      "id": "rubble_n2",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n3",
+      "material": "concrete"
+    },
+    {
+      "id": "rubble_n4",
+      "material": "metal"
+    }
+  ]
+}

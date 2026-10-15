@@ -1,0 +1,203 @@
+<?xml version='1.0' encoding='utf-8'?>
+<scene version="2.1.0">
+  <bsdf type="itu-radio-material" id="brick">
+    <string name="type" value="brick" />
+    <float name="thickness" value="0.2" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="concrete">
+    <string name="type" value="concrete" />
+    <float name="thickness" value="0.3" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="metal">
+    <string name="type" value="metal" />
+    <float name="thickness" value="0.3" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="plasterboard">
+    <string name="type" value="plasterboard" />
+    <float name="thickness" value="0.2" />
+  </bsdf>
+  <bsdf type="itu-radio-material" id="wood">
+    <string name="type" value="wood" />
+    <float name="thickness" value="0.1" />
+  </bsdf>
+  <shape type="ply" id="mesh-ground">
+    <string name="filename" value="meshes/ground.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-roof">
+    <string name="filename" value="meshes/roof.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-ext_south_0">
+    <string name="filename" value="meshes/ext_south_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-ext_north_0">
+    <string name="filename" value="meshes/ext_north_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-ext_east_0">
+    <string name="filename" value="meshes/ext_east_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-ext_west_0">
+    <string name="filename" value="meshes/ext_west_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-ext_west_1">
+    <string name="filename" value="meshes/ext_west_1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_south_0">
+    <string name="filename" value="meshes/corr_south_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_south_1">
+    <string name="filename" value="meshes/corr_south_1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_south_2">
+    <string name="filename" value="meshes/corr_south_2.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_south_3">
+    <string name="filename" value="meshes/corr_south_3.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_south_4">
+    <string name="filename" value="meshes/corr_south_4.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_north_0">
+    <string name="filename" value="meshes/corr_north_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_north_1">
+    <string name="filename" value="meshes/corr_north_1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_north_2">
+    <string name="filename" value="meshes/corr_north_2.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-corr_north_3">
+    <string name="filename" value="meshes/corr_north_3.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="brick" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-n4_south_0">
+    <string name="filename" value="meshes/n4_south_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-n4_south_1">
+    <string name="filename" value="meshes/n4_south_1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_s10_0">
+    <string name="filename" value="meshes/part_s10_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="plasterboard" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_n10_0">
+    <string name="filename" value="meshes/part_n10_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="plasterboard" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_s20_0">
+    <string name="filename" value="meshes/part_s20_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="plasterboard" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_n20_0">
+    <string name="filename" value="meshes/part_n20_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="plasterboard" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_s30_0">
+    <string name="filename" value="meshes/part_s30_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="plasterboard" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-part_n30_0">
+    <string name="filename" value="meshes/part_n30_0.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-n4_lining_north">
+    <string name="filename" value="meshes/n4_lining_north.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-n4_lining_east">
+    <string name="filename" value="meshes/n4_lining_east.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_corr_a">
+    <string name="filename" value="meshes/rubble_corr_a.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_corr_b">
+    <string name="filename" value="meshes/rubble_corr_b.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_s1">
+    <string name="filename" value="meshes/rubble_s1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_s2">
+    <string name="filename" value="meshes/rubble_s2.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_s3">
+    <string name="filename" value="meshes/rubble_s3.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_s4">
+    <string name="filename" value="meshes/rubble_s4.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_n1">
+    <string name="filename" value="meshes/rubble_n1.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="wood" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_n2">
+    <string name="filename" value="meshes/rubble_n2.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_n3">
+    <string name="filename" value="meshes/rubble_n3.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="concrete" name="bsdf" />
+  </shape>
+  <shape type="ply" id="mesh-rubble_n4">
+    <string name="filename" value="meshes/rubble_n4.ply" />
+    <boolean name="face_normals" value="true" />
+    <ref id="metal" name="bsdf" />
+  </shape>
+</scene>

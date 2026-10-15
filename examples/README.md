@@ -7,6 +7,7 @@ plus `configs/`, the input configurations the demos and gates read.
 |---|---|
 | [robot_fight/](robot_fight/README.md) — sumo-robot arena over two cells, two brokers sharing one GPU | `bash examples/robot_fight/run-ocudu-robot-fight.sh` |
 | [scheduler_benchmark/](scheduler_benchmark/README.md) — two OCUDU MAC schedulers under one seeded Sionna channel | `bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh` |
+| [multi_robot_rescue/](multi_robot_rescue/README.md) — three rescue robots explore a building, report over live 5G UEs, keep exploring when their link is lost | `bash examples/multi_robot_rescue/run-ocudu-multi-robot-rescue.sh` |
 
 The demo gates reuse the shared native tooling in `scripts/native/` (`env.sh`,
 `oai-gate-defaults.sh`, workspace lock, base renderers). Run outputs land

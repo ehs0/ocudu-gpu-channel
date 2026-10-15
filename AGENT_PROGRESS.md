@@ -5,6 +5,7 @@
 ## Repository State
 
 - Checkout: `main` in `/Users/charles_gu/Documents/GitHub/ocudu-gpu-channel`. PRs #2–#6 are integrated through normal merges; Git records the current commit and publication state.
+- GB10 container checkout `/home/dev/channel_emulator/ocudu-gpu-channel`: local branch `multi-robot-rescue` from `main` holds the uncommitted rescue demo; `v2x-intersection-demo` remains unmerged.
 - Integration and cleanup were published on 2026-09-14. Normal merges `22a51ba` and `e59e095` retain contributor tips `066a702` and `e31fe51`; no history rewrite or release tag.
 - Only this channel worktree and local `main` remain. Origin branch cleanup was verified on 2026-09-14; contributor remotes `ehs0` and `fork` remain.
 - Agent-file updates: concise harness/progress, full historical archive, short-entry rules and the user-requested mission reset. Pre-existing runtime/publication notes are preserved in the archive and summarized below.
@@ -38,6 +39,21 @@ The latest row covers combined-tree checks on RTX 5090; other rows are historica
 Reports: [integration guide](docs/sionna-integration.md), [merge validation](docs/main-merge-validation.md), [channel fix validation](docs/sionna-merge-fixes-validation.md), [metrics recovery](docs/metrics-recovery-validation.md), and [rank-1 results](docs/rank1-feasibility-report.md).
 
 ## Completed Changes
+
+### Multi-robot rescue demo — 2026-10-15
+
+- Added `examples/multi_robot_rescue/`: three-robot rescue with local autonomy, durable offline queue, measured link state, mission server and dashboard. Plan, audit and results: [MULTI_ROBOT_RESCUE_MILESTONES.md](MULTI_ROBOT_RESCUE_MILESTONES.md).
+- Built the rescue Sionna scene and 1/2/3-robot scenarios. Box walls double-counted slab loss; centre-plane walls fixed it, leaving steel room N4 without paths.
+- Loopback ideal, blackout and shadow-room episodes succeeded on the kinematic world; the shadow run confirmed N4's survivor offline and reported it 40.9 s later. Bridge dry-run followed live robot positions.
+- Installed Isaac Sim 6.2.0 in `~/venvs/rescue` under user EULA acceptance; headless Raycast LiDAR runs at RTF 8–12. `isaac_world.py` adapter runs full loopback episodes.
+- Added 56 rescue tests, including real-process outage recovery and one blackout episode.
+- First live one-robot run `20261015T110103Z` failed: copied UL override 3.0e2 saturated the gNB input (PRACH rssi +14.9 dB). Launcher now keeps the 3.0e4 calibration.
+- Second live run `20261015T112725Z`: PRACH rssi +3.2 dB, 227 s live delivery (tile capture→ACK p50 43 ms). UE lost sync after a sharp channel rise, got RRC Release, and srsUE `eea87b1d` never re-attached; recovery patches are unavailable here.
+- User decided to record the re-attach failure as an srsUE `eea87b1d` limit. Sync loss is not channel-explained (CQI 15, stable timing); it hits only moving UEs; history resets remain an untested hypothesis.
+- Rebuilt the rescue dashboard: Isaac overview and per-robot camera views (5 Hz JPEG, render+encode p50 33 ms, RTF 1.000) switched by buttons, plus 2-D map; removed panel notes.
+- Live Isaac run `20261015T121010Z` stalled at sim time 5 s: namespaced root could not write Kit caches and recompiled shaders per render. Launcher now seeds a writable `--portable-root`, warms cameras before the clock (0.88 s), and refuses a busy dashboard port.
+- Second live Isaac run `20261015T122241Z`: unreadable GL shader cache made Kit start in 220 s, then back-to-back warm-up renders hit `Out of resource descriptors`. Cache made readable; warm-up paced, views disabled on timeout; dashboard now map left, robot views right.
+- Three-robot live run `20261015T124312Z`: all moving UEs lost sync and never re-attached (links OFFLINE at 236–299 s); robots revisited explored rooms. Both are open known issues in the example README.
 
 ### Pull-request integration — 2026-10-08
 
@@ -123,4 +139,4 @@ Historical ledgers:
 
 ## Next Resume Point
 
-PRs #2–#6 are merged and published; combined-tree validation is complete. No further merge work, live-radio rerun or deployment is queued.
+PRs #2–#6 are merged and published; combined-tree validation is complete. Rescue demo: UE re-attach is a recorded srsUE limit; next is the sync-loss causal test (same updates on a parked UE) if the user wants it; commit or publication awaits the user.

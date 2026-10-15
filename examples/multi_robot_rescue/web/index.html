@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rescue Mission Monitor</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #1d232b; --muted: #5d6875; --line: #d8dde3;
+    --wall: #39424e; --rubble: #9a7b52; --free: #e3f0e5; --occ: #3a4350; --unknown: #eef0f3;
+    --online: #2e8b57; --degraded: #c88a12; --offline: #c0392b; --syncing: #2f6fb3; --boot: #7a7f87;
+    --survivor: #e8590c; --task: #6f42c1; --accent: #2f6fb3;
+    --r1: #2673d9; --r2: #1aa55a; --r3: #cc40b3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161b; --panel: #1b2027; --ink: #e6e9ed; --muted: #9aa4af; --line: #2c333c;
+      --wall: #c9d1da; --rubble: #b8955f; --free: #1f3326; --occ: #c3cad3; --unknown: #20252c;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161b; --panel: #1b2027; --ink: #e6e9ed; --muted: #9aa4af; --line: #2c333c;
+    --wall: #c9d1da; --rubble: #b8955f; --free: #1f3326; --occ: #c3cad3; --unknown: #20252c;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 16px;
+           border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  .tag { padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); font-size: 12px; white-space: nowrap; }
+  .tag.mode { font-weight: 600; }
+  .tag.mock { background: #fff3cd; color: #7a5b00; border-color: #e6cf7a; }
+  .tag.live { background: #d9f2e3; color: #1d5e3a; border-color: #95d1ad; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; padding: 12px 16px; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+  section.wide { grid-column: 1 / -1; }
+  section h2 { font-size: 14px; margin: 0 0 8px; }
+  .views { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+  .views button { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 6px; cursor: pointer;
+                  border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
+  .views button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .views button:disabled { opacity: .45; cursor: default; }
+  .views .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+  .stage { position: relative; background: #000; border-radius: 6px; overflow: hidden; aspect-ratio: 16 / 9; }
+  .stage img, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; display: block; }
+  .stage canvas { background: var(--unknown); }
+  .stage.map { aspect-ratio: 8 / 5; background: var(--panel); }
+  .overlay { position: absolute; left: 10px; top: 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .overlay span { background: rgba(0,0,0,.6); color: #fff; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; }
+  .overlay .OFFLINE { background: var(--offline); } .overlay .ONLINE { background: var(--online); }
+  .overlay .DEGRADED { background: var(--degraded); } .overlay .SYNCING { background: var(--syncing); }
+  .empty { position: absolute; inset: 0; display: grid; place-items: center; color: #aab; font-size: 13px; }
+  #central { width: 100%; height: auto; display: block; background: var(--unknown); border-radius: 6px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .wrap { overflow-x: auto; }
+  .state { font-weight: 600; }
+  .ONLINE { color: var(--online); } .DEGRADED { color: var(--degraded); } .OFFLINE { color: var(--offline); }
+  .SYNCING { color: var(--syncing); } .BOOT, .UNKNOWN { color: var(--boot); }
+  .badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700;
+           background: var(--offline); color: #fff; margin-left: 4px; }
+  .kpis { display: flex; flex-wrap: wrap; gap: 18px; margin-bottom: 8px; }
+  .kpi b { display: block; font-size: 20px; }
+  .kpi span { color: var(--muted); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Multi-robot rescue</h1>
+  <span id="netmode" class="tag mode">—</span>
+  <span id="world" class="tag">world —</span>
+  <span id="mission" class="tag">mission —</span>
+  <span id="clock" class="tag">t —</span>
+  <span id="radio" class="tag"></span>
+</header>
+<main>
+  <section>
+    <h2>Top-down map</h2>
+    <div class="stage map"><canvas id="map" width="960" height="600"></canvas></div>
+  </section>
+  <section>
+    <h2>Robot view</h2>
+    <div class="views" id="views"></div>
+    <div class="stage">
+      <img id="frame" alt="" hidden>
+      <div class="empty" id="empty" hidden>No rendered view</div>
+      <div class="overlay" id="overlay"></div>
+    </div>
+  </section>
+  <section>
+    <h2>Central knowledge</h2>
+    <div class="kpis" id="kpis"></div>
+    <canvas id="central" width="800" height="480"></canvas>
+  </section>
+  <section>
+    <h2>Robots and links</h2>
+    <div class="wrap"><table id="robots"></table></div>
+  </section>
+</main>
+<script>
+let L = null, view = "robot_1", hasFrames = false, lastState = null;
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const ROBOT_COLOR = { robot_1: "--r1", robot_2: "--r2", robot_3: "--r3" };
+const STATE_COLOR = (s) => css("--" + String(s || "boot").toLowerCase()) || css("--boot");
+const fmt = (v, d = 1) => v == null ? "N/A" : (typeof v === "number" ? v.toFixed(d) : v);
+const trails = {};
+
+function fit(canvas) {
+  const b = L.building_m, pad = 0.8;
+  const w = b.x[1] - b.x[0] + 2 * pad, h = b.y[1] - b.y[0] + 2 * pad;
+  const s = Math.min(canvas.width / w, canvas.height / h);
+  const ox = (canvas.width - w * s) / 2, oy = (canvas.height - h * s) / 2;
+  return { s, X: (x) => ox + (x - b.x[0] + pad) * s, Y: (y) => canvas.height - oy - (y - b.y[0] + pad) * s };
+}
+
+function drawBuilding(ctx, t) {
+  ctx.fillStyle = css("--wall");
+  for (const [x0, y0, x1, y1] of L.walls) ctx.fillRect(t.X(x0), t.Y(y1), (x1 - x0) * t.s, (y1 - y0) * t.s);
+  ctx.fillStyle = css("--rubble");
+  for (const [x0, y0, x1, y1] of L.rubble) ctx.fillRect(t.X(x0), t.Y(y1), (x1 - x0) * t.s, (y1 - y0) * t.s);
+  ctx.fillStyle = css("--muted"); ctx.font = "12px system-ui";
+  for (const r of L.rooms) ctx.fillText(r.name, t.X(r.x[0]) + 6, t.Y(r.y[1]) + 16);
+}
+
+function robotGlyph(ctx, t, x, y, yaw, fill, ring, label) {
+  ctx.save(); ctx.translate(t.X(x), t.Y(y)); ctx.rotate(-yaw);
+  ctx.fillStyle = fill; ctx.beginPath(); ctx.arc(0, 0, 0.35 * t.s, 0, 2 * Math.PI); ctx.fill();
+  ctx.strokeStyle = ring; ctx.lineWidth = 3; ctx.stroke();
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0.4 * t.s, 0); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = css("--ink"); ctx.font = "12px system-ui"; ctx.fillText(label, t.X(x) + 9, t.Y(y) - 9);
+}
+
+function survivorGlyph(ctx, t, x, y, filled) {
+  ctx.strokeStyle = css("--survivor"); ctx.fillStyle = css("--survivor"); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(t.X(x), t.Y(y), 0.45 * t.s, 0, 2 * Math.PI); filled ? ctx.fill() : ctx.stroke();
+}
+
+function decodeMap(text, rows, cols) {
+  const raw = atob(text), out = new Uint8Array(rows * cols);
+  for (let i = 0; i < rows * cols; i++) out[i] = (raw.charCodeAt(i >> 2) >> ((i & 3) * 2)) & 3;
+  return out;
+}
+
+function drawTopDown(st) {
+  const c = document.getElementById("map"), ctx = c.getContext("2d"), t = fit(c);
+  ctx.fillStyle = css("--panel"); ctx.fillRect(0, 0, c.width, c.height);
+  drawBuilding(ctx, t);
+  const f = st.referee;
+  if (!f) return;
+  for (const [x, y] of (f.referee?.survivors_m || [])) survivorGlyph(ctx, t, x, y, true);
+  for (const [rid, r] of Object.entries(f.robots || {})) {
+    const tr = trails[rid] || [];
+    ctx.strokeStyle = css(ROBOT_COLOR[rid]); ctx.globalAlpha = 0.5; ctx.lineWidth = 1.5; ctx.beginPath();
+    tr.forEach(([x, y], i) => i ? ctx.lineTo(t.X(x), t.Y(y)) : ctx.moveTo(t.X(x), t.Y(y))); ctx.stroke();
+    ctx.globalAlpha = 1;
+    robotGlyph(ctx, t, r.x, r.y, r.yaw, css(ROBOT_COLOR[rid]), STATE_COLOR(st.links?.[rid]?.state), rid.replace("robot_", "R"));
+  }
+}
+
+function drawCentral(st) {
+  const c = document.getElementById("central"), ctx = c.getContext("2d"), t = fit(c);
+  ctx.fillStyle = css("--panel"); ctx.fillRect(0, 0, c.width, c.height);
+  const cen = st.central;
+  if (cen?.map) {
+    const g = cen.grid, m = decodeMap(cen.map, g.rows, g.cols), free = css("--free"), occ = css("--occ");
+    for (let r = 0; r < g.rows; r++) for (let q = 0; q < g.cols; q++) {
+      const v = m[r * g.cols + q]; if (!v) continue;
+      ctx.fillStyle = v === 1 ? free : occ;
+      const x = g.x0 + q * g.res_m, y = g.y0 + r * g.res_m;
+      ctx.fillRect(t.X(x), t.Y(y + g.res_m), g.res_m * t.s + 0.5, g.res_m * t.s + 0.5);
+    }
+  }
+  ctx.globalAlpha = 0.2; drawBuilding(ctx, t); ctx.globalAlpha = 1;
+  for (const s of cen?.survivors || []) {
+    survivorGlyph(ctx, t, s.position_m[0], s.position_m[1], false);
+    ctx.fillStyle = css("--survivor"); ctx.fillText(s.survivor_id, t.X(s.position_m[0]) + 9, t.Y(s.position_m[1]) + 14);
+  }
+  for (const [rid, r] of Object.entries(cen?.robots || {})) {
+    if (!r.pose) continue;
+    if (r.task?.target_pose_m) {
+      ctx.strokeStyle = css("--task"); ctx.setLineDash([4, 4]); ctx.beginPath();
+      ctx.moveTo(t.X(r.pose[0]), t.Y(r.pose[1])); ctx.lineTo(t.X(r.task.target_pose_m.x), t.Y(r.task.target_pose_m.y)); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    const age = r.pose_age_s == null ? "" : ` ${r.pose_age_s.toFixed(0)}s`;
+    robotGlyph(ctx, t, r.pose[0], r.pose[1], r.pose[2], css(ROBOT_COLOR[rid]), STATE_COLOR(r.status), rid.replace("robot_", "R") + age);
+    if (r.status === "OFFLINE" && r.pose_age_s) {
+      ctx.strokeStyle = css("--offline"); ctx.setLineDash([2, 3]); ctx.beginPath();
+      ctx.arc(t.X(r.pose[0]), t.Y(r.pose[1]), Math.min(r.pose_age_s * 0.6, 20) * t.s, 0, 2 * Math.PI); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+function buildButtons() {
+  const robots = L.robots.filter((rid) => lastState?.referee?.robots?.[rid] || lastState?.links?.[rid]);
+  const items = [...robots.map((rid) => [rid, rid]), ["overview", "Isaac scene"]];
+  const el = document.getElementById("views");
+  el.innerHTML = items.map(([id, label]) => {
+    const dot = ROBOT_COLOR[id] ? `<span class="dot" style="background:${css(ROBOT_COLOR[id])}"></span>` : "";
+    const off = !hasFrames;
+    return `<button data-view="${id}" aria-pressed="${id === view}" ${off ? "disabled" : ""}>${dot}${label}</button>`;
+  }).join("");
+  el.querySelectorAll("button").forEach((b) => b.onclick = () => { view = b.dataset.view; buildButtons(); showView(); });
+}
+
+function showView() {
+  const img = document.getElementById("frame"), empty = document.getElementById("empty");
+  img.hidden = !hasFrames;
+  empty.hidden = hasFrames;
+  empty.textContent = lastState?.current?.world === "kinematic" ? "No cameras in the kinematic world" : "No rendered view";
+  if (hasFrames) img.src = `frames/${view}.jpg?t=${Date.now()}`;
+  overlay();
+}
+
+function overlay() {
+  const el = document.getElementById("overlay"), st = lastState;
+  if (!st || !ROBOT_COLOR[view]) { el.innerHTML = ""; return; }
+  const k = st.links?.[view] || {}, r = st.robots?.[view] || {};
+  const parts = [`<span>${view}</span>`, `<span class="${k.state || ""}">${k.state || "—"}</span>`];
+  if (r.mode) parts.push(`<span>${r.mode}</span>`);
+  if (k.backlog) parts.push(`<span>backlog ${k.backlog}</span>`);
+  el.innerHTML = parts.join("");
+}
+
+function tables(st) {
+  const rows = L.robots.filter((rid) => st.links?.[rid] || st.robots?.[rid]);
+  const cen = st.central || {}, now = Date.now();
+  document.getElementById("robots").innerHTML =
+    "<tr><th>robot</th><th>UE</th><th>link</th><th>for</th><th>last reply</th><th>sRTT ms</th><th>backlog</th>" +
+    "<th>autonomy</th><th>goal</th><th>central task</th><th>survivors confirmed</th><th>central sees</th><th>pose age</th></tr>" +
+    rows.map((rid) => {
+      const k = st.links?.[rid] || {}, r = st.robots?.[rid] || {}, c = cen.robots?.[rid] || {};
+      const task = r.task ? `${r.task.command_id} r${r.task.revision} (${((r.task.valid_until_ms - now) / 1000).toFixed(0)} s)` : "—";
+      const conf = (r.candidates || []).filter((x) => x.confirmed).length;
+      const badge = k.state === "OFFLINE" ? '<span class="badge">OFFLINE · LOCAL AUTONOMY</span>' : "";
+      return `<tr><td><span class="dot" style="display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;background:${css(ROBOT_COLOR[rid])}"></span>${rid}</td>
+        <td>${L.ue_node[rid]}</td><td class="state ${k.state}">${k.state || "—"}</td><td>${fmt(k.state_age_s, 0)} s</td>
+        <td>${fmt(k.last_reply_age_s)} s</td><td>${fmt(k.srtt_ms, 0)}</td><td>${k.backlog ?? "—"}</td>
+        <td>${r.mode || "—"}${badge}</td><td>${r.goal_m ? r.goal_m.join(", ") + " (" + r.goal_source + ")" : "—"}</td>
+        <td>${task}</td><td>${conf}</td><td class="state ${c.status}">${c.status || "—"}</td><td>${fmt(c.pose_age_s)} s</td></tr>`;
+    }).join("");
+  const localConfirmed = rows.reduce((n, rid) => n + (st.robots?.[rid]?.candidates || []).filter((x) => x.confirmed).length, 0);
+  const cov = st.referee?.referee?.coverage;
+  document.getElementById("kpis").innerHTML = [
+    ["survivors reported", (cen.survivors || []).length],
+    ["confirmed on robots", localConfirmed],
+    ["map coverage", cov == null ? "N/A" : (100 * cov).toFixed(1) + " %"],
+    ["map revision", cen.map_revision ?? "—"],
+  ].map(([k, v]) => `<div class="kpi"><b>${v}</b><span>${k}</span></div>`).join("");
+}
+
+async function probeFrames() {
+  const ok = (await fetch(`frames/overview.jpg?t=${Date.now()}`, { method: "GET" })).ok;
+  if (ok !== hasFrames) {
+    hasFrames = ok;
+    buildButtons(); showView();
+  }
+}
+
+async function tick() {
+  try {
+    const st = await (await fetch("api/state")).json();
+    const fresh = !lastState;
+    lastState = st;
+    const mode = st.current?.network_mode || "—";
+    const tag = document.getElementById("netmode");
+    tag.textContent = mode; tag.className = "tag mode " + (mode === "gpu_iq_live_5g" ? "live" : "mock");
+    document.getElementById("mission").textContent = "mission " + (st.current?.mission_id || "—");
+    document.getElementById("world").textContent = "world " + (st.current?.world || "—");
+    document.getElementById("clock").textContent = "t " + fmt(st.referee?.sim_time_s, 1) + " s";
+    for (const [rid, r] of Object.entries(st.referee?.robots || {})) {
+      const tr = (trails[rid] ||= []); tr.push([r.x, r.y]); if (tr.length > 3000) tr.shift();
+    }
+    if (fresh) buildButtons();
+    drawTopDown(st);
+    drawCentral(st); tables(st); overlay();
+  } catch (e) { /* server restarting between episodes */ }
+}
+
+(async () => {
+  L = await (await fetch("api/layout")).json();
+  const radio = await (await fetch("api/radio")).json();
+  document.getElementById("radio").innerHTML = radio.radio_ui ? `<a href="${radio.radio_ui}" target="_blank">radio UI</a>` : "no radio";
+  await tick(); await probeFrames(); buildButtons(); showView();
+  setInterval(tick, 500);
+  setInterval(probeFrames, 3000);
+  setInterval(() => { if (hasFrames) document.getElementById("frame").src = `frames/${view}.jpg?t=${Date.now()}`; }, 250);
+})();
+</script>
+</body>
+</html>
