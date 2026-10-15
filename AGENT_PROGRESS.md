@@ -48,6 +48,10 @@ Reports: [integration guide](docs/sionna-integration.md), [merge validation](doc
 - Default output matches `10d2531` bit for bit (six fixtures, CPU/CUDA); `tap_doppler` analytic checks fail under seven mutations. CTest 13/13; CUDA slot p50 33→38 µs with Doppler on.
 - Live off/on gate could not start: `/home/dev` became mode 750 at 06:01 on 2026-10-14, so the gate's namespace root cannot enter the workspace.
 - `tests/test_v2x_web.py` fails 2/3 after `test_sionna_web_ui.py` in one pytest run (both import `server`); it passes alone. Not fixed.
+- Restored gate access with `chmod o+x /home/dev` (user-approved). Live off-runs `093806Z`/`105756Z` pass; broker cost and nominal misses (1.93 %) match with Doppler on.
+- Fixed held-feed velocity: the bridge now traces a node without a new sample as stationary; test fails without it. It caused the first on-run's ue0 drop.
+- On-run `104052Z` still fails: srsUE ue0 loses slot sync in e007 (40 out-of-sync, ~50k SFN slips; off-runs zero). The emulated power was normal; cause not separated.
+- Diagnostics: Doppler ×0.235 passes; one held moving profile rotating 9 min without updates passes. UE-on-4-cores could not run (gNB on 3 cores missed its start). Cause still unseparated.
 
 ### V2X intersection demo — 2026-10-12
 
@@ -147,4 +151,4 @@ Historical ledgers:
 
 The V2X intersection demo is committed on local branch `v2x-intersection-demo` (not merged or pushed). Optional multi-UE phase (B with its own UE) is not started.
 
-Tap Doppler awaits its live off/on V2X runs once the gate can enter `/home/dev`; analyse them with `scripts/sionna_rt/analyze_tap_doppler_run.py` and fill the plan's Live section.
+Tap Doppler fails live: srsUE ue0 loses slot sync with it on. Next: separate UE CPU budget, rotating-channel tracking and 10 Hz boundary jumps (plan, *Live*).

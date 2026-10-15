@@ -171,7 +171,7 @@ OCUDU_NATIVE_V2X_SITE=blocked OCUDU_NATIVE_V2X_MODES=v2x,v2x:none,no-v2x \
 | `OCUDU_NATIVE_V2X_EPISODES` | `0` | Episodes, 0 = back to back until the gate ends. |
 | `OCUDU_NATIVE_V2X_DRIVE_EXTRA` | — | Extra `drive.py` words for every episode (e.g. `--b-start-x 112`). |
 | `OCUDU_NATIVE_MUE_DURATION_SECONDS` | `420` | Broker run length; attach takes 1–2 min, each episode ~13 s. |
-| `OCUDU_NATIVE_SIONNA_TAP_DOPPLER_BIN_HZ` | — | Opt-in per-tap Doppler (`1` = split delay bins at 1 Hz): taps rotate between Sionna updates; see [the plan](../../docs/plans/sionna-tap-doppler.md). Not yet validated live. |
+| `OCUDU_NATIVE_SIONNA_TAP_DOPPLER_BIN_HZ` | — | Opt-in per-tap Doppler (`1` = split delay bins at 1 Hz): taps rotate between Sionna updates; see [the plan](../../docs/plans/sionna-tap-doppler.md). Live on 2026-10-14: ue0 loses slot sync mid-run with it on (plan, *Live*). |
 | `OCUDU_NATIVE_SIONNA_AWGN_SNR_DB` | `40` | The multi-UE gate's noise floor relative to a 0 dB tap: the link budget knob for the degraded runs below. |
 | `OCUDU_NATIVE_V2X_WEB_PORT` / `OCUDU_NATIVE_WEB_PORT` | `8080` / `8081` | V2X dashboard / the shared web UI it proxies (`0` = no V2X dashboard). |
 | `V2X_PYTHON` | `~/venvs/v2x/bin/v2x-python` | The external interpreter. |

@@ -25,6 +25,7 @@ import tempfile
 import time
 import traceback
 import xml.etree.ElementTree as ET
+import dataclasses
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -934,6 +935,24 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "default) sends constant taps, exactly as before"
         ),
     )
+    # Diagnostics for the live tap-Doppler investigation
+    # (docs/plans/sionna-tap-doppler.md, Live). Not for normal runs.
+    parser.add_argument(
+        "--diagnostic-tap-doppler-scale",
+        type=float,
+        default=1.0,
+        help="diagnostic: multiply every sent tap Doppler by this factor",
+    )
+    parser.add_argument(
+        "--diagnostic-freeze-profile-hz",
+        type=float,
+        default=0.0,
+        help=(
+            "diagnostic: stop sending profiles after the first batch with a tap "
+            "Doppler of at least this magnitude, so its taps keep rotating with "
+            "no further updates (0 = off)"
+        ),
+    )
     parser.add_argument("--max-depth", type=int, default=3)
     parser.add_argument("--samples-per-src", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=42)
@@ -1045,6 +1064,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         parser.error("--update-hz must be positive")
     if not (math.isfinite(args.tap_doppler_bin_hz) and args.tap_doppler_bin_hz >= 0.0):
         parser.error("--tap-doppler-bin-hz must be >= 0")
+    if (args.diagnostic_tap_doppler_scale != 1.0 or args.diagnostic_freeze_profile_hz) and not args.tap_doppler_bin_hz:
+        parser.error("tap-Doppler diagnostics need --tap-doppler-bin-hz")
     if args.carrier_frequency_hz is not None:
         args.downlink_frequency_hz = args.carrier_frequency_hz
         args.uplink_frequency_hz = args.carrier_frequency_hz
@@ -2037,10 +2058,18 @@ class SionnaScenario:
     def update_positions(self, elapsed_seconds: float) -> dict[str, tuple[float, float, float]]:
         positions: dict[str, tuple[float, float, float]] = {}
         if self.position_source is not None:
-            self.position_source.poll()
+            fresh = self.position_source.poll() is not None
             resolved, velocities, self.position_sources = self.position_source.resolve(
                 self.motion, elapsed_seconds
             )
+            if not fresh:
+                # No new sample since the last update: the held position is
+                # all we know, so the node is traced as standing still. Its
+                # last velocity would give Doppler to a geometry that does
+                # not move, which per-tap Doppler would turn into fading.
+                for node_id, source in self.position_sources.items():
+                    if source == "external":
+                        velocities[node_id] = (0.0, 0.0, 0.0)
             self.position_status = self.position_source.status(self.position_sources)
         for node_id, motion in self.motion.items():
             if self.position_source is not None:
@@ -2176,6 +2205,12 @@ class SionnaScenario:
                         gain_offset_db=self.args.gain_offset_db,
                         doppler_bin_hz=getattr(self.args, "tap_doppler_bin_hz", 0.0) or None,
                     )
+                    scale = getattr(self.args, "diagnostic_tap_doppler_scale", 1.0)
+                    if scale != 1.0:
+                        taps = [
+                            dataclasses.replace(tap, doppler_hz=tap.doppler_hz * scale)
+                            for tap in taps
+                        ]
                     lane_profiles.append(
                         LaneProfile(rx_port, tx_port, tuple(taps))
                     )
@@ -2392,6 +2427,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "ready",
             detail="scene initialized; entering the repeating update loop",
         )
+        control_frozen = False
         while not stop:
             now = time.monotonic()
             if args.duration > 0.0 and now - start >= args.duration:
@@ -2478,7 +2514,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_id = f"sionna-{iteration}"
             fanout_results: list[dict[str, Any]] | None = None
 
-            if client is not None:
+            if client is not None and not control_frozen:
                 publish_runtime(
                     "sending_control",
                     iteration=iteration,
@@ -2519,6 +2555,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ],
                 }
 
+            freeze_hz = getattr(args, "diagnostic_freeze_profile_hz", 0.0)
+            if client is not None and not control_frozen and freeze_hz and any(
+                abs(tap.doppler_hz) >= freeze_hz
+                for profile in profiles.values()
+                for lane in profile.lanes
+                for tap in lane.taps
+            ):
+                # Diagnostic: this batch was sent; from now on the taps only
+                # rotate, with no update boundaries.
+                control_frozen = True
             total_update_ms = (time.monotonic() - update_started) * 1000.0
 
             record = {
@@ -2563,6 +2609,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             if phase_time_unix_ns is not None:
                 record["phase_time_unix_ns"] = phase_time_unix_ns
+            if control_frozen:
+                record["diagnostic_control_frozen"] = True
             if args.profile_timing:
                 record["timing_ms"]["generation_stages"] = scenario.generation_stages_ms
             if args.profile_digest:

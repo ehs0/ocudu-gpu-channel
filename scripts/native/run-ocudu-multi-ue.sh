@@ -36,6 +36,8 @@ sionna_position_offset="${OCUDU_NATIVE_SIONNA_POSITION_OFFSET:-}"
 sionna_position_timeout_s="${OCUDU_NATIVE_SIONNA_POSITION_TIMEOUT_S:-}"
 # Opt-in per-tap Doppler (bridge --tap-doppler-bin-hz); empty keeps constant taps.
 sionna_tap_doppler_bin_hz="${OCUDU_NATIVE_SIONNA_TAP_DOPPLER_BIN_HZ:-}"
+# Extra bridge words for diagnostics (space-separated); empty by default.
+sionna_bridge_extra_args="${OCUDU_NATIVE_SIONNA_BRIDGE_EXTRA_ARGS:-}"
 web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
 # Receiver noise floor for the Sionna links: the SNR a unit-gain link
 # sees against an absolute per-node floor, so a shadowed UE really decodes
@@ -298,6 +300,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --sionna-position-offset "${sionna_position_offset}"
     --sionna-position-timeout-s "${sionna_position_timeout_s}"
     --sionna-tap-doppler-bin-hz "${sionna_tap_doppler_bin_hz}"
+    --sionna-bridge-extra-args "${sionna_bridge_extra_args}"
   )
   # Read-only observer. It tails the status JSONL the bridge writes and
   # subscribes to broker telemetry; it never touches the control socket.

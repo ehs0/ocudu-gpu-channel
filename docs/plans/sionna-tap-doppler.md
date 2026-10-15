@@ -1,7 +1,7 @@
 # Per-tap Doppler between Sionna updates
 
-Status: **implemented, opt-in**; offline validation done; live V2X run pending
-(see [Validation](#validation)). Date: 2026-10-14. Host for every number
+Status: **implemented, opt-in**; offline validation done; **live V2X fails**: ue0 loses
+slot sync with Doppler on (see [Live](#live-2026-10-14-gb10)). Date: 2026-10-14. Host for every number
 below: DGX Spark GB10, 23.04 MS/s, V2X blind-intersection scenario (blocked
 site), 1.8425 GHz DL / 1.7475 GHz UL.
 
@@ -231,15 +231,74 @@ option A rebuilt from the logged path points (14 → 17 taps p50).
 The CPU reference takes 4.1 ms off and 5.9 ms on per 1 ms slot. It is not a
 real-time path in either mode.
 
-### Live (pending)
+### Live (2026-10-14, GB10)
 
-The live gate (`run-ocudu-v2x-intersection.sh`, blocked, 40 dB, Doppler off
-vs on, compared with `20261014T052435Z`) could not start on 2026-10-14.
-`/home/dev` changed to mode 750 at 06:01 that day, after the reference run,
-and the gate's namespace root cannot enter it. Unprivileged user namespaces
-are also restricted on this host. The ue0 DL SNR/BLER comparison, the live
-slot timing and nominal-slot misses, and the live boundary mismatch are
-therefore still unmeasured.
+`run-ocudu-v2x-intersection.sh`: blocked site, 40 dB, modes v2x / v2x:none /
+no-v2x, 600 s each, same build. Broker processing comes from
+`process_latency_summary`; nominal-slot misses come from broker telemetry.
+The UE metrics are srsUE's `PDSCH` log lines.
+
+| Run | Gate | ue0 re-attach | Broker p50/p99 (ue0) | DL nominal misses | UE out-of-sync / SFN slips | UE PDSCH decodes > 1 ms |
+|---|---|---|---|---|---|---|
+| Off `20261014T093806Z` | pass | 0 | 55 / 2,035 µs | (not sampled) | 0 / 0 | 12 % |
+| Off `20261014T105756Z` | pass | 0 | 55 / 2,015 µs | 1.93 % | 0 / 0 | 13 % |
+| On `20261014T102328Z` (held velocity) | fail | 20 | 60 / 2,045 µs | (not sampled) | 70 / 49,739 | 13 % |
+| On `20261014T104052Z` (feed fix) | fail | 11 | 55 / 2,045 µs | 1.93 % | 40 / 50,196 | 19 %, p99 4.9 ms |
+
+- **Emulator.** Doppler on and off cost the same in the live broker:
+  processing p50/p99 and nominal-slot misses match.
+  - The rate estimate held at 1.043 ± 0.005 (p10–p99).
+  - The time-mapping error at boundaries was 0.74 ms p50 and 1.8 ms p90,
+    which is 0.4–1.0 rad at 85 Hz.
+  - Live boundary NMSE (`analyze_tap_doppler_run.py`): +3.8 dB p50 with
+    constant taps, −0.1 dB with tap Doppler. Offline replay predicted
+    −5.7 dB.
+- **First failure: held velocity.** In the first on-run, the feed held
+  ue0's last sample between episodes with its velocity still set, so the
+  taps kept rotating.
+  - Two taps at the same delay (−29.7 and −33.1 dB) had Doppler only
+    0.08 Hz apart. A 1 Hz bin edge split them, and they drifted into
+    cancellation: band power fell to −40 to −45 dB.
+  - ue0 lost the DL, and SR failure released the RRC connection.
+  - Fix: the bridge now traces a node that sent no new sample since the
+    last update as standing still.
+    `test_an_update_without_a_new_sample_traces_the_node_standing_still`
+    fails without the fix.
+- **Remaining failure: UE out-of-sync, cause not proven.** With the fix,
+  ue0 held for episodes e000–e006 (DL SNR minimum 7.6–14 dB, as with
+  Doppler off).
+  - It then went out of sync in e007 and did not re-attach.
+  - The emulated band power at that moment was normal (−19 dB, the same as
+    in seconds where the UE reported 22–28 dB SNR).
+  - Both on-runs show srsUE `SYNC: detected out-of-sync... skipping slot`
+    followed by tens of thousands of `PBCH-MIB: SFN does not match`. Both
+    off-runs show none.
+  - Just before the first out-of-sync, PDSCH decoding took 1.36 ms
+    (9 LDPC iterations). On the on-run, decode iterations were p90 10
+    against 5 with Doppler off, and decode time was p99 4.9 ms against
+    1.6 ms.
+  - The time-varying channel makes srsUE work harder and lose slot
+    timing. Whether that is srsUE's real-time budget on two pinned cores,
+    its tracking of a rotating channel, or the 10 Hz boundary jumps is not
+    separated yet.
+
+**Diagnostic runs (2026-10-15).** Same setup, Doppler on, with bridge
+switches that only these runs use (`--diagnostic-*`):
+
+| Run | Change | Gate | ue0 out-of-sync / SFN slips | PDSCH > 1 ms, LDPC iter p90 |
+|---|---|---|---|---|
+| `20261015T030717Z` | Doppler scaled ×0.235 (max ~20 Hz) | pass | 0 / 0 | 12.5 %, 5 |
+| `20261015T031831Z` | one moving profile (−59 / −59 / +77 Hz), then no updates, taps rotate 9 min | pass | 0 / 0 | 0.3 %, 2 |
+| `20261015T032918Z` | UE on 4 big cores, gNB on 3 | gNB did not start in 15 s | — | — |
+
+- Low Doppler with full updates and shadowing behaves like Doppler off.
+- Rotation alone, up to 136 Hz between strong taps, does not break srsUE
+  sync. That held profile is a line-of-sight one (strongest tap −13 dB),
+  so this run has no shadowed, low-SNR stretch.
+- Not yet separated: whether it is high Doppler with the 10 Hz update
+  boundaries, or high Doppler with low SNR that drives srsUE out of sync.
+  The UE CPU budget could not be tested without taking big cores from the
+  gNB or the broker.
 
 ## Limits
 
@@ -247,11 +306,12 @@ therefore still unmeasured.
   the next trace by −5.7 dB p50 and −1.9 dB p90 (NMSE). Doppler drift within an
   interval, path births and deaths, and gain changes are not modelled between
   updates.
-- **Frozen feed.** In 22 % of moving updates the feed held ue0's last sample
-  (between episodes) with its velocity still nonzero. A stamped profile then
-  keeps rotating from that sample's time: phases are extrapolated with the
-  last velocity while the geometry stands still. The cleaner fix is in the
-  feed (velocity 0 when stale) and was not made here.
+- **Frozen feed (fixed).** The feed held ue0's last sample between
+  episodes, and with its velocity still set the phases were extrapolated
+  over a geometry that no longer moved. The bridge now traces such a node
+  as standing still (see Live).
+- **Live link loss.** With Doppler on, srsUE ue0 loses slot sync
+  mid-run. The cause is not separated yet (see Live).
 - **History resets.** A history reset and warmup still happens on 99 % of
   moving updates, because delays change. This existing behaviour is
   unchanged by this work.

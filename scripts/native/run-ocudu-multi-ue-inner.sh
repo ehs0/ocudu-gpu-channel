@@ -35,6 +35,7 @@ sionna_position_endpoint=""
 sionna_position_offset=""
 sionna_position_timeout_s=""
 sionna_tap_doppler_bin_hz=""
+sionna_bridge_extra_args=""
 # Multi-UE gate: run length, strict-realtime pass-through, side processes and wire
 # capture. The defaults are the values this gate always used.
 run_duration_seconds="240"
@@ -76,6 +77,7 @@ while [[ "$#" -gt 0 ]]; do
     --sionna-position-offset) sionna_position_offset="${2:-}"; shift 2 ;;
     --sionna-position-timeout-s) sionna_position_timeout_s="${2:-}"; shift 2 ;;
     --sionna-tap-doppler-bin-hz) sionna_tap_doppler_bin_hz="${2:-}"; shift 2 ;;
+    --sionna-bridge-extra-args) sionna_bridge_extra_args="${2:-}"; shift 2 ;;
     --run-duration-seconds) run_duration_seconds="${2:-}"; shift 2 ;;
     --strict-realtime) strict_realtime="${2:-}"; shift 2 ;;
     --ue-exec) ue_exec="${2:-}"; shift 2 ;;
@@ -128,6 +130,10 @@ if [[ -n "${sionna_tap_doppler_bin_hz}" ]]; then
   [[ "${sionna_tap_doppler_bin_hz}" =~ ^[0-9]+([.][0-9]+)?$ ]] || \
     usage_error "invalid Sionna tap Doppler bin: ${sionna_tap_doppler_bin_hz}"
   sionna_bridge_args+=(--tap-doppler-bin-hz "${sionna_tap_doppler_bin_hz}")
+fi
+if [[ -n "${sionna_bridge_extra_args}" ]]; then
+  read -r -a sionna_bridge_extra_words <<<"${sionna_bridge_extra_args}"
+  sionna_bridge_args+=("${sionna_bridge_extra_words[@]}")
 fi
 [[ "${run_duration_seconds}" =~ ^[1-9][0-9]*$ && "${run_duration_seconds}" -ge 160 ]] || \
   usage_error "invalid run duration: ${run_duration_seconds}"

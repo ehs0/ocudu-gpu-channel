@@ -19,6 +19,7 @@ from run_bridge import (  # noqa: E402
     DEFAULT_POSITION_TIMEOUT_S,
     ExternalPositionSource,
     Motion,
+    SionnaScenario,
     parse_args,
     scenario_environment,
 )
@@ -193,6 +194,39 @@ class ExternalPositionSourceTests(unittest.TestCase):
         self.assertEqual(positions["ue0"][0], 103.0)
         self.assertEqual(sources["ue1"], "scripted")
         self.assertEqual(positions["ue1"], MOTION["ue1"].position_at(1.0))
+
+    def test_an_update_without_a_new_sample_traces_the_node_standing_still(self) -> None:
+        class Device:
+            position = velocity = None
+
+        class Scene:
+            def __init__(self) -> None:
+                self.devices: dict[str, Device] = {}
+
+            def get(self, name: str) -> Device:
+                return self.devices.setdefault(name, Device())
+
+        source, transport, _, _ = make_source()
+        scenario = SionnaScenario.__new__(SionnaScenario)
+        scenario.motion = MOTION
+        scenario.position_source = source
+        scenario.position_sources = {}
+        scenario.position_status = None
+        scenario.current_positions = {}
+        scenario.current_velocities = {}
+        scenario.scene = Scene()
+        transport.publish(positions_message(
+            {"ue0": {"position_m": [1.0, 2.0, 3.0], "velocity_mps": [0.0, 13.4, 0.0]}}))
+        scenario.update_positions(0.0)
+        self.assertEqual(scenario.current_velocities["ue0"], (0.0, 13.4, 0.0))
+        self.assertEqual(scenario.scene.get("ue0_rx").velocity, (0.0, 13.4, 0.0))
+        held = scenario.current_positions["ue0"]
+        scenario.update_positions(0.1)  # the publisher has stopped
+        self.assertEqual(scenario.current_positions["ue0"], held)
+        self.assertEqual(scenario.current_velocities["ue0"], (0.0, 0.0, 0.0))
+        self.assertEqual(scenario.scene.get("ue0_tx").velocity, (0.0, 0.0, 0.0))
+        # Scripted nodes keep their own motion either way.
+        self.assertEqual(scenario.current_velocities["ue1"], MOTION["ue1"].velocity_at(0.1))
 
     def test_close_reaches_the_transport(self) -> None:
         source, transport, _, _ = make_source()
