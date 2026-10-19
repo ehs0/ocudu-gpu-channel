@@ -222,7 +222,7 @@ def generate(seed: int, base: dict[str, Any], *, duration_s: float, speed_range:
 
 
 def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: str, placement: str,
-                         duration_s: float) -> dict[str, Any]:
+                         duration_s: float, gnb_antennas: int = 1) -> dict[str, Any]:
     """One gNB and `ue_count` UEs in a registered scene (single-cell mode).
 
     placement `uniform`: each UE (its position, or each waypoint of its walk)
@@ -233,7 +233,9 @@ def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: s
     scene_registry.PEDESTRIAN_SPEED_MPS, every leg in line of sight.
     Each UE draws from its own stream keyed by (scene, seed, UE id), and the
     hotspot centres from one of their own, so adding UEs leaves ue0..ueK
-    exactly where they were.
+    exactly where they were. `gnb_antennas` (definitions.GNB_ANTENNA_CONFIGS)
+    gives gnb0 a 1 x N array for both directions; it draws nothing, so the
+    UEs stand where they stand with any antenna count.
     """
 
     import definitions as bench
@@ -249,6 +251,8 @@ def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: s
         raise ValueError(f"placement must be one of {reg.PLACEMENT_MODES}")
     if not 1 <= ue_count <= bench.MAX_SINGLE_CELL_UES:
         raise ValueError(f"UE count must be 1..{bench.MAX_SINGLE_CELL_UES}")
+    if gnb_antennas not in bench.GNB_ANTENNA_CONFIGS:
+        raise ValueError(f"gNB antennas must be one of {sorted(bench.GNB_ANTENNA_CONFIGS)}")
     entry = reg.SCENES[scene_id]
     base = reg.base_scenario(scene_id)
     if "gnb0" not in base.get("nodes", {}):
@@ -257,12 +261,18 @@ def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: s
     centres = reg.hotspot_centres(scene_id, seed, area) if placement == "hotspot" else []
     ue_template = next(node for node_id, node in base["nodes"].items() if node_id != "gnb0")
     out = {key: copy.deepcopy(value) for key, value in base.items() if key not in ("nodes", "links", "description")}
-    out["name"] = f"single-cell-{scene_id}-{ue_count}ue-{mobility}-{placement}-seed{seed}"
-    out["description"] = (f"Single-cell scheduler benchmark scenario (generator v{GENERATOR_VERSION}): one gnb0 and "
+    out["name"] = f"single-cell-{scene_id}-{ue_count}ue-{gnb_antennas}ant-{mobility}-{placement}-seed{seed}"
+    out["description"] = (f"Single-cell scheduler benchmark scenario (generator v{GENERATOR_VERSION}): one "
+                          f"{gnb_antennas}-antenna gnb0 and "
                           f"{ue_count} {mobility} UEs, {placement} placement, in {scene_id}; every position in line "
                           "of sight of the gNB; PathSolver seed = scenario seed.")
     out["solver"] = dict(out.get("solver") or {}, seed=seed)
-    out["nodes"] = {"gnb0": copy.deepcopy(base["nodes"]["gnb0"])}
+    gnb = copy.deepcopy(base["nodes"]["gnb0"])
+    for key in ("array", "tx_array", "rx_array"):
+        gnb.pop(key, None)
+    # Sionna's PlanarArray: 1 row x N columns, half-wavelength spacing.
+    gnb["array"] = {"rows": 1, "cols": gnb_antennas, "pattern": "iso", "polarization": "V"}
+    out["nodes"] = {"gnb0": gnb}
     out["links"] = []
     placements: dict[str, Any] = {}
     for index in range(ue_count):
@@ -302,7 +312,7 @@ def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: s
     for index in range(ue_count):
         out["links"].append({"from": f"ue{index}", "to": "gnb0", "direction": "uplink", "model": "sionna_rt"})
     out["benchmark"] = {
-        "mode": "single_cell", "seed": seed, "scene_id": scene_id, "ue_count": ue_count,
+        "mode": "single_cell", "seed": seed, "scene_id": scene_id, "ue_count": ue_count, "gnb_antennas": gnb_antennas,
         "mobility": mobility, "placement": placement, "generator_version": GENERATOR_VERSION,
         "duration_s": duration_s, "region": entry["region"],
         "hotspots": {"centres_m": [list(c) for c in centres], "sigma_m": reg.HOTSPOT_SIGMA_M} if centres else None,
@@ -320,6 +330,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--ue-count", type=int, help="single-cell mode: number of UEs")
     parser.add_argument("--mobility", default="static", help="single-cell mode: static or pedestrian")
     parser.add_argument("--placement", default="uniform", help="single-cell mode: uniform or hotspot")
+    parser.add_argument("--gnb-antennas", type=int, default=1, help="single-cell mode: gNB antennas (1 or 2)")
     parser.add_argument("--base", type=pathlib.Path, default=DEFAULT_BASE,
                         help="scenario supplying the scene, solver, gNB and antenna arrays")
     parser.add_argument("--duration-s", type=float, default=600.0,
@@ -343,13 +354,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             scenario = generate_single_cell(args.seed, args.single_cell_scene, args.ue_count,
                                             mobility=args.mobility, placement=args.placement,
-                                            duration_s=args.duration_s)
+                                            duration_s=args.duration_s, gnb_antennas=args.gnb_antennas)
         except ValueError as error:
             print(f"scenario generation failed: {error}", file=sys.stderr)
             return 2
         args.out.write_text(json.dumps(scenario, indent=2) + "\n", encoding="utf-8")
         print(f"event=single_cell_scenario seed={args.seed} scene={args.single_cell_scene} "
-              f"ues={args.ue_count} mobility={args.mobility} placement={args.placement} out={args.out}")
+              f"ues={args.ue_count} gnb_antennas={args.gnb_antennas} mobility={args.mobility} "
+              f"placement={args.placement} out={args.out}")
         return 0
     base = json.loads(args.base.read_text(encoding="utf-8"))
     try:

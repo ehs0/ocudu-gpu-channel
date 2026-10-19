@@ -129,10 +129,14 @@ def record_for(kind: str, k: int | None, t_s: float, positions: dict[str, Any],
     messages = [canonical(make_message(link_id, profiles[link_id], batch_id=bid)) for link_id in link_ids]
     summary = {}
     for link_id, text in zip(link_ids, messages):
-        lane = json.loads(text)["lanes"][0]
-        summary[link_id] = {"taps": len(lane["taps"]),
-                            "strongest_tap_gain_db": max(tap["gain_db"] for tap in lane["taps"]),
-                            "wideband_gain_db": wideband_gain_db(lane["taps"])}
+        # Over every (rx, tx) antenna lane of the link; the wideband gain is
+        # the mean lane power, so a SISO link reads exactly as before.
+        lanes = json.loads(text)["lanes"]
+        taps = [tap for lane in lanes for tap in lane["taps"]]
+        wideband = wideband_gain_db(taps)
+        summary[link_id] = {"taps": max(len(lane["taps"]) for lane in lanes), "lanes": len(lanes),
+                            "strongest_tap_gain_db": max(tap["gain_db"] for tap in taps),
+                            "wideband_gain_db": None if wideband is None else wideband - 10.0 * math.log10(len(lanes))}
     return {"record": kind, "k": k, "t_s": t_s,
             "positions": {node: [round(float(v), 6) for v in xyz] for node, xyz in sorted(positions.items())},
             "link_ids": link_ids, "messages": messages,

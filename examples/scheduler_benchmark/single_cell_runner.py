@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute one single-cell scheduler-benchmark session.
 
-A session is one validated configuration: shared settings (scene, UE count,
+A session is one validated configuration: shared settings (scene, gNB antennas, UE count,
 UE type and placement, traffic profile, seed, durations) and two tests,
 each the shared settings plus its own fields (definitions.TEST_FIELDS; today
 the MAC scheduler). The runner:
@@ -103,12 +103,13 @@ class Session:
     def prepare(self) -> None:
         cfg = self.config
         self.bundle.mkdir(parents=True, exist_ok=True)
-        self.set_status("PREPARING", f"Preparing scene {cfg['scene_id']} with {cfg['ue_count']} {cfg['mobility']} UEs "
-                                     f"({cfg['placement']} placement)")
+        antennas = cfg.get("gnb_antennas", 1)
+        self.set_status("PREPARING", f"Preparing scene {cfg['scene_id']} with a {antennas}-antenna gNB and "
+                                     f"{cfg['ue_count']} {cfg['mobility']} UEs ({cfg['placement']} placement)")
         total_s = cfg["warmup_seconds"] + cfg["measure_seconds"]
         scenario = make_scenario.generate_single_cell(cfg["seed"], cfg["scene_id"], cfg["ue_count"],
                                                       mobility=cfg["mobility"], placement=cfg["placement"],
-                                                      duration_s=total_s + 60.0)
+                                                      duration_s=total_s + 60.0, gnb_antennas=antennas)
         scenario_path = self.bundle / "scenario.json"
         scenario_path.write_text(json.dumps(scenario, indent=2) + "\n", encoding="utf-8")
         noise = json.loads(subprocess.run(

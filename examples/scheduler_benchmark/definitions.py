@@ -39,15 +39,19 @@ UE_GATEWAY = "10.45.1.1"
 
 # --- Schedulers ----------------------------------------------------------------
 # The two intra-slice policies the pinned OCUDU offers
-# (lib/scheduler/policy/scheduler_policy_factory.cpp:13-19). Both are chosen
-# at gNB start-up; there is no runtime switch (the remote-control commands do
-# not include one), which is why the benchmark runs them side by side.
+# (lib/scheduler/policy/scheduler_policy_factory.cpp:13-19), and Max C/I, a
+# parameterisation of the QoS policy. All are chosen at gNB start-up; there is
+# no runtime switch (the remote-control commands do not include one), which is
+# why the benchmark runs them side by side. `policy` is the YAML policy block
+# and `parameters` its values: the gate identifies the loaded policy from the
+# gNB's config dump by both (schedulers_in_config_dump).
 SCHEDULERS: dict[str, dict[str, Any]] = {
     "rr": {
         "title": "Round-Robin (time domain)",
         "short": "RR",
         "source": "lib/scheduler/policy/scheduler_time_rr.cpp",
         "yaml": "  scheduler:\n    policy:\n      rr_sched:\n",
+        "policy": "rr_sched",
         "config_dump_token": "rr_sched:",
         "summary": (
             "Serves the UEs in turn. A UE's priority is the number of newTx "
@@ -80,6 +84,7 @@ SCHEDULERS: dict[str, dict[str, Any]] = {
             "        pdb_enabled: true\n"
             "        gbr_enabled: true\n"
         ),
+        "policy": "qos_sched",
         "config_dump_token": "qos_sched:",
         "summary": (
             "Ranks UEs by weight = GBR x PF x priority x delay and serves the "
@@ -101,7 +106,80 @@ SCHEDULERS: dict[str, dict[str, Any]] = {
             "prio_enabled": True, "pdb_enabled": True, "gbr_enabled": True,
         },
     },
+    "maxci": {
+        "title": "Max C/I (maximum rate)",
+        "short": "Max C/I",
+        "source": "lib/scheduler/policy/scheduler_time_qos.cpp (pf_fairness_coeff 0, QoS terms off)",
+        # The QoS policy with every fairness and QoS term removed: with a = 0
+        # the PF weight r_est / r_avg^a is r_est, and the priority, delay and
+        # GBR weights are 1 when disabled (compute_dl_qos_weights), so the
+        # weight is the UE's estimated rate alone.
+        "yaml": (
+            "  scheduler:\n"
+            "    policy:\n"
+            "      qos_sched:\n"
+            "        combine_function: gbr_prioritized\n"
+            "        pf_fairness_coeff: 0.0\n"
+            "        prio_enabled: false\n"
+            "        pdb_enabled: false\n"
+            "        gbr_enabled: false\n"
+        ),
+        "policy": "qos_sched",
+        # Only for the substring check of gates that predate
+        # schedulers_in_config_dump; it never occurs in the QoS-PF block.
+        "config_dump_token": "pf_fairness_coeff: 0",
+        "summary": (
+            "Serves the UE whose current channel supports the highest rate first "
+            "(weight = estimated rate). Maximises cell throughput at the cost of "
+            "fairness: UEs in a poor channel wait."
+        ),
+        "properties": [
+            "OCUDU's QoS policy with pf_fairness_coeff = 0 and the priority, "
+            "PDB and GBR terms disabled, so the weight is r_est alone.",
+            "Channel-aware, fairness- and QoS-blind; no average-rate memory.",
+            "Not a complete starvation: a UE never allocated goes first once, "
+            "and PRBs the first UE does not need go to the next.",
+            "Expected: highest cell throughput, lowest Jain index, long waits "
+            "for the weakest UE when the cell is oversubscribed.",
+        ],
+        "parameters": {
+            "combine_function": "gbr_prioritized", "pf_fairness_coeff": 0.0,
+            "prio_enabled": False, "pdb_enabled": False, "gbr_enabled": False,
+        },
+    },
 }
+
+
+def _dump_value(text: str) -> Any:
+    text = text.strip()
+    if text.lower() in ("true", "false"):
+        return text.lower() == "true"
+    try:
+        return float(text)
+    except ValueError:
+        return text
+
+
+def schedulers_in_config_dump(policy_block: str) -> list[str]:
+    """The schedulers whose policy and parameters equal a gNB config-dump
+    policy block (the lines under `policy:`, e.g. "  qos_sched:\n    pf_...").
+
+    Values are compared as numbers and booleans, so 0 and 0.0 match; a
+    parameter the dump leaves out takes the QoS policy's default
+    (scheduler_expert_config.h), which is what the gNB runs with."""
+
+    lines = [line for line in policy_block.splitlines() if line.strip()]
+    if not lines:
+        return []
+    policy = lines[0].strip().split(":", 1)[0]
+    found = {}
+    for line in lines[1:]:
+        key, _, value = line.strip().partition(":")
+        found[key.strip()] = _dump_value(value)
+    defaults = SCHEDULERS["qos"]["parameters"] if policy == "qos_sched" else {}
+    loaded = {**defaults, **found}
+    return [name for name, info in SCHEDULERS.items()
+            if info["policy"] == policy and {k: _dump_value(str(v)) for k, v in info["parameters"].items()} == loaded]
 
 # --- 5QI characteristics ---------------------------------------------------------
 # lib/ran/qos/five_qi_qos_mapping.cpp (TS 23.501 Table 5.7.4-1) and the DU's
@@ -275,6 +353,26 @@ def offered_rate_mbps(flow: dict[str, Any]) -> float:
 # cell (single_cell_runner.py). Nothing below depends on CELLS: the topology
 # is generated from the UE count, and the policy vocabulary above is shared.
 SINGLE_CELL_GNB = {"device_id": "gnb0", "tx_port": 2000, "rx_port": 2001, "metrics_port": 8001}
+# gNB antenna configurations. Port i of the gNB uses ZMQ tx 2000 + 2i / rx
+# 2001 + 2i (the rank-1 fixtures' layout); the UEs stay one-port srsUEs, so
+# 2 antennas means DL 2x1 MISO and UL 1x2 SIMO, one layer. The Sionna array
+# is a 1 x N half-wavelength ULA, and the channel of every (rx, tx) antenna
+# pair is solved and replayed as its own lane.
+GNB_ANTENNA_CONFIGS: dict[int, dict[str, Any]] = {
+    1: {"label": "1T1R (SISO)", "short": "1T1R"},
+    2: {"label": "2T2R (DL 2x1 MISO, UL 1x2 SIMO)", "short": "2T2R"},
+}
+
+
+def single_cell_gnb_ports(antennas: int) -> list[dict[str, int]]:
+    """ZMQ endpoints of gNB antenna ports 0..antennas-1."""
+
+    if antennas not in GNB_ANTENNA_CONFIGS:
+        raise ValueError(f"gNB antennas must be one of {sorted(GNB_ANTENNA_CONFIGS)}")
+    return [{"tx_port": SINGLE_CELL_GNB["tx_port"] + 2 * i, "rx_port": SINGLE_CELL_GNB["rx_port"] + 2 * i}
+            for i in range(antennas)]
+
+
 # Records exist for this many UEs (flow ids carry the UE index in 4 bits);
 # which counts may RUN is decided by scene_registry.py from validation
 # evidence, not by this table.

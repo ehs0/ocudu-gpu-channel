@@ -227,6 +227,70 @@ class ScenarioScaling(unittest.TestCase):
         self.assertEqual(scene_registry.catalog(True)["scenes"][0]["startable_ue_counts"], [1, 2, 4])
 
 
+class GnbAntennas(unittest.TestCase):
+    """The 2-antenna gNB: the scenario array, the broker ports and the 2T2R cell."""
+
+    def setUp(self) -> None:
+        import render_single_cell
+        self.render = render_single_cell
+
+    def test_scenario_array_and_unchanged_ues(self) -> None:
+        one = make_scenario.generate_single_cell(3, "sutd_1gnb", 4, mobility="pedestrian", placement="hotspot",
+                                                 duration_s=40)
+        two = make_scenario.generate_single_cell(3, "sutd_1gnb", 4, mobility="pedestrian", placement="hotspot",
+                                                 duration_s=40, gnb_antennas=2)
+        self.assertEqual(two["nodes"]["gnb0"]["array"], {"rows": 1, "cols": 2, "pattern": "iso", "polarization": "V"})
+        self.assertEqual(one["nodes"]["gnb0"]["array"]["cols"], 1)
+        self.assertEqual({n: v for n, v in one["nodes"].items() if n != "gnb0"},
+                         {n: v for n, v in two["nodes"].items() if n != "gnb0"})
+        self.assertEqual((one["benchmark"]["gnb_antennas"], two["benchmark"]["gnb_antennas"]), (1, 2))
+        self.assertEqual(self.render.check_scenario(two, 4), 2)
+        with self.assertRaises(ValueError):
+            make_scenario.generate_single_cell(3, "sutd_1gnb", 1, mobility="static", placement="uniform",
+                                               duration_s=10, gnb_antennas=4)
+
+    def test_topology_has_one_port_per_antenna_with_its_own_floor(self) -> None:
+        text = self.render.render_topology(2, {"gnb0": 1e-2, "ue0": 1e-3, "ue1": 1e-3}, 2)
+        self.assertIn("  - id: gnb0_p1\n    role: port\n    sample_rate_hz: 23040000\n"
+                      "    tx_endpoint: tcp://127.0.0.1:2002\n    rx_endpoint: tcp://127.0.0.1:2003\n"
+                      "    rx_model: rx_noise_gnb0\n", text)
+        self.assertIn("  - id: gnb0\n    tx_ports:\n      - gnb0_p0\n      - gnb0_p1\n"
+                      "    rx_ports:\n      - gnb0_p0\n      - gnb0_p1\n", text)
+        self.assertIn("  - id: ue1\n    tx_ports:\n      - ue1_p0\n    rx_ports:\n      - ue1_p0\n", text)
+        self.assertEqual(self.render.render_topology(2, {}, 1), self.render.render_topology(2, {}))
+
+    def test_2t2r_cell_adaptations(self) -> None:
+        source = (PROJECT_ROOT / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml").read_text()
+        siso = self.render.multi_gnb.render_gnb(source, self.render.GNB_CELL, pathlib.Path("/logs"))
+        self.assertEqual(self.render.render_gnb_antennas(siso, 1), siso)
+        text = self.render.render_gnb_antennas(siso, 2)
+        for token in ("device_args: tx_port0=tcp://127.0.0.1:2000,tx_port1=tcp://127.0.0.1:2002,"
+                      "rx_port0=tcp://127.0.0.1:2001,rx_port1=tcp://127.0.0.1:2003,base_srate=23.04e6\n",
+                      "  nof_antennas_dl: 2\n", "  nof_antennas_ul: 2\n", "      ss2_type: ue_dedicated\n",
+                      "      dci_format_0_1_and_1_1: true\n", "    csi_rs_enabled: false\n",
+                      "    nof_cell_csi_res: 0\n", "  mac_enable: disable\n", "  rx_gain: 0\n"):
+            self.assertEqual(text.count(token), 1, token)
+        # The policy block still goes in exactly once.
+        self.assertEqual(self.render.insert_scheduler_policy(text, "rr").count("rr_sched:"), 1)
+
+    def test_multi_lane_evidence_is_keyed_by_link(self) -> None:
+        import single_cell_analyze
+        line = ("event=control_sample_applied link_id=ue0>gnb0:sionna_rt#r0t0 tag=k=3;sha=0123456789abcdef seqno=5 "
+                "slot=9 sample=100 target_sample=100 count=23040 digest=00000000000000aa unix_ns=1")
+        link_id = single_cell_analyze.APPLIED_LINE.match(line).group(1)
+        self.assertEqual(single_cell_analyze.LANE_SUFFIX.match(link_id).group(1), single_cell_analyze.GNB_REF_LINK)
+        self.assertIsNone(single_cell_analyze.LANE_SUFFIX.match("ue0>gnb0:sionna_rt"))
+
+    def test_evidence_is_per_antenna_count(self) -> None:
+        validation = {"validated": [{"scene_id": "sutd_1gnb", "ue_count": 2},
+                                    {"scene_id": "sutd_1gnb", "ue_count": 4, "gnb_antennas": 2}]}
+        self.assertEqual(scene_registry.validated_ue_counts("sutd_1gnb", validation, 1), [2])
+        self.assertEqual(scene_registry.validated_ue_counts("sutd_1gnb", validation, 2), [4])
+        self.assertEqual(scene_registry.validated_ue_counts("sutd_1gnb", validation), [2, 4])
+        # Startable counts do not depend on the antenna count: 2-antenna evidence opens the count too.
+        self.assertIn(4, scene_registry.catalog(False)["scenes"][0]["startable_ue_counts"])
+
+
 class ChannelTraceReplay(unittest.TestCase):
     def test_verify_detects_any_change(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -376,6 +440,38 @@ class FairnessAudit(unittest.TestCase):
         self.assertAlmostEqual(cmp["paired"]["aggregate_dl_mbps"]["mean_diff"], 10.25 - 11.5)
 
 
+class CellKpis(unittest.TestCase):
+    def test_pooled_worst_and_efficiency(self) -> None:
+        def ue(dl, wait, mean, count, p99, offered, drop, bler):
+            return {"throughput_mbps": {"dl": dl}, "starvation": {"dl_wait_ms": {"p99": wait}},
+                    "delay_radio_ms": {"dl": {"mean": mean, "count": count, "p95": p99 - 1, "p99": p99}},
+                    "link": {"dl_mcs": 10, "dl_bler": bler, "ul_bler": 0.0},
+                    "offered_packets": offered, "drop_rate": drop, "pdb_violation_rate": drop}
+        m = {"aggregate_throughput_mbps": {"mac_dl": 18.0}, "resource_utilization": {"dl_prb": 0.5, "nof_prb": 100},
+             "per_ue": {"ue0": ue(10.0, 2.0, 10.0, 300, 20.0, 100, 0.0, 0.01),
+                        "ue1": ue(2.0, 9.0, 40.0, 100, 90.0, 300, 0.2, 0.03)}}
+        k = validation.cell_kpis(m)
+        self.assertEqual((k["worst_ue_dl_mbps"], k["worst_ue_dl_wait_p99_ms"], k["worst_ue_dl_delay_p99_ms"]),
+                         (2.0, 9.0, 90.0))
+        self.assertAlmostEqual(k["dl_delay_mean_ms"], (10 * 300 + 40 * 100) / 400)   # weighted by received packets
+        self.assertAlmostEqual(k["drop_rate"], 0.2 * 300 / 400)                      # weighted by offered packets
+        self.assertAlmostEqual(k["dl_bler"], 0.02)
+        self.assertAlmostEqual(k["dl_spectral_efficiency_bps_hz"], 18e6 / (50 * 180e3))
+        # Older reports without these fields give None, not an error.
+        self.assertIsNone(validation.cell_kpis({"per_ue": {"ue0": {}}})["dl_delay_mean_ms"])
+
+
+class SchedulerIdentity(unittest.TestCase):
+    def test_config_dump_names_exactly_one_scheduler(self) -> None:
+        block = lambda name: "".join(f"      {line}\n" for line in bench.SCHEDULERS[name]["yaml"].splitlines()[2:])
+        for name in bench.SCHEDULERS:
+            self.assertEqual(bench.schedulers_in_config_dump(block(name)), [name])
+        self.assertEqual(bench.schedulers_in_config_dump("      rr_sched: ~\n"), ["rr"])
+        # Numbers compare by value; a changed parameter is no known scheduler.
+        self.assertEqual(bench.schedulers_in_config_dump(block("maxci").replace("0.0", "0")), ["maxci"])
+        self.assertEqual(bench.schedulers_in_config_dump(block("qos").replace("2.0", "1.0")), [])
+
+
 class ExecutionOrder(unittest.TestCase):
     def test_orders(self) -> None:
         arms = bench.TEST_ARMS
@@ -462,6 +558,10 @@ class ResetLifecycle(unittest.TestCase):
         with self.assertRaises(controller.ValidationError) as caught:
             self.ctl.start({"ue_count": 1, "tests": [{"scheduler": "rr"}, {"scheduler": "pf", "extra": 1}]})
         self.assertIn("tests", caught.exception.errors)
+        for antennas in (4, True, "2"):
+            with self.assertRaises(controller.ValidationError) as caught:
+                self.ctl.start({"ue_count": 1, "gnb_antennas": antennas})
+            self.assertIn("gnb_antennas", caught.exception.errors)
         self.assertEqual(self.ctl.status()["session_id"], first["session_id"])
         self.assertTrue(self.ctl.status()["runner_alive"])
 

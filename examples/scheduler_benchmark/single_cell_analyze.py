@@ -53,6 +53,11 @@ APPLIED_LINE = re.compile(
 NOISE_LINE = re.compile(r"^event=noise_epoch node=(\S+) sample=(\d+) applied=([01])$")
 NOISE_MISSED = re.compile(r"^event=noise_epoch_missed node=(\S+) target_sample=(\d+) sample=(\d+)$")
 TAG = re.compile(r"^(?:k=(\d+)|attach);sha=([0-9a-f]{16})$")
+# A link with more than one antenna lane (a 2-antenna gNB) applies its whole
+# matrix profile atomically and logs it once, under the key of its first lane,
+# `<link>#r0t0` (src/config.cpp lane_key); the digest covers every lane
+# (runtime_control.h matrix_profile_digest). Evidence is keyed by the link.
+LANE_SUFFIX = re.compile(r"^(.+)#r\d+t\d+$")
 VALID_SEGMENT_FRACTION = 0.9
 
 RADIO_TIME_DEFINITIONS = {
@@ -202,6 +207,9 @@ class SingleCellRun:
                 entry = {"tag": tag, "sha16": tag_match.group(2), "seqno": int(seqno), "slot": int(slot),
                          "sample": int(sample), "target_sample": int(target), "count": int(count),
                          "digest": digest, "unix_ns": int(unix_ns)}
+                lane_match = LANE_SUFFIX.match(link_id)
+                if lane_match:
+                    link_id = lane_match.group(1)
                 if key in self.applied[link_id]:
                     self.duplicate_applies += 1
                 self.applied[link_id][key] = entry

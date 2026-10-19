@@ -19,7 +19,10 @@ movement) or `pedestrian` (random-waypoint walk at PEDESTRIAN_SPEED_MPS,
 around its own hotspot when placement is hotspot).
 
 Whether a (scene, UE count) combination may be STARTED from the web UI is a
-separate fact: it needs a recorded end-to-end run in scene_validation.json.
+separate fact: it needs a recorded end-to-end run in scene_validation.json,
+with either gNB antenna count (an entry without `gnb_antennas` is a 1-antenna
+run). The antenna count changes the cell, not where the UEs stand or whether
+they attach (both counts attached 4 UEs on sutd_1gnb, g22 and g25).
 Combinations without that evidence are listed as unvalidated, and the
 controller refuses them unless the operator started it with
 --allow-unvalidated to produce the evidence.
@@ -213,10 +216,14 @@ def load_validation() -> dict[str, Any]:
         return {"validated": []}
 
 
-def validated_ue_counts(scene_id: str, validation: dict[str, Any] | None = None) -> list[int]:
+def validated_ue_counts(scene_id: str, validation: dict[str, Any] | None = None,
+                        gnb_antennas: int | None = None) -> list[int]:
+    """UE counts with evidence for the scene; for one antenna count, or any."""
+
     validation = load_validation() if validation is None else validation
     return sorted({int(item["ue_count"]) for item in validation.get("validated", [])
-                   if item.get("scene_id") == scene_id})
+                   if item.get("scene_id") == scene_id
+                   and (gnb_antennas is None or int(item.get("gnb_antennas", 1)) == gnb_antennas)})
 
 
 def base_scenario(scene_id: str) -> dict[str, Any]:
@@ -265,8 +272,9 @@ def sample_near(rng: random.Random, area: PrismRegion, centre: Sequence[float]) 
 def catalog(allow_unvalidated: bool = False) -> dict[str, Any]:
     """What /api/benchmark/options offers: installed scenes with adapters.
 
-    `startable_ue_counts` is what the UI may enable; it is the validated set,
-    or every count with records when the operator allowed unvalidated runs.
+    `startable_ue_counts` is what the UI may enable, for either gNB antenna
+    count; it is the validated set, or every count with records when the
+    operator allowed unvalidated runs.
     """
 
     import definitions as bench  # local: keep this module importable alone

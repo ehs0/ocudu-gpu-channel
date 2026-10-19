@@ -11,7 +11,7 @@
 #
 # Usage (all paths absolute):
 #   run-single-cell-policy.sh --run-root DIR --scenario FILE --channel-bundle DIR
-#     --traffic-bundle DIR --policy rr|qos --ue-count N --profile NAME --seed S
+#     --traffic-bundle DIR --policy rr|qos|maxci --ue-count N --profile NAME --seed S
 #     [--awgn-snr-db DB|off] [--tx-power-ul P] [--tx-power-dl P] [--gnb-rx-gain DB]
 #     [--attach-timeout S] [--drain-seconds S] [--warmup-seconds S] [--channel-build DIR]
 # Environment: OCUDU_NATIVE_ROOT, OCUDU_NATIVE_SIONNA_PYTHON (scripts/native/env.sh).
@@ -59,7 +59,7 @@ done
 for path in "${scenario}" "${channel_bundle}" "${traffic_bundle}"; do
   [[ "${path}" == /* && -e "${path}" ]] || usage_error "missing input: ${path}"
 done
-[[ "${policy}" =~ ^(rr|qos)$ ]] || usage_error "--policy must be rr or qos"
+[[ "${policy}" =~ ^(rr|qos|maxci)$ ]] || usage_error "--policy must be rr, qos or maxci"
 [[ "${ue_count}" =~ ^([1-9]|1[0-6])$ ]] || usage_error "--ue-count must be 1..16"
 [[ "${profile}" =~ ^[a-z_]+$ ]] || usage_error "invalid --profile"
 [[ "${seed}" =~ ^(0|[1-9][0-9]{0,8})$ ]] || usage_error "--seed must be a non-negative integer"

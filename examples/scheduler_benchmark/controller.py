@@ -47,7 +47,7 @@ STOP_TIMEOUT_S = 150.0
 CLEANUP_GRACE_S = 45.0
 TERMINAL_STATES = ("COMPLETED", "UNQUALIFIED", "FAILED", "STOPPED")
 DEFAULTS = {
-    "scene_id": "sutd_1gnb", "ue_count": 4, "tests": [{"scheduler": "rr"}, {"scheduler": "qos"}],
+    "scene_id": "sutd_1gnb", "ue_count": 4, "gnb_antennas": 2, "tests": [{"scheduler": "rr"}, {"scheduler": "qos"}],
     "traffic_profile": "mixed",
     "seed": 20261016, "measure_seconds": 120, "warmup_seconds": 10, "channel_update_hz": 10, "repeat_count": 1,
     "comparison_order": "abba", "strict_replay": True, "mobility": "static", "placement": "uniform",
@@ -170,6 +170,8 @@ class Controller:
             # one selector per field in each test's panel).
             "tests": {"arms": [{"id": arm, "label": bench.TEST_ARM_LABELS[arm]} for arm in bench.TEST_ARMS],
                       "fields": {name: list(choices) for name, choices in bench.TEST_FIELDS.items()}},
+            "gnb_antenna_configs": [{"id": count, "label": info["label"], "short": info["short"]}
+                                    for count, info in bench.GNB_ANTENNA_CONFIGS.items()],
             "traffic_profiles": [{"id": key, "label": info["title"], "role_rule": info["role_rule"]}
                                  for key, info in bench.SINGLE_CELL_PROFILES.items()],
             "comparison_orders": list(ORDERS),
@@ -211,6 +213,9 @@ class Controller:
             errors["scene_id"] = f"unknown scene; installed: {', '.join(catalog)}"
         elif not scene["installed"]:
             errors["scene_id"] = f"scene files missing: {', '.join(scene['missing_files'])}"
+        antennas = cfg["gnb_antennas"]
+        if isinstance(antennas, bool) or antennas not in bench.GNB_ANTENNA_CONFIGS:
+            errors["gnb_antennas"] = f"one of {', '.join(map(str, bench.GNB_ANTENNA_CONFIGS))}"
         if not isinstance(cfg["ue_count"], int) or isinstance(cfg["ue_count"], bool):
             errors["ue_count"] = "must be an integer"
         elif scene is not None and cfg["ue_count"] not in scene["startable_ue_counts"]:
@@ -592,6 +597,7 @@ class Results:
             bench_meta = scenario.get("benchmark") or {}
             return {**identity, "available": True, "scene_id": self.controller.session["scene_id"],
                     "mobility": bench_meta.get("mobility"), "placement": bench_meta.get("placement"),
+                    "gnb_antennas": bench_meta.get("gnb_antennas", 1),
                     "hotspots": bench_meta.get("hotspots"), "gnb": scenario["nodes"]["gnb0"].get("start_m"),
                     "ues": sorted((n for n in scenario["nodes"] if n != "gnb0"), key=lambda n: int(n[2:])), "timeline": self.timeline}
 

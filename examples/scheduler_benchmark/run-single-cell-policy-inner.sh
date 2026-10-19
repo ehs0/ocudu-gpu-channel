@@ -260,7 +260,7 @@ while True:
 dump = text[start:start + 20000] if start >= 0 else ""
 block = re.search(r"\n( *)policy:\n((?:\1  .*\n)+)", dump)
 body = block.group(2) if block else ""
-found = [name for name, info in d.SCHEDULERS.items() if info["config_dump_token"] in body]
+found = d.schedulers_in_config_dump(body)
 ok = found == [policy]
 print(json.dumps({"ok": ok, "gnbs": {"gnb0": {"requested": policy, "found_in_config_dump": found, "ok": ok,
                                                "policy_block": body}}}, indent=2))

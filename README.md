@@ -62,6 +62,9 @@ between the radio endpoints.
 - **CPU reference backend** — same step set, used by tests and local development.
 - **Sionna RT bridge and Web UI** — live matrix updates, moving scene and ray
   views, channel/resource plots, and independent scheduler metrics for each gNB.
+- **RAN benchmark** — live OCUDU/srsUE benchmarks under a shared, reproducible
+  channel; currently the MAC scheduler benchmark, with more RAN functions to
+  follow ([details](#ran-benchmark)).
 - Example topologies in [`examples/`](examples/): single-edge MVP, 3-node
   interference + crosstalk graph, 2-cell / 4-node multi-gNB, multi-UE OCUDU
   Docker, 16-edge stress, and TR 38.901 §7.7.2 TDL-A through TDL-E profiles.
@@ -169,6 +172,9 @@ inject scheduling stalls). The deeper [technical reference
 
 ## Benchmark
 
+Broker latency benchmark. For RAN-level benchmarks on live stacks, see
+[RAN benchmark](#ran-benchmark).
+
 ```sh
 # CPU reference (any platform)
 ./build/ocudu-gpu-channel-bench --config examples/configs/topologies/basic/topology.local.cpu.yaml --duration 10s --scs-khz 30
@@ -209,6 +215,31 @@ continuity error):
 ```sh
 ./build/ocudu-gpu-channel --config examples/configs/topologies/basic/topology.mvp.cuda.yaml --duration 20s --strict-realtime
 ```
+
+## RAN benchmark
+
+The emulator also serves as a testbed for benchmarking RAN functions on live
+OCUDU gNB and srsUE stacks: the alternatives under test see the same seeded
+Sionna channel and the same offered traffic, so differences in the outcome come
+from the function under test rather than from the radio conditions.
+
+Currently available:
+
+- **MAC scheduler benchmark** —
+  [`examples/scheduler_benchmark/`](examples/scheduler_benchmark/README.md)
+  compares OCUDU's round-robin (`rr`) and QoS-aware PF (`qos`) schedulers.
+  A two-cell mode runs both policies side by side on one fanned-out channel;
+  a single-cell mode runs them one after another on a frozen channel and
+  traffic trace, with a web UI to start, stop and replace sessions. Reports
+  cover application-layer throughput, delay, PDB violations and fairness, and
+  MAC-layer PRB use, spectral efficiency and starvation.
+
+```sh
+bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh
+```
+
+The scheduler benchmark is the first RAN benchmark. Benchmarks for other RAN
+functions will be added under `examples/` as they are built.
 
 ## Remote RTX workstation
 

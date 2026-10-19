@@ -95,11 +95,17 @@ th { font-weight: 500; color: var(--muted); }
 td.num, th.num { text-align: right; }
 .inline-bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--muted); vertical-align: middle; margin-right: 6px; }
 .table-wrap { overflow-x: auto; }
+/* The class rules below set display, which would otherwise beat the hidden attribute. */
+[hidden] { display: none !important; }
 .scene { position: relative; height: 460px; padding: 0; overflow: hidden; }
 #scene3d { position: absolute; inset: 0; }
-.scene-overlay { position: absolute; left: 10px; top: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; }
+/* Overlays let drags through to the canvas; only their chips (tooltips) and buttons take the pointer. */
+.scene-overlay { position: absolute; left: 10px; top: 10px; right: 110px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; pointer-events: none; }
+.scene-toolbar { position: absolute; right: 10px; top: 10px; display: flex; gap: 6px; }
+.scene-hint { position: absolute; right: 10px; top: 44px; color: var(--muted); font-size: .6875rem; pointer-events: none; }
 .chip { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 3px 7px; }
-.scene-legend { position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; }
+.scene-legend { position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; pointer-events: none; }
+.scene-legend .chip { pointer-events: auto; }
 .scene-legend .mat { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--rule); }
 .swatch.dash { background: none !important; border-top: 2px dashed currentColor; height: 0; }
 .scene-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: .875rem; }
@@ -107,6 +113,24 @@ td.num, th.num { text-align: right; }
 .heat-row { display: grid; grid-template-columns: 44px 1fr; gap: 6px; align-items: center; font: 400 .75rem var(--font-mono); }
 .heat-cells { display: flex; gap: 1px; height: 14px; }
 .heat-cells i { flex: 1; border-radius: 1px; }
+.heat-axis { position: relative; height: 16px; font: 400 11px var(--font-body); color: var(--muted); }
+.heat-axis span { position: absolute; top: 2px; transform: translateX(-50%); white-space: nowrap; }
+.heat-axis span:first-child { transform: none; } .heat-axis span:last-child { transform: translateX(-100%); }
+.axis-note { font-size: .75rem; color: var(--muted); margin: 2px 0 0; }
+/* Comparison cells: a fixed-width bar box (right edges aligned) and the number
+   split at the decimal point (decimal points aligned) in every column. */
+td.cmp { text-align: right; white-space: nowrap; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td.cmp .bar-box { display: inline-flex; justify-content: flex-end; width: 64px; margin-right: 8px; vertical-align: middle; }
+td.cmp .bar-box .inline-bar { margin-right: 0; }
+td.cmp .int { display: inline-block; width: 6ch; text-align: right; }
+/* Same column widths in the overall and the per-UE table. */
+table.cmp-table { table-layout: fixed; }
+table.cmp-table tr.group th { padding-top: 12px; color: var(--ink); font-family: var(--font-display); font-size: .9375rem; } table.cmp-table th:first-child { width: 34%; }
+td.cmp .frac { display: inline-block; width: 4ch; text-align: left; }
+.inline-bar.better { background: var(--good); } .inline-bar.worse { background: var(--bad); }
+.ue-tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 8px; }
+.ue-tabs button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; }
+.ue-tabs button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
 .empty { color: var(--muted); font-size: .875rem; padding: 12px 0; }
 .tests { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px; }
@@ -127,6 +151,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
   <form class="controls" id="controls" onsubmit="return false">
     <div class="field"><span class="label">UE count</span><select id="ueCount"></select></div>
     <div class="field"><span class="label">Scene</span><select id="scene"></select></div>
+    <div class="field"><span class="label">gNB antennas</span><select id="gnbAntennas"></select></div>
     <div class="field"><span class="label">UE type</span><select id="mobility"></select></div>
     <div class="field"><span class="label">UE placement</span><select id="placement"></select></div>
     <div class="field"><span class="label">Traffic</span><select id="profile"></select></div>
@@ -172,11 +197,14 @@ details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
       <p class="muted" id="chanNote">Downlink wideband gain of each UE's link per radio second, from the frozen trace.</p>
       <div class="legend" id="chanLegend"></div>
       <div class="chart" id="chanChart"></div>
+      <p class="axis-note" id="chanAxis"></p>
     </section>
     <section class="panel scene" id="sceneHost" aria-label="Scene and UE positions">
       <div id="scene3d"></div>
       <div class="scene-overlay" id="sceneOverlay"></div>
       <div class="scene-legend" id="sceneLegend"></div>
+      <div class="scene-toolbar"><button type="button" id="sceneResetView">Reset view</button></div>
+      <div class="scene-hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
       <div class="scene-empty" id="sceneEmpty">No scene yet.</div>
     </section>
   </div>
@@ -188,7 +216,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
 
   <section class="panel" aria-labelledby="cmpTitle">
     <h2 id="cmpTitle">Comparison</h2>
-    <p class="muted">Means over valid radio seconds (warm-up excluded); a policy with several runs is averaged. Delays are radio time.</p>
+    <p class="muted">Means over valid radio seconds (warm-up excluded); a policy with several runs is averaged. Delays are radio time. ↑ / ↓: higher / lower is better; green marks the better test, red the worse. Hover a metric for its definition.</p>
     <div class="table-wrap" id="comparison"><div class="empty">Appears when the runs finish.</div></div>
     <details style="margin-top:10px"><summary>Paired difference per radio second and the A/A control</summary><div class="table-wrap" id="paired"></div></details>
   </section>
@@ -256,7 +284,8 @@ function clearView() {
 
 // ---------------------------------------------------------------- controls
 function selection() {
-  return { ue_count: Number($('ueCount').value), scene_id: $('scene').value, mobility: $('mobility').value,
+  return { ue_count: Number($('ueCount').value), scene_id: $('scene').value,
+           gnb_antennas: Number($('gnbAntennas').value), mobility: $('mobility').value,
            placement: $('placement').value, traffic_profile: $('profile').value,
            tests: testSelection(),
            seed: Number($('seed').value), measure_seconds: Number($('measure').value),
@@ -267,6 +296,8 @@ function fillOptions() {
   const o = state.options, d = o.defaults;
   $('scene').innerHTML = o.scenes.map((s) => `<option value="${esc(s.id)}" ${s.installed ? '' : 'disabled'}>${esc(s.label)}${s.validated ? '' : ' (not validated)'}</option>`).join('');
   $('scene').value = d.scene_id;
+  $('gnbAntennas').innerHTML = (o.gnb_antenna_configs || []).map((a) => `<option value="${a.id}">${esc(a.label)}</option>`).join('');
+  $('gnbAntennas').value = String(d.gnb_antennas);
   $('profile').innerHTML = o.traffic_profiles.map((p) => `<option value="${esc(p.id)}" title="${esc(p.role_rule)}">${esc(p.label)}</option>`).join('');
   $('profile').value = d.traffic_profile;
   buildTestPanels();
@@ -287,6 +318,7 @@ function fillOptions() {
 const FIELD_LABELS = { scheduler: 'MAC scheduler' };
 const policyOf = (id) => state.options?.policies.find((p) => p.id === id);
 const policyShort = (id) => policyOf(id)?.short || id;
+const antennaShort = (n) => state.options?.gnb_antenna_configs?.find((a) => a.id === n)?.short || `${n} ant`;
 function testSelection() {
   return state.options.tests.arms.map((arm) => Object.fromEntries(Object.keys(state.options.tests.fields).map(
     (field) => [field, $(`${arm.id}-${field}`)?.value])));
@@ -329,8 +361,11 @@ function sceneChanged() {
   const counts = s ? s.startable_ue_counts : [];
   const keep = $('ueCount').value;
   const offered = s ? (s.ue_counts || counts) : [];
-  $('ueCount').innerHTML = offered.length ? offered.map((n) => `<option value="${n}" ${counts.includes(n) ? '' : 'disabled'}>${n} UE${n > 1 ? 's' : ''}${n === 1 ? ' (control)' : ''}${counts.includes(n) ? '' : ' (not validated)'}</option>`).join('')
-    : '<option value="">none</option>';
+  // Nothing startable: select an explicit placeholder rather than leaving a
+  // disabled count selected, which would only fail when Start is pressed.
+  const none = counts.length ? '' : '<option value="" selected>no validated UE count</option>';
+  $('ueCount').innerHTML = none + (offered.length ? offered.map((n) => `<option value="${n}" ${counts.includes(n) ? '' : 'disabled'}>${n} UE${n > 1 ? 's' : ''}${n === 1 ? ' (control)' : ''}${counts.includes(n) ? '' : ' (not validated)'}</option>`).join('')
+    : '');
   if (!counts.map(String).includes($('ueCount').value) && counts.length) $('ueCount').value = String(counts[0]);
   if (counts.map(String).includes(keep)) $('ueCount').value = keep;
   const labels = state.options.mobility_labels || {}, plabels = state.options.placement_labels || {};
@@ -344,11 +379,16 @@ function markPending() {
   const cfg = state.status?.config;
   if (!cfg) { $('pending').textContent = ''; return; }
   const sel = selection();
-  const differs = Object.keys(sel).some((k) => JSON.stringify(sel[k]) !== JSON.stringify(cfg[k]));
+  // Sessions recorded before the antenna setting ran a 1-antenna gNB.
+  const differs = Object.keys(sel).some((k) => JSON.stringify(sel[k]) !== JSON.stringify(k === 'gnb_antennas' ? (cfg[k] ?? 1) : cfg[k]));
   $('pending').textContent = differs ? 'Changes pending — start a new benchmark to apply.' : '';
 }
 async function startBenchmark() {
   $('errorBox').textContent = '';
+  if (!$('ueCount').value) {
+    $('errorBox').textContent = `No UE count of ${$('scene').value} is validated; pick another scene (see scene_validation.json).`;
+    return;
+  }
   const running = state.status && !TERMINAL.includes(state.status.state) && state.status.state !== 'IDLE';
   if (running && !confirm('Stop the running benchmark, delete its measurements, and start a new one?')) return;
   // Clear what is on screen now: nothing shown from here on belongs to the old session.
@@ -401,7 +441,7 @@ function renderStatus() {
   $('progressBar').style.width = `${Math.round(100 * progress)}%`;
   const c = s?.config;
   $('sessionKv').innerHTML = c ? [
-    ['Scene', c.scene_id], ['UEs', c.ue_count], ['Traffic', c.traffic_profile], ['Tests', (c.tests || []).map((t, i) => `T${i + 1} ${policyShort(t.scheduler)}`).join(' vs ')],
+    ['Scene', c.scene_id], ['gNB', antennaShort(c.gnb_antennas ?? 1)], ['UEs', c.ue_count], ['Traffic', c.traffic_profile], ['Tests', (c.tests || []).map((t, i) => `T${i + 1} ${policyShort(t.scheduler)}`).join(' vs ')],
     ['Seed', c.seed], ['Measure', `${c.measure_seconds} s + ${c.warmup_seconds} s warm-up`], ['UE type', c.mobility], ['Placement', c.placement], ['Order', `${c.comparison_order} × ${c.repeat_count}`],
   ].map(([k, v]) => `<div><span class="label">${k}</span><b>${esc(v)}</b></div>`).join('') : '';
   markPending();
@@ -429,18 +469,22 @@ function renderGates() {
 }
 
 // ---------------------------------------------------------------- charts
-function lineChart(host, series, { yLabel, xMax, yMin = null, yMax = null, height = 200, fmtY = (v) => fmt(v, 1) }) {
-  const W = 640, H = height, m = { l: 44, r: 10, t: 8, b: 24 };
+// x is radio time in seconds; [xMin, xMax] is the shown range (e.g. the
+// measured seconds after the warm-up). yTitle / xTitle label the axes.
+function lineChart(host, series, { yLabel, yTitle = yLabel, xTitle = 'radio time (s)', xMin = 0, xMax, yMin = null, yMax = null, height = 200, fmtY = (v) => fmt(v, 1) }) {
+  const W = 640, H = height, m = { l: 58, r: 10, t: 8, b: 38 };
   const all = series.flatMap((s) => s.points.map((p) => p[1])).filter(fin);
   if (!all.length) { host.innerHTML = '<div class="empty">No data yet.</div>'; return; }
   let lo = yMin ?? Math.min(...all), hi = yMax ?? Math.max(...all);
   if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
   const pad = (hi - lo) * 0.06; if (yMin == null) lo -= pad; if (yMax == null) hi += pad;
-  const xm = Math.max(1, xMax ?? Math.max(...series.flatMap((s) => s.points.map((p) => p[0]))));
-  const X = (x) => m.l + (W - m.l - m.r) * x / xm, Y = (y) => m.t + (H - m.t - m.b) * (1 - (y - lo) / (hi - lo));
+  const x0 = xMin, xm = Math.max(x0 + 1, xMax ?? Math.max(...series.flatMap((s) => s.points.map((p) => p[0]))));
+  const X = (x) => m.l + (W - m.l - m.r) * (x - x0) / (xm - x0), Y = (y) => m.t + (H - m.t - m.b) * (1 - (y - lo) / (hi - lo));
   const ticks = 4, grid = [];
   for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks; grid.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--rule)" stroke-width="1"/><text x="${m.l - 6}" y="${Y(v) + 3}" text-anchor="end">${fmtY(v)}</text>`); }
-  const xt = [0, Math.round(xm / 2), xm].map((x) => `<text x="${X(x)}" y="${H - 6}" text-anchor="middle">${x} s</text>`).join('');
+  const xt = [x0, Math.round((x0 + xm) / 2), xm].map((x) => `<text x="${X(x)}" y="${H - m.b + 14}" text-anchor="middle">${x}</text>`).join('')
+    + `<text x="${(m.l + W - m.r) / 2}" y="${H - 4}" text-anchor="middle">${esc(xTitle)}</text>`
+    + `<text transform="translate(12 ${(m.t + H - m.b) / 2}) rotate(-90)" text-anchor="middle">${esc(yTitle)}</text>`;
   const paths = series.map((s) => {
     const d = s.points.filter((p) => fin(p[1])).map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
     return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"${s.dashed ? ' stroke-dasharray="5 3"' : ''}/>`;
@@ -449,8 +493,8 @@ function lineChart(host, series, { yLabel, xMax, yMin = null, yMax = null, heigh
   const svg = host.querySelector('svg'), xh = svg.querySelector('.xh'), tip = $('tooltip');
   svg.addEventListener('mousemove', (ev) => {
     const r = svg.getBoundingClientRect(); const x = (ev.clientX - r.left) / r.width * W;
-    const t = Math.round((x - m.l) / (W - m.l - m.r) * xm);
-    if (t < 0 || t > xm) { xh.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; return; }
+    const t = Math.round(x0 + (x - m.l) / (W - m.l - m.r) * (xm - x0));
+    if (t < x0 || t > xm) { xh.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; return; }
     xh.setAttribute('x1', X(t)); xh.setAttribute('x2', X(t)); xh.setAttribute('visibility', 'visible');
     const rows = series.map((s) => { const p = s.points.find((q) => q[0] === t); return p ? `<div><span class="swatch" style="background:${s.color}"></span> ${esc(s.name)} <b class="num">${fmtY(p[1])}</b></div>` : ''; }).join('');
     tip.innerHTML = `<div class="label">t = ${t} s · ${esc(yLabel)}</div>${rows}`; tip.style.display = 'block';
@@ -458,6 +502,11 @@ function lineChart(host, series, { yLabel, xMax, yMin = null, yMax = null, heigh
   });
   svg.addEventListener('mouseleave', () => { xh.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
 }
+// The session's warm-up: the radio seconds after S0 that are replayed but not measured.
+const warmupSeconds = () => state.status?.config?.warmup_seconds ?? state.results?.runs?.find((r) => r.report)?.report?.warmup_seconds ?? 0;
+const axisNote = (w) => w
+  ? `Measured seconds only. The x axis is radio time since the measurement start (S0), which includes the ${w} s warm-up: the first ${w} s are replayed (channel and traffic) but excluded from every KPI, so the axis starts at ${w} s.`
+  : 'The x axis is radio time since the measurement start (S0); this session has no warm-up.';
 const legendHtml = (ues) => ues.map((ue) => `<span>${ueSwatch(ue)}${esc(ue)}</span>`).join('');
 
 function renderChannel() {
@@ -466,21 +515,28 @@ function renderChannel() {
   const secs = sc.timeline.seconds;
   $('chanLegend').innerHTML = legendHtml(sc.ues);
   $('chanNote').textContent = `Downlink wideband gain (dB, emulator scale) per radio second from the frozen trace sha256 ${sc.timeline.trace_sha256.slice(0, 12)}…; every policy run replays exactly these taps.`;
-  lineChart($('chanChart'), sc.ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: secs.map((s) => [s.t, s.gain_db[`gnb0>${ue}:sionna_rt`]]) })),
-    { yLabel: 'DL gain dB', xMax: secs.length ? secs[secs.length - 1].t : 1 });
+  const w = warmupSeconds();
+  lineChart($('chanChart'), sc.ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: secs.filter((s) => s.t >= w).map((s) => [s.t, s.gain_db[`gnb0>${ue}:sionna_rt`]]) })),
+    { yLabel: 'DL gain dB', yTitle: 'DL wideband gain (dB)', xTitle: 'radio time (s)', xMin: w, xMax: secs.length ? secs[secs.length - 1].t : 1 });
+  $('chanAxis').textContent = axisNote(w);
 }
 
 function heatmap(report, ues) {
   const segs = report.segments || [];
   const total = report.radio_seconds_total || segs.length || 1;
-  const row = (ue) => `<div class="heat-row"><span>${esc(ue)}</span><div class="heat-cells">${Array.from({ length: total }, (_, k) => {
-    const s = segs[k]; const v = s?.ues?.[ue]?.dl_prb_share;
+  const w = report.warmup_seconds || 0;
+  const row = (ue) => `<div class="heat-row"><span>${esc(ue)}</span><div class="heat-cells">${Array.from({ length: total - w }, (_, i) => {
+    const k = w + i; const s = segs[k]; const v = s?.ues?.[ue]?.dl_prb_share;
     const style = fin(v) ? `background:color-mix(in oklab, var(--seq-1) ${Math.round(100 * v)}%, var(--seq-0))` : 'background:var(--sunken)';
     return `<i style="${style}" title="${esc(ue)} t=${k} s PRB share ${fin(v) ? pct(v) : 'n/a'}${s && !s.valid ? ' (invalid: ' + esc(s.reasons.join('; ')) + ')' : ''}"></i>`;
   }).join('')}</div></div>`;
-  return `<div class="label" style="margin-top:10px">DL PRB share per radio second (darker = larger share)</div><div class="heat">${ues.map(row).join('')}</div>`;
+  const ticks = [w, Math.round((w + total) / 2), total].map((t) => `<span style="left:${100 * (t - w) / Math.max(1, total - w)}%">${t}</span>`).join('');
+  return `<div class="label" style="margin-top:10px">DL PRB share of each UE per radio second (darker = larger share)</div><div class="heat">${ues.map(row).join('')}<div class="heat-row"><span>s</span><div class="heat-axis">${ticks}</div></div></div><p class="axis-note">Each cell is one measured radio second, from ${w} s to ${total} s of radio time (the ${w} s warm-up is not shown); a cell is the UE's share of the DL PRBs scheduled to UEs in that second.</p>`;
 }
 
+// A live run is in its warm-up once the measurement is released (epoch set)
+// and before its first measured second completes.
+const inWarmup = (run) => Boolean(run.live && run.report?.epoch && (run.report.warmup_seconds || 0) > 0 && !run.report.segments_complete);
 function renderRuns() {
   const runs = state.results?.runs || [];
   if (!runs.length) { $('runs').innerHTML = '<div class="empty">No runs yet.</div>'; return; }
@@ -491,12 +547,13 @@ function renderRuns() {
     const exact = links.reduce((a, l) => a + l.exact, 0), upd = links.reduce((a, l) => a + l.updates, 0);
     const lag = ev?.traffic?.lag_samples;
     return `<section class="panel"><div class="run-head"><h3>${esc(run.label || run.arm)} · run ${esc(run.run_id.slice(0, 2))}</h3>
-      <span class="badge ${run.live ? '' : g?.status === 'passed' ? 'good' : g ? 'bad' : 'idle'}">${run.live ? 'LIVE' : esc(g?.status || 'pending')}</span></div>
+      <span class="badge ${inWarmup(run) ? 'warn' : run.live ? '' : g?.status === 'passed' ? 'good' : g ? 'bad' : 'idle'}">${inWarmup(run) ? 'Warm-up' : run.live ? 'LIVE' : esc(g?.status || 'pending')}</span></div>
       ${r?.error ? `<div class="error-box">${esc(r.error)}</div>` : ''}
       <div class="kv">
         <div><span class="label">Cell DL</span><b>${fmt(m?.aggregate_throughput_mbps?.dl)} Mb/s</b></div>
         <div><span class="label">Jain (DL)</span><b>${fmt(m?.jain_fairness?.dl_throughput, 3)}</b></div>
         <div><span class="label">DL PRB util</span><b>${pct(m?.resource_utilization?.dl_prb)}</b></div>
+        <div><span class="label">Radio time</span><b>${r ? `${r.segments_complete ? r.segments_complete + (r.warmup_seconds || 0) : run.live ? 'warm-up ' : 0}/${r.radio_seconds_total} s` : '–'}</b></div>
         <div><span class="label">Valid radio s</span><b>${r ? `${r.segments_valid}/${r.segments_complete}` : '–'}</b></div>
         <div><span class="label">Updates on target</span><b>${upd ? `${exact}/${upd}` : '–'}</b></div>
         <div><span class="label">Radio speed</span><b>${fin(r?.runtime?.real_time_ratio) ? fmt(r.runtime.real_time_ratio, 2) + '×' : '–'}</b></div>
@@ -504,14 +561,17 @@ function renderRuns() {
       </div>
       <div class="legend">${legendHtml(ues)}</div>
       <div class="chart" id="tput-${i}"></div>
+      <p class="axis-note">DL application throughput received by each UE per radio second (UDP payload, Mb/s); invalid seconds are gaps. ${esc(axisNote(r?.warmup_seconds || 0))}</p>
       ${r?.segments ? heatmap(r, ues) : ''}
       ${g?.per_ue ? `<details><summary>Attach and UE health</summary><table><tr><th>UE</th><th>RRC</th><th>PDU</th><th>ping</th><th>out-of-sync</th><th>crashed</th></tr>${Object.entries(g.per_ue).map(([ue, u]) => `<tr><td>${esc(ue)}</td><td>${u.rrc_connected}</td><td>${u.pdu_session}</td><td>${u.ping_ok}</td><td>${u.out_of_sync}</td><td>${u.crashed}</td></tr>`).join('')}</table></details>` : ''}
     </section>`;
   }).join('');
   runs.forEach((run, i) => {
     const r = run.report; if (!r?.segments) { $(`tput-${i}`).innerHTML = '<div class="empty">Waiting for the measurement.</div>'; return; }
-    lineChart($(`tput-${i}`), ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: r.segments.map((s) => [s.k, s.valid ? s.ues?.[ue]?.dl_mbps : null]) })),
-      { yLabel: 'DL Mb/s (radio time)', xMax: r.radio_seconds_total, yMin: 0, height: 180 });
+    const w = r.warmup_seconds || 0;
+    if (!r.segments.some((s) => s.k >= w)) { $(`tput-${i}`).innerHTML = `<div class="empty">${inWarmup(run) ? `Warm-up: the first ${w} s of radio time are not measured.` : 'Waiting for the measurement.'}</div>`; return; }
+    lineChart($(`tput-${i}`), ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: r.segments.filter((s) => s.k >= w).map((s) => [s.k, s.valid ? s.ues?.[ue]?.dl_mbps : null]) })),
+      { yLabel: 'DL Mb/s', yTitle: 'DL throughput (Mb/s)', xTitle: 'radio time (s)', xMin: w, xMax: r.radio_seconds_total, yMin: 0, height: 200 });
   });
 }
 
@@ -522,24 +582,80 @@ function renderComparison() {
   const pols = Object.keys(cmp.tests);
   const ues = Object.keys(cmp.tests[pols[0]].per_ue);
   const maxBy = (f) => Math.max(1e-9, ...pols.map((p) => f(cmp.tests[p]) || 0));
-  const cell = (v, max, d = 2, unit = '') => `<td class="num">${fin(v) ? `<span class="inline-bar" style="width:${Math.round(60 * v / max)}px"></span>` : ''}${fmt(v, d)}${unit}</td>`;
+  // tone: 'better' / 'worse' / '' colours the bar; the number is split at its
+  // decimal point so that points and bar ends line up down a column.
+  const cell = (v, max, d = 2, tone = '') => {
+    const [int, frac] = fin(v) ? v.toFixed(d).split('.') : ['–', ''];
+    const bar = fin(v) ? `<span class="inline-bar ${tone}" style="width:${Math.round(60 * Math.max(0, v) / max)}px"></span>` : '';
+    return `<td class="cmp"><span class="bar-box">${bar}</span><span class="int">${int}</span><span class="frac">${frac ? '.' + frac : ''}</span></td>`;
+  };
+  // Overall metrics: the better test's bar is green and the worse one's red,
+  // as shown (to the displayed decimals); equal values keep the neutral bar.
+  const tones = (f, d, higher) => {
+    const shown = pols.map((p) => fin(f(cmp.tests[p])) ? Number(f(cmp.tests[p]).toFixed(d)) : null);
+    const vals = shown.filter((v) => v !== null);
+    if (vals.length < 2 || Math.min(...vals) === Math.max(...vals)) return pols.map(() => '');
+    const best = higher ? Math.max(...vals) : Math.min(...vals), worst = higher ? Math.min(...vals) : Math.max(...vals);
+    return shown.map((v) => v === best ? 'better' : v === worst ? 'worse' : '');
+  };
+  // [label, value, decimals, higher is better, tooltip]; a string entry starts a group.
   const rows = [
-    ['Cell DL (Mb/s)', (p) => p.aggregate_dl_mbps, 2], ['Cell UL (Mb/s)', (p) => p.aggregate_ul_mbps, 2],
-    ['Jain DL throughput', (p) => p.jain_dl, 3], ['Jain DL PRB share', (p) => p.jain_dl_prb_share, 3],
-    ['DL PRB utilization', (p) => p.dl_prb_util, 3], ['Decision time (µs)', (p) => p.decision_us_mean, 1],
-    ['Radio speed (× real time)', (p) => p.real_time_ratio, 2],
+    'Throughput',
+    ['Cell DL (Mb/s)', (p) => p.aggregate_dl_mbps, 2, true, 'DL UDP payload received by all UEs'],
+    ['Cell UL (Mb/s)', (p) => p.aggregate_ul_mbps, 2, true, 'UL UDP payload received from all UEs'],
+    ['Cell MAC DL (Mb/s)', (p) => p.mac_dl_mbps, 2, true, 'DL new-transmission bits the scheduler served at the MAC'],
+    'Fairness',
+    ['Jain DL throughput', (p) => p.jain_dl, 3, true, "Jain's index over the UEs' mean DL throughput (1 = equal)"],
+    ['Jain DL PRB share', (p) => p.jain_dl_prb_share, 3, true, "Jain's index over the UEs' DL PRB shares"],
+    ['Worst-UE DL (Mb/s)', (p) => p.worst_ue_dl_mbps, 2, true, 'Lowest mean DL throughput of any UE'],
+    ['Worst-UE DL wait p99 (ms)', (p) => p.worst_ue_dl_wait_p99_ms, 1, false, 'Longest p99 wait between DL allocations while the UE had data queued (starvation)'],
+    ['Starvation events', (p) => p.starvation_events, 0, false, 'Waits for a DL allocation with data queued that the analyzer counts as starvation, summed over UEs'],
+    'QoS differentiation (mixed profile)',
+    ['5QI 7: worst DL delay p99 (ms)', (p) => p.qos7_worst_dl_delay_p99_ms, 1, false, 'Highest p99 DL delay of the delay-sensitive (5QI 7, PDB 100 ms) UEs'],
+    ['5QI 7: PDB violation rate', (p) => p.qos7_pdb_violation_rate, 3, false, 'Packets of the 5QI 7 UEs late beyond 100 ms or lost'],
+    ['5QI 9: bulk DL (Mb/s)', (p) => p.qos9_dl_mbps, 2, true, 'DL throughput of the bulk (5QI 9) UEs together: what serving 5QI 7 first costs them'],
+    'Latency',
+    ['DL delay mean (ms)', (p) => p.dl_delay_mean_ms, 1, false, 'One-way DL packet delay in radio time, pooled over all received packets'],
+    ['Worst-UE DL delay p95 (ms)', (p) => p.worst_ue_dl_delay_p95_ms, 1, false, 'Highest per-UE p95 DL delay'],
+    ['Worst-UE DL delay p99 (ms)', (p) => p.worst_ue_dl_delay_p99_ms, 1, false, 'Highest per-UE p99 DL delay'],
+    'Resource efficiency',
+    ['DL PRB utilization', (p) => p.dl_prb_util, 3, true, 'Fraction of DL PRBs allocated (UE and common)'],
+    ['DL spectral efficiency (b/s/Hz)', (p) => p.dl_spectral_efficiency_bps_hz, 3, true, 'MAC DL new-transmission bits per second per Hz of the PRBs used'],
+    ['Mean DL MCS', (p) => p.dl_mcs_mean, 1, true, 'Mean of the UEs\' mean DL MCS'],
+    ['DL goodput / MAC', (p) => p.dl_goodput_ratio, 3, true, 'Application DL throughput over MAC DL new-transmission throughput (header overhead, RLC loss, queue drops)'],
+    'Reliability',
+    ['DL BLER', (p) => p.dl_bler, 3, false, 'Mean of the UEs\' DL HARQ block error rate (gNB view)'],
+    ['UL BLER', (p) => p.ul_bler, 3, false, 'Mean of the UEs\' UL HARQ block error rate'],
+    ['Packet drop rate', (p) => p.drop_rate, 3, false, 'Offered packets never received, pooled over all flows'],
+    ['PDB violation rate', (p) => p.pdb_violation_rate, 3, false, 'Offered packets late beyond their 5QI packet delay budget or lost, pooled'],
+    'Scheduler and emulation',
+    ['Decision time (µs)', (p) => p.decision_us_mean, 1, false, 'Mean scheduler decision time per slot'],
+    ['Radio speed (× real time)', (p) => p.real_time_ratio, 2, true, 'Emulated radio time per wall-clock second; not a policy KPI'],
   ];
-  let html = `<table><tr><th>Metric</th>${pols.map((p) => `<th class="num">${esc(cmp.tests[p].label)} · ${cmp.tests[p].runs} run${cmp.tests[p].runs > 1 ? 's' : ''}</th>`).join('')}</tr>`;
-  for (const [label, f, d] of rows) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
-  for (const ue of ues) {
+  const head = `<tr><th>Metric</th>${pols.map((p) => `<th class="num">${esc(cmp.tests[p].label)} · ${cmp.tests[p].runs} run${cmp.tests[p].runs > 1 ? 's' : ''}</th>`).join('')}</tr>`;
+  let html = `<table class="cmp-table">${head}`;
+  for (const row of rows) {
+    if (typeof row === 'string') { html += `<tr class="group"><th colspan="${pols.length + 1}">${row}</th></tr>`; continue; }
+    const [label, f, d, higher, tip] = row;
+    const mx = maxBy(f), t = tones(f, d, higher);
+    html += `<tr><td title="${esc(tip)}">${label} <span class="muted">${higher ? '↑' : '↓'}</span></td>${pols.map((p, i) => cell(f(cmp.tests[p]), mx, d, t[i])).join('')}</tr>`;
+  }
+  html += '</table>';
+  // Per-UE values: one UE at a time, chosen with its button.
+  if (!ues.includes(state.cmpUe)) state.cmpUe = ues[0];
+  const ue = state.cmpUe;
+  if (ue) {
+    html += `<div class="ue-tabs" role="group" aria-label="UE">${ues.map((u) => `<button type="button" data-ue="${esc(u)}" aria-pressed="${u === ue}">${ueSwatch(u)}${esc(u)}</button>`).join('')}</div>`;
     const u0 = cmp.tests[pols[0]].per_ue[ue];
     const sub = [['DL Mb/s', (p) => p.per_ue[ue].dl_mbps, 2], ['DL PRB share', (p) => p.per_ue[ue].dl_prb_share, 3],
                  ['DL delay p95 ms', (p) => p.per_ue[ue].dl_delay_radio_p95_ms, 0], ['DL delay p99 ms', (p) => p.per_ue[ue].dl_delay_radio_p99_ms, 0],
                  ['PDB violation', (p) => p.per_ue[ue].pdb_violation_rate, 3], ['DL MCS', (p) => p.per_ue[ue].dl_mcs, 1]];
-    html += `<tr><th colspan="${pols.length + 1}"><span class="swatch" style="background:${ueColor(ue)}"></span> ${esc(ue)} · ${esc(u0.role)} · 5QI ${esc(u0.five_qi)}</th></tr>`;
+    html += `<table class="cmp-table">${head}<tr><th colspan="${pols.length + 1}">${ueSwatch(ue)} ${esc(ue)} · ${esc(u0.role)} · 5QI ${esc(u0.five_qi)}</th></tr>`;
     for (const [label, f, d] of sub) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
+    html += '</table>';
   }
-  $('comparison').innerHTML = html + '</table>';
+  $('comparison').innerHTML = html;
+  $('comparison').querySelectorAll('.ue-tabs button').forEach((b) => b.addEventListener('click', () => { state.cmpUe = b.dataset.ue; renderComparison(); }));
   const pr = cmp.paired || {};
   const prow = (name, x) => `<tr><td>${esc(name)}</td><td class="num">${x.n}</td><td class="num">${fmt(x.mean_x, 3)}</td><td class="num">${fmt(x.mean_y, 3)}</td><td class="num">${fmt(x.mean_diff, 3)}</td><td class="num">${x.ci95 ? `${fmt(x.ci95[0], 3)} … ${fmt(x.ci95[1], 3)}` : '–'}</td></tr>`;
   let p = pr.note ? `<p class="muted">${esc(pr.note)}</p><table><tr><th>Series</th><th class="num">n</th><th class="num">x</th><th class="num">y</th><th class="num">x − y</th><th class="num">95% CI</th></tr>${Object.entries(pr).filter(([k]) => k !== 'note').map(([k, v]) => prow(k, v)).join('')}</table>` : '<p class="muted">The paired comparison needs both tests.</p>';
@@ -561,7 +677,9 @@ function initScene() {
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
   camera.up.set(0, 0, 1);
-  const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
+  // As in the main web UI (scripts/web_ui/index.html): damped orbit, never under the ground.
+  const controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true; controls.dampingFactor = 0.08; controls.maxPolarAngle = Math.PI * 0.495;
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(-20, -30, 50); scene.add(sun);
   const world = new THREE.Group(), markers = new THREE.Group(); scene.add(world); scene.add(markers);
@@ -600,8 +718,15 @@ async function loadMesh() {
   }
   const g = state.scene.gnb || [0, 0, 0];
   const ext = Math.max(30, ...state.scene.timeline.seconds.flatMap((s) => Object.values(s.positions).map((p) => Math.hypot(p[0] - g[0], p[1] - g[1]))));
-  scene3.camera.position.set(g[0] - ext * 0.9, g[1] - ext * 1.3, g[2] + ext * 1.1);
-  scene3.controls.target.set(g[0], g[1], 0);
+  scene3.home = { position: new THREE.Vector3(g[0] - ext * 0.9, g[1] - ext * 1.3, g[2] + ext * 1.1), target: new THREE.Vector3(g[0], g[1], 0) };
+  // Zoom range and clip planes fitted to the scene, so the whole campus is
+  // reachable by zooming out and the depth buffer keeps its precision.
+  const radius = Math.max(ext, new THREE.Box3().setFromObject(scene3.world).getSize(new THREE.Vector3()).length() / 2);
+  scene3.controls.minDistance = Math.max(2, ext / 40);
+  scene3.controls.maxDistance = radius * 3;
+  scene3.camera.near = Math.max(0.1, ext / 400); scene3.camera.far = radius * 8;
+  scene3.camera.updateProjectionMatrix();
+  resetView();
   scene3.scale = ext / 60;
   const hex = (rgb) => '#' + rgb.map((c) => Math.round(255 * c).toString(16).padStart(2, '0')).join('');
   $('sceneLegend').innerHTML = Object.entries(used).sort((a, b) => b[1].count - a[1].count).map(([name, u]) => {
@@ -611,6 +736,12 @@ async function loadMesh() {
   }).join('') + (mesh.source ? `<span class="chip">${esc(mesh.source.attribution)}</span>` : '');
   $('sceneEmpty').hidden = true;
   updateMarkers();
+}
+function resetView() {
+  if (!scene3.home) return;
+  scene3.camera.position.copy(scene3.home.position);
+  scene3.controls.target.copy(scene3.home.target);
+  scene3.controls.update();
 }
 function currentSecond() {
   const live = state.results?.runs?.find((r) => r.live)?.report;
@@ -643,7 +774,7 @@ function updateMarkers() {
     if (g) m.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...g), new THREE.Vector3(...p)]), new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.3 })));
   }
   const n = state.scene.ues.length;
-  $('sceneOverlay').innerHTML = `<span class="chip">${esc(state.scene.scene_id)} · ${n} UE${n > 1 ? 's' : ''} · ${esc(state.scene.mobility || '')} · ${esc(state.scene.placement || '')}</span><span class="chip">radio time <b>${t} s</b></span>${state.scene.hotspots ? '<span class="chip">shaded discs: hotspots (2σ)</span>' : ''}<span class="chip">octahedra: ue8–ue15</span>`;
+  $('sceneOverlay').innerHTML = `<span class="chip">${esc(state.scene.scene_id)} · ${esc(antennaShort(state.scene.gnb_antennas ?? 1))} gNB · ${n} UE${n > 1 ? 's' : ''} · ${esc(state.scene.mobility || '')} · ${esc(state.scene.placement || '')}</span><span class="chip">radio time <b>${t} s</b></span>${state.scene.hotspots ? '<span class="chip">shaded discs: hotspots (2σ)</span>' : ''}<span class="chip">octahedra: ue8–ue15</span>`;
 }
 
 // ---------------------------------------------------------------- polling
@@ -671,6 +802,7 @@ async function boot() {
   try { state.options = await api('/api/benchmark/options'); } catch (e) { $('errorBox').textContent = `options: ${e.message}`; return; }
   fillOptions();
   $('scene').addEventListener('change', sceneChanged);
+  $('sceneResetView').addEventListener('click', resetView);
   $('controls').addEventListener('change', markPending);
   $('newSeed').addEventListener('click', () => { $('seed').value = Math.floor(Math.random() * 1e9); markPending(); });
   $('startBtn').addEventListener('click', startBenchmark);

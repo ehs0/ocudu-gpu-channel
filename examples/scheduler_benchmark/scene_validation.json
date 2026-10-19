@@ -100,6 +100,33 @@
     0.28,
     0.469
    ]
+  },
+  {
+   "scene_id": "sutd_1gnb",
+   "ue_count": 4,
+   "gnb_antennas": 2,
+   "session_id": "20261019T111545Z-g25",
+   "verdict": "STRICT FAIR COMPARISON: PASS",
+   "policies": [
+    "rr",
+    "qos"
+   ],
+   "traffic_profile": "mixed",
+   "mobility": "static",
+   "placement": "uniform",
+   "measure_seconds": 60,
+   "seed": 3,
+   "channel_trace_hash": "sha256:75a8a5a1dbcfe4ae4f969723be01d349cc0833849c9cd621b8361464ff975a47",
+   "updates_on_target": [
+    700,
+    700
+   ],
+   "updates_expected": 700,
+   "real_time_ratio": [
+    0.401,
+    0.394
+   ],
+   "note": "2T2R gNB (DL 2x1 MISO, UL 1x2 SIMO). The audit was re-run (validation.py) after the analyzer learned the broker's '#r0t0' lane key for multi-lane links; the runner's own verdict, from the unfixed analyzer, was UNQUALIFIED with 0 segments. UL MCS 28 / PUSCH SNR ~40 dB; DL MCS 0 (no CSI-RS, see README)."
   }
  ],
  "superseded": {

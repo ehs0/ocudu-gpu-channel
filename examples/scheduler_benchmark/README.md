@@ -1,5 +1,9 @@
 # scheduler_benchmark — OCUDU MAC schedulers under one channel
 
+This is the first of the project's RAN benchmarks (see
+[RAN benchmark](../../README.md#ran-benchmark)); benchmarks for other RAN
+functions will be added alongside it under `examples/`.
+
 Two modes. The **single-cell mode** (§ "Single-cell mode" below) runs one
 gNB with N UEs and executes the policies one after another on a frozen
 channel and traffic trace, with a web UI that starts, stops and replaces
@@ -104,8 +108,8 @@ cell-bias-free policy effects.
 
 ## Single-cell mode
 
-One OCUDU gNB, one broker, N srsUEs (`ue0`..`ue{N-1}`, N = 1, 8 or 16), and the policies
-(`rr`, `qos`) executed **sequentially** on the same cell, each run a cold start
+One OCUDU gNB (1 or 2 antennas, § "gNB antennas" below), one broker, N srsUEs (`ue0`..`ue{N-1}`, N = 1, 8 or 16), and the policies
+(`rr`, `qos`, `maxci`) executed **sequentially** on the same cell, each run a cold start
 of the whole stack (core, broker, gNB, UEs). The policy is bound at gNB
 start-up, so a cold restart is the only way to change it; running the
 policies on one cell removes the two-cell mode's cell bias by construction.
@@ -128,6 +132,33 @@ Segment k of every report is radio second k: the same 1000 slots, the same
 10 channel updates and the same offered packets in every run, however fast
 the run's radios ran. Outcomes (allocations, HARQ, throughput, delays, the
 transmitted IQ) are allowed to differ, also between two runs of one policy.
+
+### Schedulers
+
+`rr` and `qos` are the two policies OCUDU implements
+(`lib/scheduler/policy/scheduler_policy_factory.cpp`). `maxci` (Max C/I) is
+`qos_sched` with `pf_fairness_coeff: 0` and the priority, PDB and GBR terms
+off, so a UE's weight is its estimated rate alone: maximum cell throughput,
+no fairness. It needs no gNB rebuild. The gate identifies the loaded policy
+from the gNB's config dump by policy name and parameter values
+(`definitions.schedulers_in_config_dump`), since QoS-PF and Max C/I share
+`qos_sched`.
+
+### Comparison metrics
+
+`validation.cell_kpis` turns each run's metrics into cell-level KPIs, averaged
+over a test's runs (`reports/benchmark-report.json`, `comparison.tests`). The
+UI colours the better test green and the worse red per row.
+
+| Group | Metrics (better) |
+| --- | --- |
+| Throughput | cell DL and UL (UDP payload), cell MAC DL new-tx (higher) |
+| Fairness | Jain over UE DL throughput and over PRB shares, worst-UE DL throughput (higher); worst-UE p99 wait for a DL allocation while data is queued, starvation events (lower) |
+| QoS differentiation | 5QI 7 UEs: worst p99 DL delay, PDB violation rate (lower); 5QI 9 UEs: total DL throughput (higher). `mixed` profile only. |
+| Latency | DL delay mean pooled over received packets, worst-UE p95 and p99 (lower) |
+| Resource efficiency | DL PRB utilisation, DL spectral efficiency = MAC DL bits / (used PRBs x 180 kHz), mean DL MCS, application / MAC DL goodput ratio (higher) |
+| Reliability | DL and UL HARQ BLER (UE mean), packet drop rate and PDB violation rate pooled over offered packets (lower) |
+| Scheduler and emulation | decision time per slot (lower), radio speed (not a policy KPI) |
 
 ### Fairness audit
 
@@ -158,7 +189,7 @@ sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh /home/dev/venvs/sion
 ```
 
 The page compares **Test 1** and **Test 2**. The shared settings (UE count,
-scene, UE type, placement, traffic profile, seed, durations, run order and
+scene, gNB antennas, UE type, placement, traffic profile, seed, durations, run order and
 runs per test) apply to both; each test panel then picks its own MAC
 scheduler. A test is the shared configuration plus its own fields
 (`definitions.TEST_FIELDS`, today only `scheduler`), so another comparison
@@ -181,8 +212,9 @@ still-running session. The API is listed in `server.py`; it binds
 `X-Benchmark-Client: ui` or with a foreign Origin.
 
 Only (scene, UE count) combinations with end-to-end evidence in
-`scene_validation.json` are startable; `--allow-unvalidated` lifts that to
-produce the evidence.
+`scene_validation.json` are startable, with either gNB antenna count (an
+entry records its `gnb_antennas`, 1 when absent); `--allow-unvalidated` lifts
+that to produce the evidence.
 
 ### Scene, UE type and placement
 
@@ -212,6 +244,59 @@ relative permittivity and conductivity Sionna uses at the DL carrier (UL in
 the tooltip), the hotspot discs, the UEs (hue + marker shape: octahedra for
 ue8-ue15, dashed lines in the charts, since the categorical palette has eight
 hues) and the OpenStreetMap credit.
+
+### gNB antennas
+
+`gnb_antennas` (shared setting, default 2) is 1 or 2
+(`definitions.GNB_ANTENNA_CONFIGS`). The srsUEs always have one antenna, so 2
+means DL 2x1 MISO and UL 1x2 SIMO with one layer; nothing here is 2x2 MIMO.
+
+| Stage | 2 antennas |
+| --- | --- |
+| Scenario | `make_scenario.generate_single_cell(..., gnb_antennas=2)` gives gnb0 a 1 x 2 iso half-wavelength ULA (Sionna `PlanarArray`) for both directions. It draws nothing, so the UEs stand exactly where they stand with one antenna. |
+| Channel trace | The bridge solves DL (gNB TX array, UE RX) and UL (UE TX, gNB RX array) as separate groups; every link's `matrix_profile_swap` carries one lane per antenna pair (DL nt 2 / nr 1, UL nt 1 / nr 2) with its own taps and phases. The attach record keeps one flat tap per lane (`ATTACH_GAIN_RULE`). |
+| Broker | gnb0 is one radio node with ports `gnb0_p0` (ZMQ 2000/2001) and `gnb0_p1` (2002/2003). Both carry the node's AWGN floor; the broker keeps one noise state per receive row, so the two floors are independent. |
+| gNB | `render_single_cell.render_gnb_antennas` turns the SISO cell into the rank-1 2T2R cell of `examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_2t2r_rank1_srsue.yaml`: `nof_antennas_dl/ul: 2`, both ZMQ port pairs, SS#2 `ue_dedicated` with DCI 0_1/1_1, CSI-RS off (`csi_rs_enabled: false`, `nof_cell_csi_res: 0`) and MAC pcap off. The renderer reads the count from the scenario's gnb0 array. |
+
+What the 2T2R cell does and does not do:
+
+- **UL is real receive diversity.** OCUDU equalises PUSCH over both receive
+  ports, each with its own solved branch and its own noise.
+- **DL port 1 is silent.** With CSI-RS off and one layer, OCUDU maps SSB,
+  PDCCH and PDSCH onto port 0 only (measured on the wire in the rank-1 work,
+  `docs/rank1-feasibility-report.md` § 6). The 2x1 DL channel is emulated
+  exactly, but the UE receives the port-0 branch; the srsRAN stack offers no
+  precoder that would add array gain.
+- **No CSI.** OCUDU sizes the NZP-CSI-RS by `nof_antennas_dl`, and srsUE
+  cannot apply a 2-port resource (connection setup fails), so CSI-RS is off.
+  Without CSI reports the gNB's DL CQI stays at `initial_cqi` (3) plus OLLA
+  (at most +4), whatever the channel: DL MCS and therefore DL throughput are
+  lower than in the 1-antenna cell, and a channel-aware policy cannot see DL
+  channel differences between UEs. Both tests of a session run the same cell,
+  so the comparison stays fair, but 1- and 2-antenna sessions measure
+  different link adaptation and their absolute numbers are not comparable.
+
+Measured (session 20261019T111545Z-g25: sutd_1gnb, 4 static uniform UEs, seed
+3, `mixed`, 60 s after 10 s warm-up, RR then QoS-PF; the same placement and
+traffic as the 1-antenna g22). STRICT FAIR COMPARISON: PASS, 700/700 updates
+on target per link and run, radio speed 0.39-0.40x.
+
+| | 1 antenna (g22) | 2 antennas (g25) |
+| --- | --- | --- |
+| Cell DL, RR / QoS-PF (Mb/s) | 53.85 / 54.55 | 3.08 / 3.08 |
+| DL MCS | CQI-driven | 0 for every UE |
+| UL MCS / PUSCH SNR | 28 / ~40 dB | 28 / 40-46 dB |
+
+The DL collapse is the missing CSI, not the channel: srsUE reports DL SNR
+~30 dB and BLER 0, but the gNB decodes ~1 % of the PUCCH HARQ-ACKs as NACK
+(the 1-antenna cell sees the same, 283 vs 732 `ack=0` per run). OLLA targets
+1 % BLER, so it walks the offset to its -4 limit; from CQI 15 that costs
+little, from the fixed initial CQI 3 it ends at MCS 0. With every UE at MCS 0
+the cell is PRB-bound at ~94 % utilisation and both policies give each UE
+an equal share (Jain 0.998-1.000), so a 2-antenna session cannot currently
+tell the schedulers apart on DL. Getting CQI back needs either a 1-port
+NZP-CSI-RS on the 2-antenna cell (an OCUDU change: the port count is
+`nof_antennas_dl`) or 2-port CSI-RS support in srsUE.
 
 ### CLI
 
@@ -312,7 +397,7 @@ Current scenes (the evidence in `scene_validation.json`), `mixed` profile,
 | 20261019T085252Z-g23 | simple_blocks_2x2 | 4 | static, uniform | 20261016 | STRICT PASS | 0.28-0.47× | 52.21 / 55.07 | 0.849 / 0.830 |
 
 g22 and g23 ran with `srsue-rar-window.patch`; every UE attached on its
-first preamble.
+first preamble. The 2-antenna session g25 is under "gNB antennas" above.
 
 **Deep in-band notches take a UE out of service.** sutd_1gnb, 4 static
 uniform UEs, seed 20261016 (session 20261019T080609Z-g21) was UNQUALIFIED:

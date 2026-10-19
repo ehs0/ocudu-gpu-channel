@@ -252,6 +252,74 @@ def _segment_values(report: dict[str, Any], extract) -> dict[int, float]:
     return out
 
 
+# Bandwidth of one PRB at 15 kHz SCS (12 subcarriers).
+PRB_BANDWIDTH_HZ = 12 * 15_000.0
+
+
+def cell_kpis(m: dict[str, Any]) -> dict[str, Any]:
+    """Cell-level fairness, latency, resource-efficiency and reliability KPIs
+    of one run, over its valid measured seconds (single_cell_analyze metrics).
+
+    Pooled values weight each UE by its packets (delay by received packets,
+    drop and PDB violation by offered packets), so a UE with little traffic
+    does not count as much as a backlogged one; "worst UE" is the maximum (or,
+    for throughput, the minimum) over the UEs."""
+
+    ues = list(m["per_ue"].values())
+
+    def get(d, *keys):
+        # Reports of older analyzers lack some fields; a missing one is None.
+        for key in keys:
+            d = d.get(key) if isinstance(d, dict) else None
+        return d
+
+    def pooled(values_weights):
+        pairs = [(v, w) for v, w in values_weights if v is not None and w]
+        total = sum(w for _, w in pairs)
+        return sum(v * w for v, w in pairs) / total if total else None
+
+    def worst(values, high_is_bad=True):
+        values = [v for v in values if v is not None]
+        return (max(values) if high_is_bad else min(values)) if values else None
+
+    used_prb = (get(m, "resource_utilization", "dl_prb") or 0) * (get(m, "resource_utilization", "nof_prb") or 0)
+    mac_dl = get(m, "aggregate_throughput_mbps", "mac_dl")
+    app_dl = get(m, "aggregate_throughput_mbps", "dl")
+    # QoS classes of the `mixed` profile: delay-sensitive 5QI 7 and bulk 5QI 9
+    # (None when the profile has no UE of that class).
+    delay_ues = [u for u in ues if u.get("five_qi") == 7]
+    bulk_ues = [u for u in ues if u.get("five_qi") == 9]
+    bulk_dl = [get(u, "throughput_mbps", "dl") for u in bulk_ues]
+    return {
+        # throughput at the MAC: what the scheduler served, before RLC/PDCP/IP
+        "mac_dl_mbps": mac_dl,
+        "dl_goodput_ratio": app_dl / mac_dl if app_dl is not None and mac_dl else None,
+        # QoS differentiation
+        "qos7_worst_dl_delay_p99_ms": worst([get(u, "delay_radio_ms", "dl", "p99") for u in delay_ues]),
+        "qos7_pdb_violation_rate": pooled([(u.get("pdb_violation_rate"), u.get("offered_packets")) for u in delay_ues]),
+        "qos9_dl_mbps": sum(bulk_dl) if bulk_dl and None not in bulk_dl else None,
+        "starvation_events": (sum(get(u, "starvation", "events") or 0 for u in ues)
+                              if any(get(u, "starvation", "events") is not None for u in ues) else None),
+        # fairness
+        "worst_ue_dl_mbps": worst([get(u, "throughput_mbps", "dl") for u in ues], high_is_bad=False),
+        "worst_ue_dl_wait_p99_ms": worst([get(u, "starvation", "dl_wait_ms", "p99") for u in ues]),
+        # latency (radio time, application layer)
+        "dl_delay_mean_ms": pooled([(get(u, "delay_radio_ms", "dl", "mean"), get(u, "delay_radio_ms", "dl", "count"))
+                                    for u in ues]),
+        "worst_ue_dl_delay_p95_ms": worst([get(u, "delay_radio_ms", "dl", "p95") for u in ues]),
+        "worst_ue_dl_delay_p99_ms": worst([get(u, "delay_radio_ms", "dl", "p99") for u in ues]),
+        # resource efficiency
+        "dl_spectral_efficiency_bps_hz": (mac_dl * 1e6 / (used_prb * PRB_BANDWIDTH_HZ)
+                                          if mac_dl is not None and used_prb else None),
+        "dl_mcs_mean": pooled([(get(u, "link", "dl_mcs"), 1) for u in ues]),
+        # reliability
+        "dl_bler": pooled([(get(u, "link", "dl_bler"), 1) for u in ues]),
+        "ul_bler": pooled([(get(u, "link", "ul_bler"), 1) for u in ues]),
+        "drop_rate": pooled([(u.get("drop_rate"), u.get("offered_packets")) for u in ues]),
+        "pdb_violation_rate": pooled([(u.get("pdb_violation_rate"), u.get("offered_packets")) for u in ues]),
+    }
+
+
 def compare(runs: list[dict[str, Any]]) -> dict[str, Any]:
     """Per-test summaries and the paired radio-second comparison Test 1 - Test 2
     (same k = same channel and offered load), plus the A/A control of any test
@@ -299,6 +367,8 @@ def compare(runs: list[dict[str, Any]]) -> dict[str, Any]:
             } for ue in ue_ids},
             "real_time_ratio": mean([(r.get("runtime") or {}).get("real_time_ratio") for r in reports]),
         }
+        kpis = [cell_kpis(m) for m in ms]
+        summaries[arm].update({key: mean([k[key] for k in kpis]) for key in kpis[0]})
 
     def averaged(reports, extract) -> dict[int, float]:
         sets = [_segment_values(r, extract) for r in reports]
