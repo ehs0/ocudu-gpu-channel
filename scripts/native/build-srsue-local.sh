@@ -15,6 +15,8 @@ set -euo pipefail
 # Patches (srsue-local-patches.lock.json):
 #   srsue-ra-contention.patch   multi-UE RACH: preamble 0 hard-coded, a UE that
 #                               lost contention still completed RA (S16)
+#   srsue-rar-window.patch      an unparsable RAR or one without our RAPID
+#                               ended RA for good instead of a retransmission
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

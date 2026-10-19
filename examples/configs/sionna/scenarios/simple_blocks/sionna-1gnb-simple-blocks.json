@@ -1,0 +1,35 @@
+{
+  "name": "sionna_simple_blocks_1gnb",
+  "description": "One gNB on a 25 m mast at the crossroads of simple_blocks_2x2 (four 20 m blocks: concrete 30 m, glass 22 m, wood 9 m, concrete 15 m) and one static UE. The single-cell scheduler benchmark takes gnb0, the solver and the UE array from here and places its own UEs.",
+  "scene": "simple_blocks_2x2",
+  "simple_road": false,
+  "solver": {
+    "max_depth": 3,
+    "samples_per_source": 200000,
+    "seed": 42,
+    "path_polylines": 6,
+    "propagation": {
+      "los": true,
+      "specular_reflection": true,
+      "diffuse_reflection": false,
+      "refraction": false,
+      "diffraction": false
+    }
+  },
+  "nodes": {
+    "gnb0": {
+      "start_m": [0.0, 0.0, 25.0],
+      "mobility": "fixed",
+      "array": {"rows": 1, "cols": 1, "pattern": "iso", "polarization": "V"}
+    },
+    "ue0": {
+      "mobility": "static",
+      "start_m": [0.0, 40.0, 1.5],
+      "array": {"rows": 1, "cols": 1, "pattern": "iso", "polarization": "V"}
+    }
+  },
+  "links": [
+    {"from": "gnb0", "to": "ue0", "direction": "downlink", "model": "sionna_rt"},
+    {"from": "ue0", "to": "gnb0", "direction": "uplink", "model": "sionna_rt"}
+  ]
+}

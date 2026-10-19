@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# One cold policy run of the single-cell scheduler benchmark.
+#
+#   gnb0 (one policy) <-> ONE broker <-> ue0..ue{N-1} (netns ue1..ueN)
+#
+# The channel is not solved here: replay_bridge.py replays a frozen channel
+# trace (channel_trace.py) at measurement sample S0 + k * samples_per_update
+# of every link, and radio_traffic.py offers a frozen traffic trace on the same
+# sample clock. single_cell_runner.py calls this once per policy execution
+# with the SAME bundles; every process starts cold (core, broker, gNB, UEs).
+#
+# Usage (all paths absolute):
+#   run-single-cell-policy.sh --run-root DIR --scenario FILE --channel-bundle DIR
+#     --traffic-bundle DIR --policy rr|qos --ue-count N --profile NAME --seed S
+#     [--awgn-snr-db DB|off] [--tx-power-ul P] [--tx-power-dl P] [--gnb-rx-gain DB]
+#     [--attach-timeout S] [--drain-seconds S] [--warmup-seconds S] [--channel-build DIR]
+# Environment: OCUDU_NATIVE_ROOT, OCUDU_NATIVE_SIONNA_PYTHON (scripts/native/env.sh).
+# Results under --run-root: configs/ logs/ report/ (gate-summary.json, run-report.json).
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "${script_dir}/../.." && pwd)"
+native_dir="${repo_root}/scripts/native"
+# shellcheck source=../../scripts/native/env.sh
+source "${native_dir}/env.sh"
+native_root="${OCUDU_NATIVE_ROOT}"
+sionna_python="${OCUDU_NATIVE_SIONNA_PYTHON:-}"
+inner="${script_dir}/run-single-cell-policy-inner.sh"
+
+usage_error() { printf 'error: %s\n' "$1" >&2; exit 2; }
+
+run_root="" scenario="" channel_bundle="" traffic_bundle="" policy="" ue_count="" profile="" seed=""
+awgn="40" tx_power_ul="" tx_power_dl="" gnb_rx_gain="" attach_timeout="240" drain_seconds="6" warmup_seconds="0"
+channel_build="${OCUDU_NATIVE_CHANNEL_BUILD:-${native_root}/builds/ocudu-gpu-channel-single-cell}"
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --run-root) run_root="${2:-}"; shift 2 ;;
+    --scenario) scenario="${2:-}"; shift 2 ;;
+    --channel-bundle) channel_bundle="${2:-}"; shift 2 ;;
+    --traffic-bundle) traffic_bundle="${2:-}"; shift 2 ;;
+    --policy) policy="${2:-}"; shift 2 ;;
+    --ue-count) ue_count="${2:-}"; shift 2 ;;
+    --profile) profile="${2:-}"; shift 2 ;;
+    --seed) seed="${2:-}"; shift 2 ;;
+    --awgn-snr-db) awgn="${2:-}"; shift 2 ;;
+    --tx-power-ul) tx_power_ul="${2:-}"; shift 2 ;;
+    --tx-power-dl) tx_power_dl="${2:-}"; shift 2 ;;
+    --gnb-rx-gain) gnb_rx_gain="${2:-}"; shift 2 ;;
+    --attach-timeout) attach_timeout="${2:-}"; shift 2 ;;
+    --drain-seconds) drain_seconds="${2:-}"; shift 2 ;;
+    --warmup-seconds) warmup_seconds="${2:-}"; shift 2 ;;
+    --channel-build) channel_build="${2:-}"; shift 2 ;;
+    *) usage_error "unexpected argument: $1" ;;
+  esac
+done
+
+[[ -x "${sionna_python}" ]] || usage_error "OCUDU_NATIVE_SIONNA_PYTHON must point at the Sionna interpreter (pyzmq)"
+[[ "${run_root}" == /* && ! -e "${run_root}" ]] || usage_error "--run-root must be an absolute path that does not exist"
+for path in "${scenario}" "${channel_bundle}" "${traffic_bundle}"; do
+  [[ "${path}" == /* && -e "${path}" ]] || usage_error "missing input: ${path}"
+done
+[[ "${policy}" =~ ^(rr|qos)$ ]] || usage_error "--policy must be rr or qos"
+[[ "${ue_count}" =~ ^([1-9]|1[0-6])$ ]] || usage_error "--ue-count must be 1..16"
+[[ "${profile}" =~ ^[a-z_]+$ ]] || usage_error "invalid --profile"
+[[ "${seed}" =~ ^(0|[1-9][0-9]{0,8})$ ]] || usage_error "--seed must be a non-negative integer"
+number_re='^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
+[[ "${awgn}" == "off" || "${awgn}" =~ ${number_re} ]] || usage_error "--awgn-snr-db must be a number or off"
+[[ -z "${tx_power_ul}" || "${tx_power_ul}" =~ ${number_re} ]] || usage_error "invalid --tx-power-ul"
+[[ -z "${tx_power_dl}" || "${tx_power_dl}" =~ ${number_re} ]] || usage_error "invalid --tx-power-dl"
+[[ -z "${gnb_rx_gain}" || "${gnb_rx_gain}" =~ ^(0|-[0-9]+([.][0-9]+)?)$ ]] || usage_error "--gnb-rx-gain must be <= 0"
+[[ "${attach_timeout}" =~ ^[1-9][0-9]*$ && "${attach_timeout}" -ge 30 ]] || usage_error "--attach-timeout >= 30"
+[[ "${drain_seconds}" =~ ^[1-9][0-9]?$ ]] || usage_error "--drain-seconds must be 1..99"
+[[ "${warmup_seconds}" =~ ^[0-9]+$ ]] || usage_error "--warmup-seconds must be a non-negative integer"
+
+gnb_binary="${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb"
+broker="${channel_build}/ocudu-gpu-channel"
+for path in "${inner}" "${gnb_binary}" "${broker}" "${native_root}/builds/open5gs-v2.7.6/tests/app/5gc" \
+  "${native_root}/install/mongodb-6.0.29/bin/mongod" "${script_dir}/replay_bridge.py" "${script_dir}/radio_traffic.py" \
+  "${script_dir}/render_single_cell.py" "${script_dir}/single_cell_analyze.py"; do
+  [[ -e "${path}" ]] || usage_error "missing required path: ${path} (build the broker once: single_cell_runner.py --preflight)"
+done
+for command_name in unshare nsenter ip mount umount flock setsid stdbuf taskset; do
+  command -v "${command_name}" >/dev/null 2>&1 || usage_error "missing command: ${command_name}"
+done
+[[ -c /dev/net/tun ]] || usage_error "/dev/net/tun is absent"
+[[ "$(git -C "${native_root}/src/ocudu" rev-parse HEAD)" == "a1916edcdbcd70ba6e0af47ee87be061dad5a4e4" ]] || \
+  usage_error "OCUDU revision mismatch"
+
+# One single-cell policy run at a time on this host (radios, GPU and CPU
+# placement are shared). The lock file is outside every run directory.
+lock_file="${native_root}/run/single-cell-scheduler-benchmark.lock"
+mkdir -p "$(dirname "${lock_file}")"
+exec {lock_fd}>"${lock_file}"
+flock -n "${lock_fd}" || usage_error "another single-cell policy run holds ${lock_file}"
+export OCUDU_NATIVE_GATE_LOCK_FD="${lock_fd}"
+
+config_dir="${run_root}/configs" log_dir="${run_root}/logs" report_dir="${run_root}/report"
+data_dir="${run_root}/data" run_dir="${run_root}/run"
+mkdir -p "${config_dir}" "${log_dir}" "${report_dir}" "${data_dir}" "${run_dir}/netns"
+
+declare -a render_args=(--repo-root "${repo_root}" --native-root "${native_root}" --output-dir "${config_dir}"
+  --log-dir "${log_dir}" --scenario-config "${scenario}" --policy "${policy}" --ue-count "${ue_count}"
+  --traffic-profile "${profile}" --seed "${seed}")
+if [[ "${awgn}" != "off" ]]; then
+  render_args+=(--awgn-snr-db "${awgn}")
+  [[ -z "${tx_power_ul}" ]] || render_args+=(--tx-power-ul "${tx_power_ul}")
+  [[ -z "${tx_power_dl}" ]] || render_args+=(--tx-power-dl "${tx_power_dl}")
+fi
+/usr/bin/python3 "${script_dir}/render_single_cell.py" "${render_args[@]}" >"${log_dir}/render.log" 2>&1 || {
+  cat "${log_dir}/render.log" >&2; usage_error "config rendering failed"; }
+if [[ -n "${gnb_rx_gain}" ]]; then
+  grep -qx '  rx_gain: 0' "${config_dir}/gnb0.yaml" || usage_error "gnb0.yaml has no 'rx_gain: 0' line"
+  sed -i "s/^  rx_gain: 0\$/  rx_gain: ${gnb_rx_gain}/" "${config_dir}/gnb0.yaml"
+fi
+"${gnb_binary}" -c "${config_dir}/gnb0.yaml" --dryrun >"${log_dir}/gnb0-dryrun.log" 2>&1 || {
+  tail -20 "${log_dir}/gnb0-dryrun.log" >&2; usage_error "gnb0 dry run failed"; }
+
+# CPU placement on spark-gb10 (big X925 5-9,15-19; little A725 0-4,10-14).
+# Up to 8 UEs: the gNB sees eight CPUs (OCUDU needs >= 5: its worker pool is
+# min(needed, CPUs - 3)), the broker one big core, the UEs share six, and
+# helpers (core, replay, traffic, recorders) the little cores 0-4. Above 8
+# UEs srsUE decoding dominates: the gNB keeps the five big cores 5-9, the
+# broker (one producer thread per node) gets 10-11, the UEs share 2-4 and
+# 12-19, and the helpers 0-1.
+# shellcheck source=../../scripts/native/oai-gate-defaults.sh
+source "${native_dir}/oai-gate-defaults.sh"
+oai_gate_platform || usage_error "platform profile resolution failed"
+if [[ "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" == "spark-gb10" && "${ue_count}" -gt 8 ]]; then
+  cpus_gnb="5-9" cpus_broker="10-11" cpus_ues="2-4,12-19" cpus_aux="0-1"
+elif [[ "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" == "spark-gb10" ]]; then
+  cpus_gnb="5-12" cpus_broker="13" cpus_ues="14-19" cpus_aux="0-4"
+else
+  cpus_gnb="" cpus_broker="" cpus_ues="" cpus_aux=""
+fi
+# Placement experiments: SINGLE_CELL_CPUS_{GNB,BROKER,UES,AUX} override one role.
+cpus_gnb="${SINGLE_CELL_CPUS_GNB:-${cpus_gnb}}" cpus_broker="${SINGLE_CELL_CPUS_BROKER:-${cpus_broker}}"
+cpus_ues="${SINGLE_CELL_CPUS_UES:-${cpus_ues}}" cpus_aux="${SINGLE_CELL_CPUS_AUX:-${cpus_aux}}"
+
+/usr/bin/python3 - "${report_dir}/run-parameters.json" "${policy}" "${ue_count}" "${profile}" "${seed}" "${awgn}" \
+  "${tx_power_ul}" "${tx_power_dl}" "${gnb_rx_gain}" "${scenario}" "${channel_bundle}" "${traffic_bundle}" \
+  "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" "${cpus_gnb}" "${cpus_broker}" "${cpus_ues}" "${cpus_aux}" \
+  "${channel_build}" <<'PY'
+import json, sys
+(out, policy, ue_count, profile, seed, awgn, tx_ul, tx_dl, rx_gain, scenario, channel, traffic, platform,
+ gnb, broker, ues, aux, build) = sys.argv[1:]
+json.dump({"policy": policy, "ue_count": int(ue_count), "traffic_profile": profile, "seed": int(seed),
+           "awgn_snr_db": None if awgn == "off" else float(awgn), "tx_power_ul": float(tx_ul) if tx_ul else None,
+           "tx_power_dl": float(tx_dl) if tx_dl else None, "gnb_rx_gain_db": float(rx_gain) if rx_gain else None,
+           "scenario": scenario, "channel_bundle": channel, "traffic_bundle": traffic, "platform_profile": platform,
+           "cpus": {"gnb": gnb, "broker": broker, "ues": ues, "aux": aux}, "channel_build": build},
+          open(out, "w"), indent=2, sort_keys=True)
+PY
+
+set +e
+# --kill-child=TERM: if this script is stopped, the inner gets SIGTERM and runs its
+# bounded cleanup instead of dying with its process groups still running.
+unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagation private \
+  "${inner}" --repo-root "${repo_root}" --native-root "${native_root}" --run-root "${run_root}" \
+  --parent-netns "$(readlink /proc/self/ns/net)" --parent-mntns "$(readlink /proc/self/ns/mnt)" --outer-uid "$(id -u)" \
+  --gnb-binary "${gnb_binary}" --broker "${broker}" --ue-count "${ue_count}" --policy "${policy}" \
+  --channel-bundle "${channel_bundle}" --traffic-bundle "${traffic_bundle}" --sionna-python "${sionna_python}" \
+  --attach-timeout "${attach_timeout}" --drain-seconds "${drain_seconds}" \
+  --cpus-gnb "${cpus_gnb}" --cpus-broker "${cpus_broker}" --cpus-ues "${cpus_ues}" --cpus-aux "${cpus_aux}"
+inner_status="$?"
+set -e
+
+"${sionna_python}" "${script_dir}/single_cell_analyze.py" --run-root "${run_root}" \
+  --channel-bundle "${channel_bundle}" --traffic-bundle "${traffic_bundle}" --warmup-seconds "${warmup_seconds}" \
+  --out "${report_dir}/run-report.json" >"${log_dir}/analyze.log" 2>&1 || \
+  echo "event=analyze_failed log=${log_dir}/analyze.log" >&2
+printf 'event=single_cell_policy_run policy=%s ues=%s status=%s run_root="%s"\n' \
+  "${policy}" "${ue_count}" "${inner_status}" "${run_root}"
+exit "${inner_status}"

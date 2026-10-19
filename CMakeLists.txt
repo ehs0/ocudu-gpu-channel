@@ -139,6 +139,10 @@ if(OCUDU_GPU_CHANNEL_BUILD_TESTS)
   target_link_libraries(test_runtime_update_parity PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME runtime_update_parity COMMAND test_runtime_update_parity)
 
+  add_executable(test_sample_indexed_control tests/test_sample_indexed_control.cpp)
+  target_link_libraries(test_sample_indexed_control PRIVATE ocudu_gpu_channel_lib)
+  add_test(NAME sample_indexed_control COMMAND test_sample_indexed_control)
+
   add_executable(test_matrix_profile_history tests/test_matrix_profile_history.cpp)
   target_link_libraries(test_matrix_profile_history PRIVATE ocudu_gpu_channel_lib)
   add_test(NAME matrix_profile_history COMMAND test_matrix_profile_history)

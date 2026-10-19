@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Render one single-cell policy run: one gNB, one broker topology, N UEs.
+
+Exactly one scheduler policy per gNB config. Everything else -- gNB identity
+and addresses, the UE identities (definitions.single_cell_ue), the receiver
+noise floor, the subscriber 5QIs -- depends only on the UE count and the
+traffic profile, so the configs of two policy runs of one session differ in
+the policy block alone (the gate diffs them; see single_cell_runner.py).
+
+Reused unchanged: the gNB rendering of render-multi-gnb-configs.py (cell a's
+identity), the Open5GS and srsUE rendering of render-multi-ue-configs.py, the
+receiver-noise arithmetic of render-sionna-multi-ue-configs.py and the gNB
+metrics block of render-sionna-rank1-configs.py.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+NATIVE = HERE.parents[1] / "scripts" / "native"
+sys.path.insert(0, str(HERE))
+
+import definitions as bench  # noqa: E402
+
+
+def load(name: str, path: Path):
+    if name in sys.modules:
+        return sys.modules[name]
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+multi_gnb = load("render_multi_gnb_configs", NATIVE / "render-multi-gnb-configs.py")
+sionna = load("render_sionna_multi_ue_configs", NATIVE / "render-sionna-multi-ue-configs.py")
+rank1 = load("render_sionna_rank1_configs", NATIVE / "render-sionna-rank1-configs.py")
+legacy = multi_gnb.multi_ue
+fail = legacy.fail
+
+GNB_CELL = {**bench.SINGLE_CELL_GNB, "pci": 1, "gnb_id": 411, "bind": "127.0.0.11"}
+SUBSCRIBER_HEADER = "# name,imsi,key,op_type,op_or_opc,amf,qci,ipv4\n"
+SUBSCRIBER_KEY = "00112233445566778899aabbccddeeff"
+SUBSCRIBER_OPC = "63bfa50ee6523365ff14c1f45f88737d"
+
+
+def insert_scheduler_policy(gnb_text: str, scheduler: str) -> str:
+    if scheduler not in bench.SCHEDULERS:
+        fail(f"unknown scheduler {scheduler!r}; known: {', '.join(bench.SCHEDULERS)}")
+    if "\n  scheduler:\n" in gnb_text:
+        fail("gNB fixture already has a cell_cfg.scheduler block")
+    return legacy.replace_exact(gnb_text, "cell_cfg:\n", "cell_cfg:\n" + bench.SCHEDULERS[scheduler]["yaml"], 1,
+                                "gNB scheduler policy")
+
+
+def add_config_dump(gnb_text: str) -> str:
+    return legacy.replace_exact(gnb_text, "  all_level: info\n", "  all_level: info\n  config_level: info\n", 1,
+                                "gNB config dump level")
+
+
+def check_scenario(root: dict, ue_count: int) -> None:
+    nodes = root.get("nodes")
+    expected = {"gnb0"} | {f"ue{i}" for i in range(ue_count)}
+    if not isinstance(nodes, dict) or set(nodes) != expected:
+        fail(f"single-cell scenario must name exactly gnb0 and ue0..ue{ue_count - 1}")
+    pairs = {(link.get("from"), link.get("to")) for link in root.get("links") or []}
+    for index in range(ue_count):
+        if ("gnb0", f"ue{index}") not in pairs or (f"ue{index}", "gnb0") not in pairs:
+            fail(f"scenario is missing the gnb0<->ue{index} link pair")
+    if len(pairs) != 2 * ue_count:
+        fail("single-cell scenario carries gNB<->UE links only")
+
+
+def render_topology(ue_count: int, rx_noise: dict[str, float]) -> str:
+    """The broker topology: gnb0 and ue0..ueN-1, one quiet TDL per link model,
+    one absolute AWGN receiver floor per node (render-sionna-multi-ue-configs.py
+    semantics, with endpoints from definitions.single_cell_ue)."""
+
+    nodes = [("gnb0", bench.SINGLE_CELL_GNB["tx_port"], bench.SINGLE_CELL_GNB["rx_port"])]
+    nodes += [(ue["device_id"], ue["tx_port"], ue["rx_port"]) for ue in map(bench.single_cell_ue, range(ue_count))]
+    devices = ""
+    for node_id, tx_port, rx_port in nodes:
+        devices += (f"  - id: {node_id}_p0\n    role: port\n    sample_rate_hz: 23040000\n"
+                    f"    tx_endpoint: tcp://127.0.0.1:{tx_port}\n    rx_endpoint: tcp://127.0.0.1:{rx_port}\n")
+        if node_id in rx_noise:
+            devices += f"    rx_model: rx_noise_{node_id}\n"
+    radio_nodes = "".join(f"  - id: {node_id}\n    tx_ports:\n      - {node_id}_p0\n    rx_ports:\n      - {node_id}_p0\n"
+                          for node_id, _, _ in nodes)
+    links = "".join(f"  - from: gnb0\n    to: ue{i}\n    model: sionna_rt\n" for i in range(ue_count))
+    links += "".join(f"  - from: ue{i}\n    to: gnb0\n    model: sionna_rt\n" for i in range(ue_count))
+    models = ("  sionna_rt:\n    chain:\n      - type: tdl\n        taps:\n          - delay_samples: 0.0\n"
+              "            gain_db: -100.0\n            phase_rad: 0.0\n")
+    models += "".join(f"  rx_noise_{node_id}:\n    chain:\n      - type: awgn\n        noise_power: {rx_noise[node_id]:.6e}\n"
+                      for node_id, _, _ in nodes if node_id in rx_noise)
+    return ("# Generated by examples/scheduler_benchmark/render_single_cell.py.\n"
+            "runtime:\n  backend: cuda\n  gpu_device: 0\n  batch_samples: 23040\n  queue_samples: 2457600\n"
+            f"devices:\n{devices}radio_nodes:\n{radio_nodes}links:\n{links}models:\n{models}")
+
+
+def render_subscriber(ue_count: int, five_qi: list[int]) -> str:
+    rows = []
+    for index in range(ue_count):
+        ue = bench.single_cell_ue(index)
+        rows.append(f"single-cell-{index},{ue['imsi']},{SUBSCRIBER_KEY},opc,{SUBSCRIBER_OPC},8000,"
+                    f"{five_qi[index]},{ue['ipv4']}\n")
+    return SUBSCRIBER_HEADER + "".join(rows)
+
+
+def noise_description(rx_noise: dict[str, float], awgn_snr_db: float | None, tx_dl: float, tx_ul: float) -> dict:
+    return {
+        "enabled": bool(rx_noise),
+        "awgn_snr_db": awgn_snr_db, "tx_power_dl": tx_dl, "tx_power_ul": tx_ul,
+        "noise_power": dict(sorted(rx_noise.items())),
+        "generator": ("CUDA Philox4_32_10 per receiver row: seed = std::hash(<node>:awgn:<step>), counter = samples "
+                      "since the noise epoch; the replay bridge sets the epoch to measurement sample S0 on every node"),
+        "applied": "once per receiver to the summed input (rx_model), never per propagation coefficient",
+    }
+
+
+def render(args: argparse.Namespace) -> dict:
+    output_dir = legacy.safe_directory(args.output_dir, "output directory")
+    log_dir = legacy.safe_directory(args.log_dir, "log directory")
+    repo_root = args.repo_root.resolve(strict=True)
+    native_root = args.native_root.resolve(strict=True)
+    root = json.loads(args.scenario_config.read_text(encoding="utf-8"))
+    check_scenario(root, args.ue_count)
+    profile = bench.single_cell_profile(args.traffic_profile, args.ue_count)
+    shape = sionna.LiveShape(sionna.NodePorts("gnb0", 1, 1),
+                             tuple(sionna.NodePorts(f"ue{i}", 1, 1) for i in range(args.ue_count)),
+                             tuple(sionna.ShapeLink(l["from"], l["to"], l.get("model", "sionna_rt"))
+                                   for l in root["links"]))
+    rx_noise = sionna.rx_noise_powers(shape, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul)
+    gnb_source = legacy.read_regular(repo_root / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml",
+                                     "gNB fixture")
+    gnb_text = multi_gnb.render_gnb(gnb_source, GNB_CELL, log_dir)
+    gnb_text = insert_scheduler_policy(gnb_text, args.policy)
+    gnb_text = add_config_dump(gnb_text)
+    gnb_text += rank1.render_gnb_metrics(bench.SINGLE_CELL_GNB["metrics_port"])
+    srsue_source = legacy.read_regular(repo_root / "examples/configs/ran/srsue/srsue_zmq_multi_ue.conf.in",
+                                       "native srsUE template")
+    open5gs_source = legacy.read_regular(native_root / "src/ocudu/docker/open5gs/open5gs-5gc.yml",
+                                         "pinned OCUDU Open5GS template")
+    rendered = {
+        "gnb0.yaml": gnb_text,
+        "topology.yaml": render_topology(args.ue_count, rx_noise),
+        "open5gs.yaml": legacy.render_open5gs(open5gs_source, native_root),
+        "subscriber.csv": render_subscriber(args.ue_count, [ue["five_qi"] for ue in profile["ues"]]),
+        "scenario.json": json.dumps(root, indent=2) + "\n",
+    }
+    ues = []
+    for index in range(args.ue_count):
+        record = bench.single_cell_ue(index)
+        rendered[f"srsue-ue{index}.conf"] = legacy.render_srsue(srsue_source, record, log_dir)
+        ue_profile = profile["ues"][index]
+        ues.append({**record, "index": index, "role": ue_profile["role"], "five_qi": ue_profile["five_qi"],
+                    "qos": bench.FIVE_QI[ue_profile["five_qi"]], "flows": ue_profile["flows"]})
+    metadata = {
+        "kind": "ocudu-single-cell-scheduler-benchmark",
+        "policy": args.policy,
+        "scheduler_info": bench.SCHEDULERS[args.policy],
+        "ue_count": args.ue_count,
+        "seed": args.seed,
+        "traffic_profile": profile,
+        "gnb": dict(GNB_CELL, metrics_enabled=True),
+        "ues": ues,
+        "links": [{"from": l["from"], "to": l["to"], "model": l.get("model", "sionna_rt")} for l in root["links"]],
+        "noise": noise_description(rx_noise, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul),
+        "scenario_benchmark": root.get("benchmark"),
+    }
+    for name, text in rendered.items():
+        if name.endswith((".yaml", ".conf", ".csv")) and legacy.PLACEHOLDER_RE.search(text):
+            fail(f"unresolved placeholder in {name}")
+        legacy.write_new(output_dir / name, text)
+    legacy.write_new(output_dir / "benchmark.json", json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+    return metadata
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--native-root", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--log-dir", type=Path, required=True)
+    parser.add_argument("--scenario-config", type=Path, required=True)
+    parser.add_argument("--policy", choices=sorted(bench.SCHEDULERS), required=True)
+    parser.add_argument("--ue-count", type=int, required=True)
+    parser.add_argument("--traffic-profile", required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--awgn-snr-db", type=float, default=None)
+    parser.add_argument("--tx-power-dl", type=float, default=sionna.TX_POWER_DL)
+    parser.add_argument("--tx-power-ul", type=float, default=sionna.TX_POWER_UL)
+    parser.add_argument("--noise-only", action="store_true",
+                        help="print the receiver-noise description as JSON and exit (no files)")
+    args = parser.parse_args()
+    if not 1 <= args.ue_count <= bench.MAX_SINGLE_CELL_UES:
+        parser.error(f"--ue-count must be 1..{bench.MAX_SINGLE_CELL_UES}")
+    if args.noise_only:
+        shape = sionna.LiveShape(sionna.NodePorts("gnb0", 1, 1),
+                                 tuple(sionna.NodePorts(f"ue{i}", 1, 1) for i in range(args.ue_count)), ())
+        rx_noise = sionna.rx_noise_powers(shape, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul)
+        print(json.dumps(noise_description(rx_noise, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul),
+                         sort_keys=True))
+        return 0
+    metadata = render(args)
+    print(f"event=single_cell_configs_rendered policy={args.policy} ues={args.ue_count} "
+          f"profile={metadata['traffic_profile']['name']} seed={args.seed} output_dir=\"{args.output_dir}\"")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

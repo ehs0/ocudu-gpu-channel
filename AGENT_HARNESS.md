@@ -92,6 +92,10 @@ This workspace starts as a new repository for a GPU-backed channel-emulation lay
 
 - Trace the production executable’s actual stack construction and event dispatcher before declaring a component recovery test sufficient. Exercise the public runtime entry point as well as the component: a passing alternate-stack test can miss the path the shipped binary uses.
 
+- Never edit a shell script while a live run is executing it. Bash reads a script incrementally, so an edit lands mid-run as a syntax error at whatever line the shell reaches next, after the run looked healthy. Stage script changes and apply them between runs. [Lesson from the 2026-10-17 single-cell benchmark: one measured run lost its summary this way.]
+- Do not use `pkill -f`/`pgrep -f` with a pattern that also appears in your own command line: the agent shell's `bash -c '...'` carries the pattern and is matched and killed with it. Anchor the pattern (`^/path/to/interpreter script`) or kill by recorded PID. The same rule applies to any code that selects processes to kill: select by a marker the owner sets (an environment variable inherited from the launcher), never by "the command line mentions this directory", which also matches an operator's `tail -f`. [Same lesson; the controller first killed the agent's shell this way.]
+- Evidence lines that several threads print must be written as one complete line with a single write(2), not through chained stream insertions: interleaved fragments make a parser drop records, which a gate then reads as missing data. Count unparseable evidence lines and fail on them rather than skipping them. [Same lesson: 7 of 10,400 apply records were torn in the first live session.]
+
 ## Handoff Condition
 
 - The active workstream is in a stable state or explicitly awaiting user direction.

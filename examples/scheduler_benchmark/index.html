@@ -3,307 +3,197 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Scheduler Benchmark</title>
+<title>Single-Cell Scheduler Benchmark</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-/* Layout: an instrument sheet. A hardware strip (scene + host), a radio
-   specification sheet, then two scheduler lanes side by side with every
-   evaluation row aligned across both lanes behind one shared label gutter. */
+/* One cell, N UEs, two tests (Test 1 / Test 2) run one after another on the
+   same frozen channel and traffic. Layout: shared settings, the two test
+   panels, session status + fairness gates, the shared channel, one panel per
+   run, then the comparison. */
 :root {
-  --bg: #eef1f2;
-  --surface: #ffffff;
-  --sunken: #f5f7f8;
-  --ink: #18222a;
-  --muted: #5a6872;
-  --faint: #8b979f;
-  --rule: #d6dde1;
-  --accent: #17708f;
-  --lane-a: #5b4bc4;
-  --lane-b: #b45f12;
-  --ue-a: #1f8a78;
-  --ue-b: #cc3f63;
-  --common: #a3adb4;
-  --good: #2b8550;
-  --warn: #b7800c;
-  --bad: #c03b33;
-  --grid-bg: #f7f9fa;
-  --font-display: "Barlow Semi Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
-  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  --step--1: 0.8125rem;
-  --step-0: 0.9375rem;
-  --step-1: 1.125rem;
-  --step-2: 1.5rem;
-  --step-3: 2.125rem;
-  --radius: 6px;
-  color-scheme: light;
+  --bg: #eef1f2; --surface: #ffffff; --sunken: #f5f7f8; --ink: #18222a; --muted: #5a6872; --faint: #8b979f;
+  --rule: #d6dde1; --accent: #17708f; --good: #2b8550; --warn: #b7800c; --bad: #c03b33;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --seq-0: #eaf2fc; --seq-1: #2a78d6;
+  --font-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --radius: 6px; color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0f1418; --surface: #161e24; --sunken: #121a1f; --ink: #e2e8eb; --muted: #94a3ad; --faint: #6c7a84;
-    --rule: #28333a; --accent: #57b5d3; --lane-a: #a59bff; --lane-b: #eea25b; --ue-a: #4cc4ad; --ue-b: #f17d99;
-    --common: #5d6a72; --good: #5cc488; --warn: #e2b043; --bad: #f0746a; --grid-bg: #11181d; color-scheme: dark;
+    --rule: #28333a; --accent: #57b5d3; --good: #5cc488; --warn: #e2b043; --bad: #f0746a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --seq-0: #1b2733; --seq-1: #3987e5; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0f1418; --surface: #161e24; --sunken: #121a1f; --ink: #e2e8eb; --muted: #94a3ad; --faint: #6c7a84;
-  --rule: #28333a; --accent: #57b5d3; --lane-a: #a59bff; --lane-b: #eea25b; --ue-a: #4cc4ad; --ue-b: #f17d99;
-  --common: #5d6a72; --good: #5cc488; --warn: #e2b043; --bad: #f0746a; --grid-bg: #11181d; color-scheme: dark;
+  --rule: #28333a; --accent: #57b5d3; --good: #5cc488; --warn: #e2b043; --bad: #f0746a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --seq-0: #1b2733; --seq-1: #3987e5; color-scheme: dark;
 }
-
 * { box-sizing: border-box; }
 html, body { margin: 0; }
-body {
-  background: var(--bg); color: var(--ink); font: 400 var(--step-0)/1.5 var(--font-body);
-  padding: 0 clamp(16px, 3vw, 40px) 48px;
-}
-h1, h2, h3 { font-family: var(--font-display); font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: .005em; }
-h2 { font-size: var(--step-2); }
-h3 { font-size: var(--step-1); }
-.label { font: 500 0.6875rem/1.2 var(--font-body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+body { background: var(--bg); color: var(--ink); font: 400 15px/1.5 var(--font-body); padding: 0 clamp(16px, 3vw, 40px) 48px; }
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; margin: 0; letter-spacing: .005em; }
+h2 { font-size: 1.4rem; } h3 { font-size: 1.1rem; }
+.label { font: 500 .6875rem/1.2 var(--font-body); letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
 .mono, .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .muted { color: var(--muted); }
-a { color: var(--accent); }
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-
-/* --- header --------------------------------------------------------------- */
-header.top {
-  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg);
-  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; padding-block: 14px 12px;
-  border-bottom: 1px solid var(--rule); margin-bottom: 24px;
-}
-.brand { display: flex; flex-direction: column; gap: 2px; margin-right: auto; min-width: 0; }
-.brand h1 { font-size: var(--step-2); line-height: 1.1; }
-.brand .sub { font-size: var(--step--1); color: var(--muted); }
-.run-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
-select, button {
-  font: 500 var(--step--1) var(--font-body); color: var(--ink); background: var(--surface);
-  border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px 10px;
-}
+header.top { position: sticky; top: 0; z-index: 10; background: var(--bg); padding: 14px 0 12px; border-bottom: 1px solid var(--rule); margin-bottom: 20px; }
+.brand { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+.brand h1 { font-size: 1.6rem; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+select, input, button { font: 500 .875rem var(--font-body); color: var(--ink); background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px 10px; }
+input[type=number] { width: 7.5em; }
+.checks { display: flex; gap: 10px; padding: 6px 0; }
+.checks label { display: flex; gap: 4px; align-items: center; font-size: .875rem; }
 button { cursor: pointer; }
-button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
-.pill {
-  display: inline-flex; align-items: center; gap: 6px; font: 600 0.6875rem/1 var(--font-body);
-  letter-spacing: .08em; text-transform: uppercase; padding: 5px 9px; border-radius: 999px;
-  border: 1px solid currentColor; white-space: nowrap;
-}
-.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-.pill.live { color: var(--good); }
-.pill.live::before { animation: pulse 1.6s ease-in-out infinite; }
-.pill.complete { color: var(--accent); }
-.pill.failed, .pill.incomplete { color: var(--bad); }
-.pill.waiting { color: var(--warn); }
-@keyframes pulse { 50% { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) { .pill.live::before { animation: none; } }
-.progress { display: flex; flex-direction: column; gap: 4px; min-width: 180px; }
-.progress .bar { height: 4px; background: var(--rule); border-radius: 2px; overflow: hidden; }
-.progress .bar > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .4s; }
-.progress .txt { font: 400 var(--step--1) var(--font-mono); color: var(--muted); }
-
-/* --- sections ---------------------------------------------------------------- */
-section { margin-bottom: 36px; }
-.section-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin-bottom: 12px; }
-.section-head p { margin: 0; color: var(--muted); font-size: var(--step--1); max-width: 70ch; }
-.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); }
-
-/* --- scene + hardware ----------------------------------------------------------- */
-.strip { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 16px; }
-@media (max-width: 960px) { .strip { grid-template-columns: minmax(0, 1fr); } }
-.scene { position: relative; min-height: 420px; overflow: hidden; }
-.scene canvas { display: block; width: 100%; height: 100%; }
-#scene3d { position: absolute; inset: 0; }
-.scene-overlay {
-  position: absolute; left: 12px; top: 12px; right: 12px; display: flex; flex-wrap: wrap; gap: 8px;
-  pointer-events: none; align-items: flex-start;
-}
-.chip {
-  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid var(--rule);
-  border-radius: var(--radius); padding: 6px 9px; font-size: var(--step--1); line-height: 1.35;
-}
-.chip b { font: 600 var(--step--1) var(--font-mono); font-variant-numeric: tabular-nums; }
-.scene-legend { position: absolute; left: 12px; bottom: 12px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; }
-.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 5px; }
-.scene-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
-.scene-empty[hidden] { display: none; }
-
-.hw { display: flex; flex-direction: column; gap: 14px; padding: 16px; min-width: 0; }
-.hw-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 10px; }
-.stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.stat .v { font: 500 var(--step-1) var(--font-mono); font-variant-numeric: tabular-nums; }
-.stat .v small { font-size: var(--step--1); color: var(--muted); margin-left: 2px; }
-.gpu-name { font: 600 var(--step-1) var(--font-display); }
-.cores { display: grid; grid-template-columns: repeat(10, minmax(0, 1fr)); gap: 3px; }
-.core {
-  position: relative; height: 46px; border-radius: 3px; background: var(--sunken); border: 1px solid var(--rule);
-  overflow: hidden; display: flex; flex-direction: column; justify-content: space-between; padding: 2px 3px;
-}
-.core .fill { position: absolute; left: 0; right: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 35%, transparent); }
-.core .n, .core .who { position: relative; font: 500 0.625rem/1.1 var(--font-mono); }
-.core .who { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.core.cell-a { border-color: color-mix(in srgb, var(--lane-a) 60%, var(--rule)); }
-.core.cell-b { border-color: color-mix(in srgb, var(--lane-b) 60%, var(--rule)); }
-.cluster-label { display: flex; justify-content: space-between; font-size: var(--step--1); color: var(--muted); margin-top: 4px; }
-.procs { width: 100%; border-collapse: collapse; font-size: var(--step--1); }
-.procs th { text-align: left; font-weight: 500; color: var(--muted); padding: 3px 6px 3px 0; border-bottom: 1px solid var(--rule); }
-.procs td { padding: 3px 6px 3px 0; border-bottom: 1px solid color-mix(in srgb, var(--rule) 55%, transparent); }
-.procs td.num { text-align: right; }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.danger { color: var(--bad); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.pending { color: var(--warn); font-size: .8125rem; min-height: 1.2em; }
+.error-box { color: var(--bad); font-size: .8125rem; white-space: pre-wrap; }
+main { display: grid; gap: 20px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 16px; min-width: 0; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 900px) { .row2 { grid-template-columns: 1fr; } }
+.state-line { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin: 6px 0 10px; }
+.badge { font: 600 .8125rem var(--font-mono); padding: 3px 9px; border-radius: 999px; border: 1px solid currentColor; }
+.badge.good { color: var(--good); } .badge.bad { color: var(--bad); } .badge.warn { color: var(--warn); } .badge.idle { color: var(--muted); }
+.bar { height: 6px; border-radius: 3px; background: var(--sunken); overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--accent); width: 0; transition: width .3s; }
+.steps { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.step { font: 500 .75rem var(--font-mono); padding: 2px 8px; border-radius: 4px; border: 1px solid var(--rule); color: var(--muted); }
+.step.done { color: var(--good); border-color: var(--good); } .step.now { color: var(--accent); border-color: var(--accent); }
+.gates { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 8px; margin-top: 8px; }
+.gate { border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px 10px; }
+.gate .v { font: 600 .875rem var(--font-mono); }
+.gate.pass .v { color: var(--good); } .gate.fail .v { color: var(--bad); } .gate.wait .v { color: var(--muted); }
+.verdict { font: 700 1.05rem var(--font-display); margin-top: 10px; }
+.verdict.pass { color: var(--good); } .verdict.fail { color: var(--bad); }
+ul.reasons { margin: 6px 0 0; padding-left: 18px; font-size: .8125rem; color: var(--muted); max-height: 160px; overflow: auto; }
+.chart { width: 100%; position: relative; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart text { fill: var(--muted); font: 400 11px var(--font-body); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: .8125rem; margin: 6px 0; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
+.tooltip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 6px 8px; font-size: .75rem; box-shadow: 0 2px 8px rgba(0,0,0,.12); display: none; z-index: 5; white-space: nowrap; }
+.runs { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 20px; }
+.run-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.kv { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; margin: 10px 0; }
+.kv div { background: var(--sunken); border-radius: 4px; padding: 6px 8px; }
+.kv b { display: block; font: 600 1rem var(--font-mono); }
+table { border-collapse: collapse; width: 100%; font-size: .8125rem; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-weight: 500; color: var(--muted); }
+td.num, th.num { text-align: right; }
+.inline-bar { display: inline-block; height: 6px; border-radius: 3px; background: var(--muted); vertical-align: middle; margin-right: 6px; }
 .table-wrap { overflow-x: auto; }
-
-/* --- radio sheet --------------------------------------------------------------------- */
-.sheet { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-@media (max-width: 1100px) { .sheet { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .sheet .gnb { grid-column: 1 / -1; } }
-@media (max-width: 680px) { .sheet { grid-template-columns: minmax(0, 1fr); } }
-.card { padding: 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
-.card-head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
-.tag { font: 500 0.6875rem/1 var(--font-mono); padding: 4px 6px; border-radius: 4px; background: var(--sunken); border: 1px solid var(--rule); color: var(--muted); }
-.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 14px; margin: 0; font-size: var(--step--1); }
-.kv dt { color: var(--muted); }
-.kv dd { margin: 0; font-family: var(--font-mono); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.gnb-body { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 16px; align-items: start; }
-@media (max-width: 560px) { .gnb-body { grid-template-columns: minmax(0, 1fr); } }
-.patterns { display: flex; gap: 10px; }
-.patterns figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; }
-.patterns figcaption { font-size: 0.6875rem; color: var(--muted); }
-.flows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: var(--step--1); }
-.flows li { display: flex; justify-content: space-between; gap: 10px; border-top: 1px dashed var(--rule); padding-top: 4px; }
-.live-ue { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.live-ue .chip { background: var(--sunken); }
-.ue-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-
-/* --- lanes + evaluation ---------------------------------------------------------------- */
-.board { display: grid; grid-template-columns: minmax(150px, 0.62fr) minmax(0, 1fr) minmax(0, 1fr); column-gap: 16px; }
-.board > .gutter { grid-column: 1; }
-.lane-head { padding: 18px; border-top: 4px solid var(--lane-color); display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.lane-a { --lane-color: var(--lane-a); }
-.lane-b { --lane-color: var(--lane-b); }
-.lane-head .cell { font: 500 var(--step--1) var(--font-mono); color: var(--lane-color); }
-.lane-head h3 { font-size: var(--step-2); line-height: 1.15; }
-.lane-head p { margin: 0; max-width: 62ch; }
-.lane-head ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: var(--step--1); display: flex; flex-direction: column; gap: 3px; }
-.verify { font-size: var(--step--1); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.ok { color: var(--good); } .bad { color: var(--bad); } .warn { color: var(--warn); }
-.grid-wrap { display: flex; flex-direction: column; gap: 6px; }
-.grid-wrap canvas { width: 100%; height: 150px; display: block; border-radius: 4px; background: var(--grid-bg); border: 1px solid var(--rule); }
-.grid-legend { display: flex; flex-wrap: wrap; gap: 10px; font-size: 0.6875rem; color: var(--muted); }
-.board-gutter-head { display: flex; flex-direction: column; justify-content: flex-end; gap: 8px; padding-bottom: 18px; color: var(--muted); font-size: var(--step--1); }
-
-.metric-row { display: contents; }
-.metric-row > div { padding: 14px 0; border-top: 1px solid var(--rule); min-width: 0; }
-.metric-label h4 { margin: 0 0 3px; font: 600 var(--step-0)/1.25 var(--font-body); }
-.metric-label p { margin: 0; font-size: 0.75rem; color: var(--muted); line-height: 1.4; }
-.metric-label .layer { display: inline-block; margin-top: 6px; }
-.cellv { display: flex; flex-direction: column; gap: 6px; }
-.cellv .main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-.cellv .big { font: 500 var(--step-3)/1 var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-.cellv .unit { color: var(--muted); font-size: var(--step--1); }
-.cellv .better { font: 600 0.625rem/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--lane-color); border: 1px solid currentColor; border-radius: 3px; padding: 3px 5px; }
-.meter { height: 6px; background: var(--sunken); border-radius: 3px; overflow: hidden; }
-.meter > span { display: block; height: 100%; background: var(--lane-color); }
-.subs { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 4px 12px; font-size: var(--step--1); }
-.subs .s { display: flex; justify-content: space-between; gap: 6px; border-top: 1px dashed var(--rule); padding-top: 3px; }
-.subs .s span:first-child { color: var(--muted); }
-.paired { grid-column: 2 / -1; font-size: 0.75rem; color: var(--muted); padding: 0 0 14px !important; border-top: 0 !important; }
-.paired .num { color: var(--ink); }
-.excluded { grid-column: 1 / -1; font-size: var(--step--1); color: var(--muted); border-top: 1px solid var(--rule); padding-top: 12px; }
-
-@media (max-width: 860px) {
-  .board { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .board > .gutter, .board-gutter-head { grid-column: 1 / -1; }
-  .metric-label { grid-column: 1 / -1; padding-bottom: 0 !important; }
-  .metric-row > .cellv { border-top: 0; padding-top: 8px; }
-  .paired { grid-column: 1 / -1; }
-}
-@media (max-width: 520px) {
-  .board { grid-template-columns: minmax(0, 1fr); }
-  .cellv { padding-left: 10px !important; border-left: 3px solid var(--lane-color) !important; }
-}
-
-/* --- per-second chart + integrity -------------------------------------------------------- */
-.chart-panel { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-.seg-control { display: flex; flex-wrap: wrap; gap: 6px; }
-#chart { width: 100%; height: 240px; display: block; }
-.integrity { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; }
-.integrity .card { gap: 8px; }
-.check { display: flex; justify-content: space-between; gap: 10px; font-size: var(--step--1); border-top: 1px dashed var(--rule); padding-top: 4px; }
-.check span:last-child { font-family: var(--font-mono); text-align: right; }
-.empty-state { padding: 28px; color: var(--muted); }
-footer { color: var(--faint); font-size: 0.75rem; }
+.scene { position: relative; height: 460px; padding: 0; overflow: hidden; }
+#scene3d { position: absolute; inset: 0; }
+.scene-overlay { position: absolute; left: 10px; top: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; }
+.chip { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 3px 7px; }
+.scene-legend { position: absolute; left: 10px; bottom: 10px; right: 10px; display: flex; gap: 6px; flex-wrap: wrap; font-size: .75rem; }
+.scene-legend .mat { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; border: 1px solid var(--rule); }
+.swatch.dash { background: none !important; border-top: 2px dashed currentColor; height: 0; }
+.scene-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: .875rem; }
+.heat { display: grid; gap: 2px; margin-top: 6px; }
+.heat-row { display: grid; grid-template-columns: 44px 1fr; gap: 6px; align-items: center; font: 400 .75rem var(--font-mono); }
+.heat-cells { display: flex; gap: 1px; height: 14px; }
+.heat-cells i { flex: 1; border-radius: 1px; }
+details summary { cursor: pointer; color: var(--muted); font-size: .8125rem; }
+.empty { color: var(--muted); font-size: .875rem; padding: 12px 0; }
+.tests { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 20px; }
+.test-panel h2 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.test-panel .field { margin: 8px 0; }
+.test-panel select { width: 100%; }
+.test-panel ul { margin: 6px 0 0; padding-left: 18px; font-size: .8125rem; color: var(--muted); }
+.test-panel .result { margin-top: 10px; }
+.aa-note { color: var(--warn); font-size: .8125rem; min-height: 1.2em; }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="brand">
-    <h1>Scheduler Benchmark</h1>
-    <span class="sub">Two OCUDU cells, one Sionna channel, two MAC scheduling policies</span>
+    <h1>Single-cell scheduler benchmark</h1>
+    <span class="muted" id="sessionLine">No benchmark</span>
   </div>
-  <div class="run-controls">
-    <label class="label" for="run">Run</label>
-    <select id="run" aria-label="Benchmark run"></select>
-    <span id="state" class="pill waiting">Loading</span>
-    <span id="seed" class="tag">seed –</span>
-    <div class="progress" aria-live="polite">
-      <div class="bar"><span id="progressBar"></span></div>
-      <span class="txt" id="progressTxt">–</span>
-    </div>
-  </div>
+  <form class="controls" id="controls" onsubmit="return false">
+    <div class="field"><span class="label">UE count</span><select id="ueCount"></select></div>
+    <div class="field"><span class="label">Scene</span><select id="scene"></select></div>
+    <div class="field"><span class="label">UE type</span><select id="mobility"></select></div>
+    <div class="field"><span class="label">UE placement</span><select id="placement"></select></div>
+    <div class="field"><span class="label">Traffic</span><select id="profile"></select></div>
+    <div class="field"><span class="label">Seed</span><span><input id="seed" type="number" min="0"> <button type="button" id="newSeed" title="Draw a new seed">New</button></span></div>
+    <div class="field"><span class="label">Measure (radio s)</span><input id="measure" type="number"></div>
+    <div class="field"><span class="label">Warm-up (s)</span><input id="warmup" type="number"></div>
+    <div class="field"><span class="label">Order</span><select id="order"></select></div>
+    <div class="field"><span class="label">Runs / test</span><input id="repeats" type="number"></div>
+    <div class="field"><span class="label">&nbsp;</span><span>
+      <button type="button" class="primary" id="startBtn">Start New Benchmark</button>
+      <button type="button" id="stopBtn">Stop</button>
+      <button type="button" class="danger" id="resetBtn">Reset</button></span></div>
+  </form>
+  <div class="pending" id="pending"></div>
+  <div class="error-box" id="errorBox"></div>
 </header>
 
 <main>
-  <section aria-labelledby="h-scene">
-    <div class="section-head">
-      <h2 id="h-scene">Scene and host</h2>
-      <p>The Sionna RT scene both cells share, with the UEs where the seeded routes put them, and the hardware the run is using.</p>
-    </div>
-    <div class="strip">
-      <div class="panel scene" id="sceneHost">
-        <div id="scene3d"></div>
-        <div class="scene-overlay" id="sceneOverlay"></div>
-        <div class="scene-legend" id="sceneLegend"></div>
-        <div class="scene-empty" id="sceneEmpty">Waiting for the Sionna bridge to write the scene.</div>
-      </div>
-      <div class="panel hw" id="hw">
-        <div class="empty-state">Reading this host’s GPU and CPU…</div>
-      </div>
-    </div>
+  <section aria-label="Tests">
+    <div class="tests" id="tests"></div>
+    <div class="aa-note" id="aaNote"></div>
   </section>
 
-  <section aria-labelledby="h-radio">
-    <div class="section-head">
-      <h2 id="h-radio">Radio setup</h2>
-      <p>Both cells are configured identically except for the scheduler. Each UE in cell a has a twin in cell b with the same channel and the same packets.</p>
-    </div>
-    <div class="sheet" id="sheet"><div class="panel empty-state">Waiting for the run’s configuration.</div></div>
+  <div class="row2">
+    <section class="panel" aria-labelledby="progressTitle">
+      <h2 id="progressTitle">Session</h2>
+      <div class="state-line"><span class="badge idle" id="stateBadge">IDLE</span><span id="stateMessage" class="muted">No benchmark</span></div>
+      <div class="bar" aria-hidden="true"><span id="progressBar"></span></div>
+      <div class="steps" id="steps"></div>
+      <div class="kv" id="sessionKv"></div>
+    </section>
+    <section class="panel" aria-labelledby="fairTitle">
+      <h2 id="fairTitle">Fairness gates</h2>
+      <div class="gates" id="gates"></div>
+      <div class="verdict" id="verdict"></div>
+      <ul class="reasons" id="reasons"></ul>
+    </section>
+  </div>
+
+  <div class="row2">
+    <section class="panel" aria-labelledby="chanTitle">
+      <h2 id="chanTitle">Channel, identical for every run</h2>
+      <p class="muted" id="chanNote">Downlink wideband gain of each UE's link per radio second, from the frozen trace.</p>
+      <div class="legend" id="chanLegend"></div>
+      <div class="chart" id="chanChart"></div>
+    </section>
+    <section class="panel scene" id="sceneHost" aria-label="Scene and UE positions">
+      <div id="scene3d"></div>
+      <div class="scene-overlay" id="sceneOverlay"></div>
+      <div class="scene-legend" id="sceneLegend"></div>
+      <div class="scene-empty" id="sceneEmpty">No scene yet.</div>
+    </section>
+  </div>
+
+  <section aria-labelledby="runsTitle">
+    <h2 id="runsTitle" style="margin-bottom:10px">Policy runs</h2>
+    <div class="runs" id="runs"><div class="empty">No runs yet.</div></div>
   </section>
 
-  <section aria-labelledby="h-eval">
-    <div class="section-head">
-      <h2 id="h-eval">Schedulers and evaluation</h2>
-      <p id="evalNote">Metrics cover valid seconds only: every UE of both cells in service. Values are means over those seconds unless stated.</p>
-    </div>
-    <div class="board" id="board"><div class="panel empty-state" style="grid-column:1/-1">Waiting for the run’s configuration.</div></div>
+  <section class="panel" aria-labelledby="cmpTitle">
+    <h2 id="cmpTitle">Comparison</h2>
+    <p class="muted">Means over valid radio seconds (warm-up excluded); a policy with several runs is averaged. Delays are radio time.</p>
+    <div class="table-wrap" id="comparison"><div class="empty">Appears when the runs finish.</div></div>
+    <details style="margin-top:10px"><summary>Paired difference per radio second and the A/A control</summary><div class="table-wrap" id="paired"></div></details>
   </section>
-
-  <section aria-labelledby="h-chart">
-    <div class="section-head">
-      <h2 id="h-chart">Second by second</h2>
-      <p>Each point is one second of scenario time, the same channel in both cells. Shaded seconds are invalid and excluded from the metrics above.</p>
-    </div>
-    <div class="panel chart-panel">
-      <div class="seg-control" role="group" aria-label="Metric" id="chartPick"></div>
-      <canvas id="chart" aria-label="Per-second comparison chart"></canvas>
-    </div>
-  </section>
-
-  <section aria-labelledby="h-integrity">
-    <div class="section-head">
-      <h2 id="h-integrity">Run integrity</h2>
-      <p>Counters that must be non-zero (or zero) for the comparison to mean anything.</p>
-    </div>
-    <div class="integrity" id="integrity"><div class="panel empty-state">No checks yet.</div></div>
-  </section>
-  <footer id="footer"></footer>
 </main>
+<div class="tooltip" id="tooltip"></div>
 
 <script type="importmap">{"imports": {"three": "/vendor/three.module.min.js"}}</script>
 <script type="module">
@@ -311,467 +201,353 @@ import * as THREE from 'three';
 import { OrbitControls } from '/vendor/OrbitControls.js';
 
 const $ = (id) => document.getElementById(id);
-const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fin = (v) => typeof v === 'number' && Number.isFinite(v);
-function fmt(v, digits = 2) {
-  if (!fin(v)) return '–';
-  const a = Math.abs(v);
-  if (a >= 1000) return v.toFixed(0);
-  if (a >= 100) return v.toFixed(Math.min(digits, 1));
-  return v.toFixed(digits);
-}
-const pct = (v, d = 1) => fin(v) ? (100 * v).toFixed(d) : '–';
+const fmt = (v, d = 2) => fin(v) ? v.toFixed(d) : '–';
+const pct = (v, d = 1) => fin(v) ? (100 * v).toFixed(d) + '%' : '–';
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+// Eight categorical hues; UEs 8-15 reuse them with a dashed line and a
+// different 3D marker shape, never a generated ninth hue.
+const ueIndex = (ue) => Number(String(ue).slice(2));
+const ueColor = (ue) => `var(--s${(ueIndex(ue) % 8) + 1})`;
+const ueDashed = (ue) => ueIndex(ue) >= 8;
+const ueSwatch = (ue) => ueDashed(ue) ? `<span class="swatch dash" style="color:${ueColor(ue)}"></span>` : `<span class="swatch" style="background:${ueColor(ue)}"></span>`;
+const FLOW = ['VALIDATING', 'PREPARING', 'ATTACHING_UES', 'RUNNING_POLICY', 'ANALYZING'];
+const TERMINAL = ['COMPLETED', 'UNQUALIFIED', 'FAILED', 'STOPPED'];
 
-const state = { runId: null, run: null, report: null, live: null, system: null, timeline: [], lastGrid: -1, chart: 'aggregate' };
+// The UI's view of the server. `generation` is the session generation this
+// page shows; any response tagged with another generation is dropped, and a
+// start/reset clears everything before the request is even answered.
+const state = { options: null, generation: null, sessionId: null, status: null, results: null, scene: null,
+                applied: null, controller: new AbortController(), meshFor: null };
 
-async function get(path) {
-  const response = await fetch(path, { cache: 'no-store' });
+async function api(path, init = {}) {
+  const response = await fetch(path, { cache: 'no-store', signal: state.controller.signal, ...init });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || response.statusText);
+  if (!response.ok) { const e = new Error(body.error || response.statusText); e.body = body; e.status = response.status; throw e; }
   return body;
 }
-const q = () => state.runId ? `?id=${encodeURIComponent(state.runId)}` : '';
+const post = (path, payload) => api(path, { method: 'POST', body: JSON.stringify(payload || {}),
+  headers: { 'Content-Type': 'application/json', 'X-Benchmark-Client': 'ui' } });
 
-// ---------------------------------------------------------------- runs + header
-async function loadRuns() {
-  let data;
-  try { data = await get('/api/runs'); } catch { return; }
-  const select = $('run');
-  const current = select.value;
-  select.innerHTML = data.runs.map((r) => {
-    const sched = r.schedulers ? `${r.schedulers.a} vs ${r.schedulers.b}` : '?';
-    return `<option value="${esc(r.id)}">${esc(r.id)} · seed ${esc(r.seed ?? '–')} · ${esc(sched)} · ${esc(r.state)}</option>`;
-  }).join('') || '<option value="">No benchmark runs yet</option>';
-  const wanted = state.runId || current || (data.runs[0] && data.runs[0].id) || '';
-  select.value = wanted;
-  if (wanted && (wanted !== state.runId || !state.run)) selectRun(wanted);
+// Accept a response only for the generation on screen; a newer generation
+// (another tab started a session) replaces the page, an older one is ignored.
+function accept(body) {
+  if (body.generation == null) return false;
+  if (state.generation == null || body.generation > state.generation) { adopt(body.generation, body.session_id); return true; }
+  return body.generation === state.generation;
 }
-$('run').addEventListener('change', (e) => selectRun(e.target.value));
-
-async function selectRun(id) {
-  state.runId = id; state.run = null; state.report = null; state.timeline = []; state.lastGrid = -1;
-  try { localStorage.setItem('sb.run', id); } catch {}
-  await refreshRun();
-  refreshReport();
-  refreshLive();
-  loadMesh();
+function adopt(generation, sessionId) {
+  state.controller.abort(); state.controller = new AbortController();
+  state.generation = generation; state.sessionId = sessionId;
+  state.status = null; state.results = null; state.scene = null; state.meshFor = null;
+  clearView();
 }
-
-async function refreshRun() {
-  if (!state.runId) return;
-  const wasLive = state.run?.live;
-  try { state.run = await get('/api/run' + q()); } catch (e) { state.run = null; renderHeader(String(e.message)); return; }
-  // A run that just finished: fetch the final report and grid once.
-  if (wasLive && !state.run.live) { refreshReport(); refreshLive(); }
-  renderHeader();
-  renderSheet();
-  renderBoard();
+function clearView() {
+  $('runs').innerHTML = '<div class="empty">No runs yet.</div>';
+  $('comparison').innerHTML = '<div class="empty">Appears when the runs finish.</div>';
+  $('paired').innerHTML = ''; $('chanChart').innerHTML = ''; $('chanLegend').innerHTML = '';
+  $('gates').innerHTML = ''; $('verdict').textContent = ''; $('reasons').innerHTML = '';
+  $('sessionKv').innerHTML = ''; $('progressBar').style.width = '0';
+  $('sceneOverlay').innerHTML = ''; $('sceneEmpty').hidden = false; $('sceneEmpty').textContent = 'No scene yet.';
+  if (scene3.ready) { scene3.world.clear(); scene3.markers.clear(); }
+  renderStatus();
 }
 
-function renderHeader(error) {
-  const run = state.run, report = state.report;
-  const pill = $('state');
-  let cls = 'waiting', text = error ? 'Unavailable' : 'Waiting';
-  if (run) {
-    if (run.live) { cls = 'live'; text = 'Live'; }
-    else if (report && !report.live) { cls = run.gate && run.gate.status === 'failed' ? 'failed' : 'complete'; text = cls === 'failed' ? 'Gate failed' : 'Complete'; }
+// ---------------------------------------------------------------- controls
+function selection() {
+  return { ue_count: Number($('ueCount').value), scene_id: $('scene').value, mobility: $('mobility').value,
+           placement: $('placement').value, traffic_profile: $('profile').value,
+           tests: testSelection(),
+           seed: Number($('seed').value), measure_seconds: Number($('measure').value),
+           warmup_seconds: Number($('warmup').value), comparison_order: $('order').value,
+           repeat_count: Number($('repeats').value) };
+}
+function fillOptions() {
+  const o = state.options, d = o.defaults;
+  $('scene').innerHTML = o.scenes.map((s) => `<option value="${esc(s.id)}" ${s.installed ? '' : 'disabled'}>${esc(s.label)}${s.validated ? '' : ' (not validated)'}</option>`).join('');
+  $('scene').value = d.scene_id;
+  $('profile').innerHTML = o.traffic_profiles.map((p) => `<option value="${esc(p.id)}" title="${esc(p.role_rule)}">${esc(p.label)}</option>`).join('');
+  $('profile').value = d.traffic_profile;
+  buildTestPanels();
+  $('order').innerHTML = o.comparison_orders.map((x) => `<option>${esc(x)}</option>`).join('');
+  $('order').value = d.comparison_order;
+  for (const [id, key] of [['seed', 'seed'], ['measure', 'measure_seconds'], ['warmup', 'warmup_seconds'], ['repeats', 'repeat_count']]) {
+    $(id).value = d[key];
+    const lim = o.limits[key]; if (lim) { $(id).min = lim[0]; $(id).max = lim[1]; }
   }
-  pill.className = `pill ${cls}`; pill.textContent = text;
-  $('seed').textContent = `seed ${run ? run.benchmark.seed : '–'}`;
-  const total = report?.measure_seconds ?? run?.benchmark.measure_seconds ?? 0;
-  const done = report?.segments_complete ?? 0, valid = report?.segments_valid ?? 0;
-  $('progressBar').style.width = total ? `${(100 * done / total).toFixed(1)}%` : '0';
-  $('progressTxt').textContent = report?.anchor_unix_ms
-    ? `${done}/${total} s measured · ${valid} valid`
-    : (run ? 'attaching UEs; scenario time held at 0' : (error || '–'));
+  sceneChanged();
+  $('ueCount').value = String(d.ue_count);
+  if (!$('ueCount').value && $('ueCount').options.length) $('ueCount').selectedIndex = 0;
 }
-
-// ---------------------------------------------------------------- hardware
-const ROLE_SHORT = { 'gnb0': 'gNB a', 'gnb1': 'gNB b', 'broker a': 'brk a', 'broker b': 'brk b', 'ue0': 'ue0', 'ue1': 'ue1', 'ue2': 'ue2', 'ue3': 'ue3', 'sionna': 'sionna', 'traffic': 'traffic' };
-function expandCpus(list) {
-  const out = new Set();
-  for (const part of String(list || '').split(',')) {
-    const m = part.match(/^(\d+)(?:-(\d+))?$/);
-    if (!m) continue;
-    for (let i = +m[1]; i <= +(m[2] ?? m[1]); i++) out.add(i);
-  }
-  return out;
+// ---------------------------------------------------------------- tests
+// Two tests, each = the shared settings above + its own fields. The fields
+// come from the server (options.tests.fields), so a new comparison dimension
+// shows up here as one more selector per panel.
+const FIELD_LABELS = { scheduler: 'MAC scheduler' };
+const policyOf = (id) => state.options?.policies.find((p) => p.id === id);
+const policyShort = (id) => policyOf(id)?.short || id;
+function testSelection() {
+  return state.options.tests.arms.map((arm) => Object.fromEntries(Object.keys(state.options.tests.fields).map(
+    (field) => [field, $(`${arm.id}-${field}`)?.value])));
 }
-async function refreshSystem() {
-  try { state.system = await get('/api/system'); } catch { return; }
-  renderHardware();
-}
-function renderHardware() {
-  const s = state.system; if (!s || !s.static) return;
-  const gpu = (s.gpus || [])[0] || {};
-  const cpus = s.static.cpus || [];
-  const usage = s.cpu_percent || [];
-  const owners = {};
-  const nCpus = cpus.length || usage.length;
-  for (const p of s.processes || []) {
-    const allowed = expandCpus(p.cpus_allowed);
-    if (!allowed.size || allowed.size >= nCpus) continue;  // unpinned processes say nothing about placement
-    for (const c of allowed) (owners[c] ||= []).push(p);
-  }
-  const ordered = [...cpus].sort((a, b) => a.cpu - b.cpu);
-  const cores = (ordered.length ? ordered : usage.map((_, i) => ({ cpu: i }))).map((c) => {
-    const u = usage[c.cpu];
-    const who = owners[c.cpu] || [];
-    const cell = who.length && who.every((p) => p.cell === who[0].cell) ? who[0].cell : null;
-    const label = who.map((p) => ROLE_SHORT[p.label] || p.label).filter((v, i, a) => a.indexOf(v) === i).join('/');
-    return `<div class="core ${cell ? 'cell-' + cell : ''}" title="CPU ${c.cpu}${c.model ? ' · ' + esc(c.model) : ''}${label ? ' · ' + esc(label) : ''} · ${fin(u) ? u.toFixed(0) + '%' : 'n/a'}">
-      <div class="fill" style="height:${fin(u) ? Math.min(100, u).toFixed(0) : 0}%"></div>
-      <span class="n">${c.cpu}</span><span class="who">${esc(label)}</span></div>`;
+function buildTestPanels() {
+  const o = state.options;
+  $('tests').innerHTML = o.tests.arms.map((arm, i) => {
+    const chosen = o.defaults.tests[i] || {};
+    const fields = Object.entries(o.tests.fields).map(([field, choices]) => `<div class="field"><span class="label">${esc(FIELD_LABELS[field] || field)}</span>
+      <select id="${arm.id}-${field}">${choices.map((c) => `<option value="${esc(c)}" ${c === chosen[field] ? 'selected' : ''}>${esc(field === 'scheduler' ? `${policyShort(c)} — ${policyOf(c)?.label || c}` : c)}</option>`).join('')}</select></div>`).join('');
+    return `<section class="panel test-panel"><h2>${esc(arm.label)}<span class="muted" style="font-size:.85rem" id="${arm.id}-runs"></span></h2>
+      ${fields}<div id="${arm.id}-about"></div><div id="${arm.id}-result"></div></section>`;
   }).join('');
-  const models = (s.static.cpu_models || []).map((m) => `${m.count}× ${esc(m.model)}`).join(' + ');
-  const proc = (s.processes || []).map((p) => `<tr><td>${esc(p.label)}${p.count ? ` ×${p.count}` : ''}</td><td>${p.cell ? esc(p.cell) : ''}</td>
-    <td class="num">${fin(p.cpu_percent) ? p.cpu_percent.toFixed(0) + '%' : '–'}</td><td class="mono">${esc(p.cpus_allowed || '')}</td><td class="num">${p.threads ?? ''}</td></tr>`).join('');
-  $('hw').innerHTML = `
-    <div class="stat"><span class="label">GPU</span><span class="gpu-name">${esc(gpu.name || 'not reported')}</span>
-      <span class="muted mono" style="font-size:var(--step--1)">driver ${esc(gpu.driver_version || '–')} · CUDA ${esc(s.static.cuda_version || '–')}</span></div>
-    <div class="hw-row">
-      <div class="stat"><span class="label">Utilisation</span><span class="v">${fmt(gpu['utilization.gpu'], 0)}<small>%</small></span></div>
-      <div class="stat"><span class="label">SM clock</span><span class="v">${fmt(gpu['clocks.sm'], 0)}<small>MHz</small></span></div>
-      <div class="stat"><span class="label">Power</span><span class="v">${fmt(gpu['power.draw'], 1)}<small>W</small></span></div>
-      <div class="stat"><span class="label">Temp</span><span class="v">${fmt(gpu['temperature.gpu'], 0)}<small>°C</small></span></div>
-      <div class="stat"><span class="label">GPU memory</span><span class="v">${fin(gpu['memory.used']) ? (gpu['memory.used'] / 1024).toFixed(1) + '<small>GiB</small>' : '<small>unified</small>'}</span></div>
-    </div>
-    <div class="stat"><span class="label">CPU</span><span class="mono" style="font-size:var(--step--1)">${models || 'not reported'}</span></div>
-    <div><div class="cores">${cores}</div>
-      <div class="cluster-label"><span>core load, label = pinned process</span><span>load ${(s.load || []).map((v) => v.toFixed(2)).join(' ')} · RAM ${fmt(s.memory_used_gib, 1)}/${fmt(s.static.memory_total_gib, 0)} GiB</span></div></div>
-    <div class="table-wrap"><table class="procs"><thead><tr><th>Process</th><th>Cell</th><th>CPU</th><th>Cores</th><th>Thr</th></tr></thead>
-      <tbody>${proc || '<tr><td colspan="5" class="muted">No benchmark processes on this host right now.</td></tr>'}</tbody></table></div>`;
+  $('tests').querySelectorAll('select').forEach((el) => el.addEventListener('change', () => { renderTestPanels(); markPending(); }));
+  renderTestPanels();
+}
+// Dynamic parts only: the selectors stay as the user left them.
+function renderTestPanels() {
+  const o = state.options; if (!o || !$('tests').querySelector('select')) return;
+  const t = testSelection();
+  const cmp = state.results?.reports?.['benchmark-report']?.comparison?.tests || {};
+  const runs = state.results?.runs || [];
+  o.tests.arms.forEach((arm, i) => {
+    const p = policyOf(t[i].scheduler);
+    $(`${arm.id}-about`).innerHTML = p ? `<div class="muted" style="font-size:.8125rem">${esc(p.summary)}</div><ul>${p.properties.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+    $(`${arm.id}-runs`).textContent = runs.filter((r) => r.arm === arm.id).map((r) => `run ${r.run_id.slice(0, 2)} ${r.live ? 'live' : (r.gate?.status || '')}`).join(' · ');
+    const summary = cmp[arm.id];
+    $(`${arm.id}-result`).innerHTML = summary ? `<div class="kv result"><div><span class="label">Cell DL</span><b>${fmt(summary.aggregate_dl_mbps)} Mb/s</b></div><div><span class="label">Jain (DL)</span><b>${fmt(summary.jain_dl, 3)}</b></div><div><span class="label">DL PRB util</span><b>${pct(summary.dl_prb_util)}</b></div><div><span class="label">Ran as</span><b>${esc(summary.label)}</b></div></div>` : '';
+  });
+  aaNote();
+}
+function aaNote() {
+  const t = testSelection();
+  $('aaNote').textContent = JSON.stringify(t[0]) === JSON.stringify(t[1])
+    ? 'Both tests are configured identically: this session will be an A/A control (it measures run-to-run variation).' : '';
 }
 
-// ---------------------------------------------------------------- radio sheet
-function antennaGainDb(pattern, thetaDeg, phiDeg) {
-  const t = thetaDeg * Math.PI / 180;
-  switch (pattern) {
-    case 'dipole': return 10 * Math.log10(Math.max(1e-6, 1.5 * Math.sin(t) ** 2));
-    case 'hw_dipole': { const s = Math.sin(t); if (Math.abs(s) < 1e-6) return -60; return 10 * Math.log10(Math.max(1e-6, 1.643 * (Math.cos(Math.PI / 2 * Math.cos(t)) / s) ** 2)); }
-    case 'tr38901': {
-      const av = -Math.min(12 * ((thetaDeg - 90) / 65) ** 2, 30);
-      const ah = -Math.min(12 * (phiDeg / 65) ** 2, 30);
-      return -Math.min(-(av + ah), 30) + 8;
-    }
-    default: return 0;
-  }
+function sceneChanged() {
+  const s = state.options.scenes.find((x) => x.id === $('scene').value);
+  const counts = s ? s.startable_ue_counts : [];
+  const keep = $('ueCount').value;
+  const offered = s ? (s.ue_counts || counts) : [];
+  $('ueCount').innerHTML = offered.length ? offered.map((n) => `<option value="${n}" ${counts.includes(n) ? '' : 'disabled'}>${n} UE${n > 1 ? 's' : ''}${n === 1 ? ' (control)' : ''}${counts.includes(n) ? '' : ' (not validated)'}</option>`).join('')
+    : '<option value="">none</option>';
+  if (!counts.map(String).includes($('ueCount').value) && counts.length) $('ueCount').value = String(counts[0]);
+  if (counts.map(String).includes(keep)) $('ueCount').value = keep;
+  const labels = state.options.mobility_labels || {}, plabels = state.options.placement_labels || {};
+  $('mobility').innerHTML = (s?.mobility_modes || []).map((m) => `<option value="${esc(m)}">${esc(labels[m] || m)}</option>`).join('');
+  $('mobility').value = state.options.defaults.mobility;
+  $('placement').innerHTML = (s?.placement_modes || []).map((m) => `<option value="${esc(m)}">${esc(plabels[m] || m)}</option>`).join('');
+  $('placement').value = state.options.defaults.placement;
+  markPending();
 }
-function polarSvg(pattern, cut) {
-  // cut 'az': theta = 90, phi sweeps; 'el': phi = 0, theta sweeps (0 = zenith).
-  const size = 132, c = size / 2, r = 54, floor = -30, ceil = 10;
-  const radius = (g) => r * (Math.max(floor, Math.min(ceil, g)) - floor) / (ceil - floor);
-  let d = '';
-  for (let a = 0; a <= 360; a += 3) {
-    const g = cut === 'az' ? antennaGainDb(pattern, 90, a > 180 ? a - 360 : a) : antennaGainDb(pattern, a <= 180 ? a : 360 - a, a <= 180 ? 0 : 180);
-    const ang = (cut === 'az' ? a : a - 90) * Math.PI / 180;
-    const x = c + radius(g) * Math.cos(ang), y = c - radius(g) * Math.sin(ang);
-    d += `${a ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
-  }
-  const rings = [-30, -20, -10, 0, 10].map((g) => `<circle cx="${c}" cy="${c}" r="${radius(g).toFixed(1)}" fill="none" stroke="var(--rule)" stroke-width="${g === 0 ? 1.2 : .7}"/>`).join('');
-  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" role="img" aria-label="${cut === 'az' ? 'Azimuth' : 'Elevation'} cut of the ${esc(pattern)} pattern">
-    ${rings}<line x1="${c - r}" y1="${c}" x2="${c + r}" y2="${c}" stroke="var(--rule)" stroke-width=".7"/><line x1="${c}" y1="${c - r}" x2="${c}" y2="${c + r}" stroke="var(--rule)" stroke-width=".7"/>
-    <path d="${d}Z" fill="color-mix(in srgb, var(--accent) 18%, transparent)" stroke="var(--accent)" stroke-width="1.6"/>
-    <text x="${c + radius(0) + 2}" y="${c - 3}" font-size="8" fill="var(--muted)" font-family="var(--font-mono)">0 dBi</text></svg>`;
+function markPending() {
+  const cfg = state.status?.config;
+  if (!cfg) { $('pending').textContent = ''; return; }
+  const sel = selection();
+  const differs = Object.keys(sel).some((k) => JSON.stringify(sel[k]) !== JSON.stringify(cfg[k]));
+  $('pending').textContent = differs ? 'Changes pending — start a new benchmark to apply.' : '';
 }
-const ROLE_COLOR = { 0: 'var(--ue-a)', 1: 'var(--ue-b)' };
-function arrayText(a) { if (!a) return 'iso 1×1'; return `${a.pattern || 'iso'} ${a.rows || 1}×${a.cols || 1}, ${a.polarization || 'V'}-pol`; }
-function renderSheet() {
-  const run = state.run; if (!run) return;
-  const b = run.benchmark, sc = run.scenario || {}, env = run.sionna_environment || {};
-  const g = (sc.nodes || {}).gnb0 || {}, gpos = g.start_m || [];
-  const freq = env.frequencies_hz || { downlink: 1842.5e6, uplink: 1747.5e6 };
-  const solver = env.solver || sc.solver || {};
-  const prop = Object.entries(solver.propagation || {}).filter(([, v]) => v).map(([k]) => k.replace('_', ' ')).join(', ');
-  const pattern = (g.array && g.array.pattern) || 'iso';
-  const cells = ['a', 'b'].map((c) => b.cells[c]);
-  const gnbCard = `<div class="panel card gnb">
-    <div class="card-head"><h3>gNB</h3><span class="tag">gnb0 · PCI ${cells[0].gnb.pci}</span><span class="tag">gnb1 · PCI ${cells[1].gnb.pci}</span></div>
-    <div class="gnb-body">
-      <dl class="kv">
-        <dt>Software</dt><dd>${esc(run.software.ocudu_gnb)}</dd>
-        <dt>Band</dt><dd>n3 FDD · DL-ARFCN 368500</dd>
-        <dt>Carriers</dt><dd>DL ${fmt(freq.downlink / 1e6, 1)} MHz · UL ${fmt(freq.uplink / 1e6, 1)} MHz</dd>
-        <dt>Bandwidth</dt><dd>20 MHz · SCS 15 kHz · 106 PRB</dd>
-        <dt>MCS tables</dt><dd>PDSCH qam64 · PUSCH qam64</dd>
-        <dt>Radio</dt><dd>ZMQ 23.04 Msps · 1 TX / 1 RX port</dd>
-        <dt>Position</dt><dd>(${gpos.map((v) => fmt(v, 1)).join(', ')}) m, on the mast</dd>
-        <dt>Antenna</dt><dd>${esc(arrayText(g.array))}</dd>
-        <dt>Sionna solver</dt><dd>depth ${esc(solver.max_depth ?? '–')} · ${esc(solver.samples_per_source ?? '–')} rays/src · seed ${esc(solver.seed ?? '–')}</dd>
-        <dt>Propagation</dt><dd>${esc(prop || '–')}</dd>
-        <dt>Noise floor</dt><dd>${b.rx_noise && fin(b.rx_noise.awgn_snr_db) ? `${b.rx_noise.awgn_snr_db} dB SNR at unit gain` : 'off'}</dd>
-      </dl>
-      <div class="patterns"><figure>${polarSvg(pattern, 'az')}<figcaption>azimuth cut</figcaption></figure>
-        <figure>${polarSvg(pattern, 'el')}<figcaption>elevation cut</figcaption></figure></div>
-    </div></div>`;
-  const ueCards = [0, 1].map((i) => {
-    const ua = cells[0].ues[i], ub = cells[1].ues[i];
-    const node = (sc.nodes || {})[`ue${i}`] || {};
-    const route = (sc.benchmark?.routes || {})[`ue${i}`] || {};
-    const flows = ua.flows.map((f) => {
-      const rate = f.pattern === 'periodic' ? `${f.size_bytes} B / ${f.interval_ms} ms` : `${f.rate_mbps} Mb/s`;
-      return `<li><span class="mono">${esc(f.name)}</span><span>${esc(f.direction.toUpperCase())} · ${esc(f.pattern)} · ${esc(rate)}</span></li>`;
-    }).join('');
-    return `<div class="panel card">
-      <div class="card-head"><span class="ue-dot" style="background:${ROLE_COLOR[i]}"></span><h3>${esc(ua.device_id)} · ${esc(ub.device_id)}</h3><span class="tag">${esc(ua.role)}</span></div>
-      <dl class="kv">
-        <dt>UE</dt><dd>${esc(run.software.srsue)}</dd>
-        <dt>Radio</dt><dd>ZMQ · 1 TX / 1 RX · ${esc(arrayText(node.array))}</dd>
-        <dt>5QI</dt><dd>${ua.five_qi} · ${esc(ua.qos.type)} · priority ${ua.qos.priority} · PDB ${ua.qos.pdb_ms} ms · RLC ${esc(ua.qos.rlc)}</dd>
-        <dt>Mobility</dt><dd>random waypoint · ${fmt(node.speed_mps ?? route.speed_mps, 2)} m/s · ${route.waypoints ?? '–'} waypoints</dd>
-        <dt>Addresses</dt><dd>${esc(ua.ipv4)} (cell a) · ${esc(ub.ipv4)} (cell b)</dd>
-      </dl>
-      <ul class="flows">${flows}</ul>
-      <div class="live-ue" id="ueLive${i}"></div>
-    </div>`;
+async function startBenchmark() {
+  $('errorBox').textContent = '';
+  const running = state.status && !TERMINAL.includes(state.status.state) && state.status.state !== 'IDLE';
+  if (running && !confirm('Stop the running benchmark, delete its measurements, and start a new one?')) return;
+  // Clear what is on screen now: nothing shown from here on belongs to the old session.
+  state.controller.abort(); state.controller = new AbortController();
+  clearView(); setBusy(true);
+  $('stateBadge').textContent = 'STARTING'; $('stateMessage').textContent = 'Stopping the previous session and clearing its data…';
+  try {
+    const r = await post('/api/benchmark/start', selection());
+    adopt(r.generation, r.session_id);
+    $('stateMessage').textContent = `Accepted (session ${r.session_id}); old results cleared: ${r.old_results_cleared}`;
+  } catch (e) {
+    if (e.name === 'AbortError') return;
+    const fields = e.body?.fields ? Object.entries(e.body.fields).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
+    $('errorBox').textContent = `${e.message}${fields ? '\n' + fields : ''}`;
+  } finally { setBusy(false); tick(); }
+}
+async function simple(path, ask) {
+  if (ask && !confirm(ask)) return;
+  $('errorBox').textContent = ''; setBusy(true);
+  try {
+    const r = await post(path);
+    if (path.endsWith('reset')) adopt(r.generation, null);
+  } catch (e) { if (e.name !== 'AbortError') $('errorBox').textContent = e.message; }
+  finally { setBusy(false); tick(); }
+}
+function setBusy(busy) { for (const id of ['startBtn', 'stopBtn', 'resetBtn']) $(id).disabled = busy; }
+
+// ---------------------------------------------------------------- status
+function renderStatus() {
+  const s = state.status;
+  const st = s?.state || 'IDLE';
+  const badge = $('stateBadge');
+  badge.textContent = st;
+  badge.className = 'badge ' + (st === 'COMPLETED' ? 'good' : ['FAILED', 'UNQUALIFIED'].includes(st) ? 'bad' : st === 'STOPPED' ? 'warn' : st === 'IDLE' ? 'idle' : '');
+  $('stateMessage').textContent = s?.message || 'No benchmark';
+  $('sessionLine').textContent = s?.session_id ? `session ${s.session_id} · generation ${s.generation}` : 'No benchmark';
+  const order = s?.execution_order || [];
+  const done = (s?.completed_runs || []).length;
+  const tl = s?.test_labels || {};
+  const steps = ['Prepare', ...order.map((arm, i) => `${tl[arm] || arm} ${i + 1}/${order.length}`), 'Validate'];
+  const now = !s ? -1 : st === 'PREPARING' || st === 'VALIDATING' ? 0 : TERMINAL.includes(st) ? steps.length : st === 'ANALYZING' ? steps.length - 1 : 1 + (s.policy_index ?? done);
+  $('steps').innerHTML = s?.session_id ? steps.map((x, i) => `<span class="step ${i < now ? 'done' : i === now ? 'now' : ''}">${esc(x)}</span>`).join('') : '';
+  let progress = 0;
+  if (st === 'PREPARING') progress = 0.1 * (s.trace_progress || 0);
+  else if (order.length && !TERMINAL.includes(st)) {
+    const live = state.results?.runs?.find((r) => r.live)?.report;
+    const frac = live && live.radio_seconds_total ? (live.segments_complete + (live.warmup_seconds || 0)) / live.radio_seconds_total : 0;
+    progress = 0.1 + 0.85 * ((s.policy_index ?? done) + Math.min(1, frac)) / order.length;
+  } else if (TERMINAL.includes(st)) progress = 1;
+  $('progressBar').style.width = `${Math.round(100 * progress)}%`;
+  const c = s?.config;
+  $('sessionKv').innerHTML = c ? [
+    ['Scene', c.scene_id], ['UEs', c.ue_count], ['Traffic', c.traffic_profile], ['Tests', (c.tests || []).map((t, i) => `T${i + 1} ${policyShort(t.scheduler)}`).join(' vs ')],
+    ['Seed', c.seed], ['Measure', `${c.measure_seconds} s + ${c.warmup_seconds} s warm-up`], ['UE type', c.mobility], ['Placement', c.placement], ['Order', `${c.comparison_order} × ${c.repeat_count}`],
+  ].map(([k, v]) => `<div><span class="label">${k}</span><b>${esc(v)}</b></div>`).join('') : '';
+  markPending();
+}
+function renderGates() {
+  const audit = state.results?.reports?.['fairness-audit'];
+  const names = ['TRACE VERIFIED', 'RADIO ALIGNMENT VERIFIED', 'TRAFFIC VERIFIED', 'RUN VALID'];
+  const gates = audit?.gates;
+  $('gates').innerHTML = names.map((n) => {
+    const v = gates ? gates[n] : null;
+    return `<div class="gate ${v === true ? 'pass' : v === false ? 'fail' : 'wait'}"><div class="label">${n}</div><div class="v">${v === true ? '✓ pass' : v === false ? '✗ fail' : '… pending'}</div></div>`;
   }).join('');
-  $('sheet').innerHTML = gnbCard + ueCards;
-  renderUeLive();
-}
-function renderUeLive() {
-  const run = state.run; if (!run) return;
-  const last = state.timeline[state.timeline.length - 1];
-  const g = last?.positions?.gnb0 || run.scenario?.nodes?.gnb0?.start_m;
-  for (const i of [0, 1]) {
-    const el = $(`ueLive${i}`); if (!el) continue;
-    const p = last?.positions?.[`ue${i}`];
-    const dist = p && g ? Math.hypot(p[0] - g[0], p[1] - g[1], p[2] - g[2]) : null;
-    const dl = last?.channels?.[`gnb0>ue${i}:sionna_rt`], ul = last?.channels?.[`ue${i}>gnb0:sionna_rt`];
-    el.innerHTML = `<div class="chip">position <b>${p ? p.map((v) => v.toFixed(1)).join(', ') : '–'}</b> m<br>to gNB <b>${fmt(dist, 1)}</b> m</div>
-      <div class="chip">DL tap <b>${fmt(dl?.tap_gain_db, 1)}</b> dB<br>UL tap <b>${fmt(ul?.tap_gain_db, 1)}</b> dB</div>`;
+  const v = $('verdict');
+  if (audit) {
+    v.textContent = audit.verdict === 'UNQUALIFIED' ? 'UNQUALIFIED' : 'STRICT FAIR COMPARISON: PASS';
+    v.className = 'verdict ' + (audit.verdict === 'UNQUALIFIED' ? 'fail' : 'pass');
+    const reasons = Object.entries(audit.reasons || {}).flatMap(([k, list]) => list.map((r) => `${k}: ${r}`));
+    $('reasons').innerHTML = reasons.map((r) => `<li>${esc(r)}</li>`).join('') ||
+      `<li>channel ${esc(audit.channel_trace_hash.slice(0, 19))}… · traffic ${esc(audit.traffic_trace_hash.slice(0, 19))}… · ${audit.updates_per_link} updates × ${audit.links.length} links aligned in every run</li>`;
+  } else {
+    v.textContent = state.status?.session_id ? 'Verdict after the last run' : ''; v.className = 'verdict';
+    const b = state.results?.bundle;
+    $('reasons').innerHTML = b ? `<li>frozen channel trace sha256 ${esc(b.channel_trace_sha256.slice(0, 16))}…, traffic trace ${esc(b.traffic_trace_sha256.slice(0, 16))}…</li>` : '';
   }
 }
 
-// ---------------------------------------------------------------- lanes + metrics
-const BETTER = { higher: 1, lower: -1, none: 0 };
-function laneOf(cell) { return state.report?.lanes?.[cell]; }
-function metricRows() {
-  // Each row: title, definition, layer, better, value(m) -> {main, unit, subs:[[label,value]]}
-  const run = state.run; const cells = run?.benchmark?.cells || {};
-  const ueName = (cell, i) => cells[cell]?.ues?.[i]?.device_id;
-  const ueLabel = (cell, i) => `${ueName(cell, i)} (${cells[cell]?.ues?.[i]?.role}, 5QI ${cells[cell]?.ues?.[i]?.five_qi})`;
-  const pu = (m, cell, i) => m?.per_ue?.[ueName(cell, i)];
-  return [
-    { key: 'aggregate', title: 'Aggregate throughput', def: 'UDP payload delivered per second, all UEs of the cell.', layer: 'app + mac', better: 'higher',
-      value: (m) => ({ main: m.aggregate_throughput_mbps.dl, unit: 'Mb/s DL', subs: [['UL', `${fmt(m.aggregate_throughput_mbps.ul)} Mb/s`], ['DL scheduled (MAC)', `${fmt(m.aggregate_throughput_mbps.mac_dl)} Mb/s`]] }) },
-    { key: 'per_ue', title: 'Per-UE throughput', def: 'DL delivered per UE against its offered load.', layer: 'app', better: 'none',
-      value: (m, cell) => ({ main: null, unit: '', subs: [0, 1].map((i) => { const u = pu(m, cell, i); return [ueLabel(cell, i), `${fmt(u?.throughput_mbps.dl)} / ${fmt(u?.offered_mbps.dl)} Mb/s`]; }) }) },
-    { key: 'jain', title: 'Jain’s fairness index', def: '(Σx)² / (n·Σx²) over the cell’s UEs: 1 is equal, 0.5 is one UE taking all.', layer: 'app + mac', better: 'higher',
-      value: (m) => ({ main: m.jain_fairness.dl_throughput, unit: 'DL throughput', digits: 3, subs: [['throughput ÷ offered', fmt(m.jain_fairness.dl_throughput_over_offered, 3)], ['PRB share', fmt(m.jain_fairness.dl_prb_share, 3)]] }) },
-    { key: 'delay_mean', title: 'Average packet delay', def: 'One-way DL delay of delivered packets (sender and receiver share the host clock).', layer: 'app', better: 'lower',
-      value: (m, cell) => ({ main: pu(m, cell, 1)?.delay_ms.dl.mean, unit: `ms · ${ueName(cell, 1)}`, subs: [0, 1].map((i) => [ueLabel(cell, i), `${fmt(pu(m, cell, i)?.delay_ms.dl.mean, 1)} ms`]) }) },
-    { key: 'delay_tail', title: '95th / 99th percentile delay', def: 'Tail of the DL delay distribution over all valid seconds.', layer: 'app', better: 'lower',
-      value: (m, cell) => ({ main: pu(m, cell, 1)?.delay_ms.dl.p99, unit: `ms p99 · ${ueName(cell, 1)}`, subs: [0, 1].map((i) => { const d = pu(m, cell, i)?.delay_ms.dl; return [ueLabel(cell, i), `${fmt(d?.p95, 1)} / ${fmt(d?.p99, 1)} ms`]; }) }) },
-    { key: 'pdb', title: 'PDB violation rate', def: 'Sent packets delivered later than the UE’s 5QI packet delay budget.', layer: 'app', better: 'lower',
-      value: (m, cell) => ({ main: fin(pu(m, cell, 1)?.pdb_violation_rate) ? 100 * pu(m, cell, 1).pdb_violation_rate : null, unit: `% · ${ueName(cell, 1)}`, subs: [0, 1].map((i) => [`${ueLabel(cell, i)}, PDB ${cells[cell]?.ues?.[i]?.qos.pdb_ms} ms`, `${pct(pu(m, cell, i)?.pdb_violation_rate, 2)} %`]) }) },
-    { key: 'drop', title: 'Packet drop rate', def: 'Sent packets never received, after the drain window.', layer: 'app', better: 'lower',
-      value: (m, cell) => ({ main: fin(pu(m, cell, 0)?.drop_rate) ? 100 * pu(m, cell, 0).drop_rate : null, unit: `% · ${ueName(cell, 0)}`, subs: [0, 1].map((i) => [ueLabel(cell, i), `${pct(pu(m, cell, i)?.drop_rate, 2)} %`]) }) },
-    { key: 'util', title: 'Resource utilization', def: 'Granted PRBs over PRBs × slots in the carrier, from the scheduler log.', layer: 'mac', better: 'none',
-      value: (m, cell) => ({ main: fin(m.resource_utilization.dl_prb) ? 100 * m.resource_utilization.dl_prb : null, unit: '% DL PRB', subs: [['UL PRB', `${pct(m.resource_utilization.ul_prb)} %`], ['slots / s', fmt(m.resource_utilization.slots_per_s, 0)], ...[0, 1].map((i) => [`${ueName(cell, i)} PRB share`, `${pct(pu(m, cell, i)?.dl_prb_share)} %`])] }) },
-    { key: 'se', title: 'Spectral efficiency', def: 'Bits per second per hertz of the 20 MHz carrier; “per used PRB” counts only the granted bandwidth.', layer: 'app + mac', better: 'higher',
-      value: (m) => ({ main: m.spectral_efficiency_bps_hz.dl_app, unit: 'bit/s/Hz DL delivered', digits: 3, subs: [['DL scheduled (MAC)', fmt(m.spectral_efficiency_bps_hz.dl_mac, 3)], ['DL per used PRB', fmt(m.spectral_efficiency_bps_hz.dl_per_used_prb, 2)], ['UL delivered', fmt(m.spectral_efficiency_bps_hz.ul_app, 3)]] }) },
-    { key: 'starve', title: 'Starvation and scheduling delay', def: 'DL wait from a grant that left data queued to the UE’s next grant; an event is a wait over 20 ms.', layer: 'mac', better: 'lower',
-      value: (m, cell) => ({ main: Math.max(...[0, 1].map((i) => pu(m, cell, i)?.starvation.dl_wait_ms.p99 ?? -Infinity)), unit: 'ms worst-UE p99 wait', digits: 1, subs: [0, 1].map((i) => { const s = pu(m, cell, i)?.starvation; return [ueName(cell, i), `p99 ${fmt(s?.dl_wait_ms.p99, 1)} · max ${fmt(s?.dl_wait_ms.max, 0)} ms · ${fmt(s?.events_per_s, 2)} ev/s`]; }) }) },
-    { key: 'decision', title: 'Scheduler decision time', def: 'Extra: time the scheduler spent per slot (`t=` of OCUDU’s Slot decisions log).', layer: 'mac', better: 'lower',
-      value: (m) => ({ main: m.decision_latency_us.mean, unit: 'µs mean', digits: 1, subs: [['p99', `${fmt(m.decision_latency_us.p99, 0)} µs`], ['max', `${fmt(m.decision_latency_us.max, 0)} µs`]] }) },
+// ---------------------------------------------------------------- charts
+function lineChart(host, series, { yLabel, xMax, yMin = null, yMax = null, height = 200, fmtY = (v) => fmt(v, 1) }) {
+  const W = 640, H = height, m = { l: 44, r: 10, t: 8, b: 24 };
+  const all = series.flatMap((s) => s.points.map((p) => p[1])).filter(fin);
+  if (!all.length) { host.innerHTML = '<div class="empty">No data yet.</div>'; return; }
+  let lo = yMin ?? Math.min(...all), hi = yMax ?? Math.max(...all);
+  if (hi - lo < 1e-9) { hi += 1; lo -= 1; }
+  const pad = (hi - lo) * 0.06; if (yMin == null) lo -= pad; if (yMax == null) hi += pad;
+  const xm = Math.max(1, xMax ?? Math.max(...series.flatMap((s) => s.points.map((p) => p[0]))));
+  const X = (x) => m.l + (W - m.l - m.r) * x / xm, Y = (y) => m.t + (H - m.t - m.b) * (1 - (y - lo) / (hi - lo));
+  const ticks = 4, grid = [];
+  for (let i = 0; i <= ticks; i++) { const v = lo + (hi - lo) * i / ticks; grid.push(`<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="var(--rule)" stroke-width="1"/><text x="${m.l - 6}" y="${Y(v) + 3}" text-anchor="end">${fmtY(v)}</text>`); }
+  const xt = [0, Math.round(xm / 2), xm].map((x) => `<text x="${X(x)}" y="${H - 6}" text-anchor="middle">${x} s</text>`).join('');
+  const paths = series.map((s) => {
+    const d = s.points.filter((p) => fin(p[1])).map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+    return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"${s.dashed ? ' stroke-dasharray="5 3"' : ''}/>`;
+  }).join('');
+  host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(yLabel)}">${grid.join('')}<text x="${m.l}" y="${m.t - 0}" dy="-0" ></text>${xt}${paths}<line class="xh" y1="${m.t}" y2="${H - m.b}" stroke="var(--faint)" stroke-width="1" visibility="hidden"/><rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/></svg>`;
+  const svg = host.querySelector('svg'), xh = svg.querySelector('.xh'), tip = $('tooltip');
+  svg.addEventListener('mousemove', (ev) => {
+    const r = svg.getBoundingClientRect(); const x = (ev.clientX - r.left) / r.width * W;
+    const t = Math.round((x - m.l) / (W - m.l - m.r) * xm);
+    if (t < 0 || t > xm) { xh.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; return; }
+    xh.setAttribute('x1', X(t)); xh.setAttribute('x2', X(t)); xh.setAttribute('visibility', 'visible');
+    const rows = series.map((s) => { const p = s.points.find((q) => q[0] === t); return p ? `<div><span class="swatch" style="background:${s.color}"></span> ${esc(s.name)} <b class="num">${fmtY(p[1])}</b></div>` : ''; }).join('');
+    tip.innerHTML = `<div class="label">t = ${t} s · ${esc(yLabel)}</div>${rows}`; tip.style.display = 'block';
+    tip.style.left = `${ev.pageX + 14}px`; tip.style.top = `${ev.pageY + 10}px`;
+  });
+  svg.addEventListener('mouseleave', () => { xh.setAttribute('visibility', 'hidden'); tip.style.display = 'none'; });
+}
+const legendHtml = (ues) => ues.map((ue) => `<span>${ueSwatch(ue)}${esc(ue)}</span>`).join('');
+
+function renderChannel() {
+  const sc = state.scene;
+  if (!sc?.available) { $('chanChart').innerHTML = `<div class="empty">${esc(sc?.reason || 'The channel trace appears once it is frozen.')}</div>`; return; }
+  const secs = sc.timeline.seconds;
+  $('chanLegend').innerHTML = legendHtml(sc.ues);
+  $('chanNote').textContent = `Downlink wideband gain (dB, emulator scale) per radio second from the frozen trace sha256 ${sc.timeline.trace_sha256.slice(0, 12)}…; every policy run replays exactly these taps.`;
+  lineChart($('chanChart'), sc.ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: secs.map((s) => [s.t, s.gain_db[`gnb0>${ue}:sionna_rt`]]) })),
+    { yLabel: 'DL gain dB', xMax: secs.length ? secs[secs.length - 1].t : 1 });
+}
+
+function heatmap(report, ues) {
+  const segs = report.segments || [];
+  const total = report.radio_seconds_total || segs.length || 1;
+  const row = (ue) => `<div class="heat-row"><span>${esc(ue)}</span><div class="heat-cells">${Array.from({ length: total }, (_, k) => {
+    const s = segs[k]; const v = s?.ues?.[ue]?.dl_prb_share;
+    const style = fin(v) ? `background:color-mix(in oklab, var(--seq-1) ${Math.round(100 * v)}%, var(--seq-0))` : 'background:var(--sunken)';
+    return `<i style="${style}" title="${esc(ue)} t=${k} s PRB share ${fin(v) ? pct(v) : 'n/a'}${s && !s.valid ? ' (invalid: ' + esc(s.reasons.join('; ')) + ')' : ''}"></i>`;
+  }).join('')}</div></div>`;
+  return `<div class="label" style="margin-top:10px">DL PRB share per radio second (darker = larger share)</div><div class="heat">${ues.map(row).join('')}</div>`;
+}
+
+function renderRuns() {
+  const runs = state.results?.runs || [];
+  if (!runs.length) { $('runs').innerHTML = '<div class="empty">No runs yet.</div>'; return; }
+  const ues = state.scene?.ues || [];
+  $('runs').innerHTML = runs.map((run, i) => {
+    const r = run.report, m = r?.metrics, ev = r?.evidence, g = run.gate;
+    const links = ev ? Object.values(ev.links || {}) : [];
+    const exact = links.reduce((a, l) => a + l.exact, 0), upd = links.reduce((a, l) => a + l.updates, 0);
+    const lag = ev?.traffic?.lag_samples;
+    return `<section class="panel"><div class="run-head"><h3>${esc(run.label || run.arm)} · run ${esc(run.run_id.slice(0, 2))}</h3>
+      <span class="badge ${run.live ? '' : g?.status === 'passed' ? 'good' : g ? 'bad' : 'idle'}">${run.live ? 'LIVE' : esc(g?.status || 'pending')}</span></div>
+      ${r?.error ? `<div class="error-box">${esc(r.error)}</div>` : ''}
+      <div class="kv">
+        <div><span class="label">Cell DL</span><b>${fmt(m?.aggregate_throughput_mbps?.dl)} Mb/s</b></div>
+        <div><span class="label">Jain (DL)</span><b>${fmt(m?.jain_fairness?.dl_throughput, 3)}</b></div>
+        <div><span class="label">DL PRB util</span><b>${pct(m?.resource_utilization?.dl_prb)}</b></div>
+        <div><span class="label">Valid radio s</span><b>${r ? `${r.segments_valid}/${r.segments_complete}` : '–'}</b></div>
+        <div><span class="label">Updates on target</span><b>${upd ? `${exact}/${upd}` : '–'}</b></div>
+        <div><span class="label">Radio speed</span><b>${fin(r?.runtime?.real_time_ratio) ? fmt(r.runtime.real_time_ratio, 2) + '×' : '–'}</b></div>
+        <div><span class="label">Inject lag p99</span><b>${fin(lag?.p99) ? fmt(lag.p99 / 23040, 2) + ' ms' : '–'}</b></div>
+      </div>
+      <div class="legend">${legendHtml(ues)}</div>
+      <div class="chart" id="tput-${i}"></div>
+      ${r?.segments ? heatmap(r, ues) : ''}
+      ${g?.per_ue ? `<details><summary>Attach and UE health</summary><table><tr><th>UE</th><th>RRC</th><th>PDU</th><th>ping</th><th>out-of-sync</th><th>crashed</th></tr>${Object.entries(g.per_ue).map(([ue, u]) => `<tr><td>${esc(ue)}</td><td>${u.rrc_connected}</td><td>${u.pdu_session}</td><td>${u.ping_ok}</td><td>${u.out_of_sync}</td><td>${u.crashed}</td></tr>`).join('')}</table></details>` : ''}
+    </section>`;
+  }).join('');
+  runs.forEach((run, i) => {
+    const r = run.report; if (!r?.segments) { $(`tput-${i}`).innerHTML = '<div class="empty">Waiting for the measurement.</div>'; return; }
+    lineChart($(`tput-${i}`), ues.map((ue) => ({ name: ue, color: ueColor(ue), dashed: ueDashed(ue), points: r.segments.map((s) => [s.k, s.valid ? s.ues?.[ue]?.dl_mbps : null]) })),
+      { yLabel: 'DL Mb/s (radio time)', xMax: r.radio_seconds_total, yMin: 0, height: 180 });
+  });
+}
+
+function renderComparison() {
+  const report = state.results?.reports?.['benchmark-report'];
+  const cmp = report?.comparison;
+  if (!cmp?.tests || !Object.keys(cmp.tests).length) { $('comparison').innerHTML = '<div class="empty">Appears when the runs finish.</div>'; $('paired').innerHTML = ''; renderTestPanels(); return; }
+  const pols = Object.keys(cmp.tests);
+  const ues = Object.keys(cmp.tests[pols[0]].per_ue);
+  const maxBy = (f) => Math.max(1e-9, ...pols.map((p) => f(cmp.tests[p]) || 0));
+  const cell = (v, max, d = 2, unit = '') => `<td class="num">${fin(v) ? `<span class="inline-bar" style="width:${Math.round(60 * v / max)}px"></span>` : ''}${fmt(v, d)}${unit}</td>`;
+  const rows = [
+    ['Cell DL (Mb/s)', (p) => p.aggregate_dl_mbps, 2], ['Cell UL (Mb/s)', (p) => p.aggregate_ul_mbps, 2],
+    ['Jain DL throughput', (p) => p.jain_dl, 3], ['Jain DL PRB share', (p) => p.jain_dl_prb_share, 3],
+    ['DL PRB utilization', (p) => p.dl_prb_util, 3], ['Decision time (µs)', (p) => p.decision_us_mean, 1],
+    ['Radio speed (× real time)', (p) => p.real_time_ratio, 2],
   ];
-}
-const PAIRED = { aggregate: 'aggregate_dl_mbps', jain: 'jain_dl', util: 'dl_prb_util', decision: 'decision_us', delay_tail: 'ue1_dl_delay_p99_ms', pdb: 'ue1_pdb_violation', drop: 'ue0_drop', starve: 'ue0_dl_wait_max_ms' };
-const PAIRED_UNIT = { aggregate: 'Mb/s', jain: '', util: '', decision: 'µs', delay_tail: 'ms', pdb: '', drop: '', starve: 'ms' };
-
-function renderBoard() {
-  const run = state.run; if (!run) return;
-  const cells = run.benchmark.cells;
-  const policy = run.policy_check?.gnbs || {};
-  const laneHead = (cell) => {
-    const meta = cells[cell], info = meta.scheduler_info;
-    const pc = policy[meta.gnb.device_id];
-    const verify = pc ? (pc.ok ? `<span class="ok">✓ gNB loaded <span class="mono">${esc(pc.found_in_config_dump.join(', '))}</span></span>` : `<span class="bad">✗ gNB config dump shows ${esc((pc.found_in_config_dump || []).join(', ') || 'no policy')}</span>`)
-      : '<span class="warn">policy check pending (gNB not started)</span>';
-    const params = Object.entries(info.parameters || {}).map(([k, v]) => `${k}: ${v}`).join(' · ') || 'no parameters';
-    return `<div class="panel lane-head lane-${cell}">
-      <span class="cell">cell ${cell} · ${esc(meta.gnb.device_id)} · PCI ${meta.gnb.pci} · ${esc(meta.ues.map((u) => u.device_id).join(', '))}</span>
-      <h3>${esc(info.title)}</h3>
-      <p>${esc(info.summary)}</p>
-      <ul>${info.properties.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
-      <div class="mono muted" style="font-size:var(--step--1)">${esc(params)}<br>${esc(info.source)}</div>
-      <div class="verify">${verify}</div>
-      <div class="grid-wrap"><span class="label">Resource grid · last 240 logged slots · DL above, UL below</span>
-        <canvas id="grid-${cell}" aria-label="PRB allocation per slot in cell ${cell}"></canvas>
-        <div class="grid-legend">${meta.ues.map((u, i) => `<span><span class="swatch" style="background:${ROLE_COLOR[i]}"></span>${esc(u.device_id)}</span>`).join('')}
-          <span><span class="swatch" style="background:var(--common)"></span>SIB / RAR / paging</span><span>lighter = retransmission</span></div>
-      </div></div>`;
-  };
-  const profile = run.benchmark.traffic_profile || {};
-  let html = `<div class="board-gutter-head gutter"><span class="label">Traffic profile</span><strong>${esc(profile.title || profile.name)}</strong><span>${esc(profile.description || '')}</span></div>`;
-  html += laneHead('a') + laneHead('b');
-  const report = state.report;
-  for (const row of metricRows()) {
-    html += `<div class="metric-row"><div class="metric-label gutter"><h4>${esc(row.title)}</h4><p>${esc(row.def)}</p><span class="tag layer">${esc(row.layer)}</span></div>`;
-    const values = {};
-    for (const cell of ['a', 'b']) {
-      const m = laneOf(cell)?.metrics;
-      values[cell] = m && m.segments ? row.value(m, cell) : null;
-    }
-    const mains = ['a', 'b'].map((c) => values[c]?.main).filter(fin);
-    const maxMain = Math.max(...mains.map(Math.abs), 1e-9);
-    const dir = BETTER[row.better];
-    let best = null;
-    if (dir && mains.length === 2 && values.a.main !== values.b.main) best = (values.a.main - values.b.main) * dir > 0 ? 'a' : 'b';
-    for (const cell of ['a', 'b']) {
-      const v = values[cell];
-      if (!v) { html += `<div class="cellv lane-${cell}"><span class="muted">${report ? 'no valid seconds yet' : 'waiting for measurements'}</span></div>`; continue; }
-      const main = fin(v.main) ? `<span class="big">${fmt(v.main, v.digits ?? 2)}</span><span class="unit">${esc(v.unit)}</span>` : '';
-      const meter = fin(v.main) && row.key !== 'per_ue' ? `<div class="meter" aria-hidden="true"><span style="width:${(100 * Math.abs(v.main) / maxMain).toFixed(1)}%"></span></div>` : '';
-      html += `<div class="cellv lane-${cell}"><div class="main">${main}${best === cell ? `<span class="better">${row.better} is better</span>` : ''}</div>${meter}
-        <div class="subs">${v.subs.map(([k, val]) => `<div class="s"><span>${esc(k)}</span><span class="num">${esc(val)}</span></div>`).join('')}</div></div>`;
-    }
-    const pair = report?.comparison?.[PAIRED[row.key]];
-    if (pair && pair.n) {
-      const unit = PAIRED_UNIT[row.key];
-      const ci = pair.ci95 ? `95% CI [${fmt(pair.ci95[0], 3)}, ${fmt(pair.ci95[1], 3)}]${unit ? ' ' + unit : ''}` : 'CI needs ≥ 20 valid seconds';
-      html += `<div class="paired">Paired over ${pair.n} s: mean (a − b) <span class="num">${fmt(pair.mean_diff, 3)}${unit ? ' ' + unit : ''}</span>, ${ci}; a higher in <span class="num">${pair.x_higher}</span> s, b higher in <span class="num">${pair.y_higher}</span> s.</div>`;
-    }
-    html += `</div>`;
+  let html = `<table><tr><th>Metric</th>${pols.map((p) => `<th class="num">${esc(cmp.tests[p].label)} · ${cmp.tests[p].runs} run${cmp.tests[p].runs > 1 ? 's' : ''}</th>`).join('')}</tr>`;
+  for (const [label, f, d] of rows) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
+  for (const ue of ues) {
+    const u0 = cmp.tests[pols[0]].per_ue[ue];
+    const sub = [['DL Mb/s', (p) => p.per_ue[ue].dl_mbps, 2], ['DL PRB share', (p) => p.per_ue[ue].dl_prb_share, 3],
+                 ['DL delay p95 ms', (p) => p.per_ue[ue].dl_delay_radio_p95_ms, 0], ['DL delay p99 ms', (p) => p.per_ue[ue].dl_delay_radio_p99_ms, 0],
+                 ['PDB violation', (p) => p.per_ue[ue].pdb_violation_rate, 3], ['DL MCS', (p) => p.per_ue[ue].dl_mcs, 1]];
+    html += `<tr><th colspan="${pols.length + 1}"><span class="swatch" style="background:${ueColor(ue)}"></span> ${esc(ue)} · ${esc(u0.role)} · 5QI ${esc(u0.five_qi)}</th></tr>`;
+    for (const [label, f, d] of sub) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
   }
-  html += `<div class="excluded"><strong>Not measured: GBR satisfaction ratio.</strong> srsUE carries one default non-GBR QoS flow per PDU session, so no GBR target exists to satisfy; the QoS-aware policy’s GBR term is 1 for every UE.</div>`;
-  $('board').innerHTML = html;
-  drawGrids();
-}
-
-// ---------------------------------------------------------------- resource grids
-function drawGrids() {
-  const grid = state.live?.grid; if (!grid || !state.run) return;
-  for (const cell of ['a', 'b']) {
-    const canvas = $(`grid-${cell}`); if (!canvas) continue;
-    const data = grid[cell]; if (!data) continue;
-    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
-    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-    const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
-    const slots = data.slots; const n = 240, nprb = data.nof_prb || 106;
-    const half = (h - 6) / 2, colW = w / n;
-    const ues = state.run.benchmark.cells[cell].ues.map((u) => u.device_id);
-    const color = (owner, newtx) => {
-      const i = ues.indexOf(owner);
-      const base = i >= 0 ? css(i === 0 ? '--ue-a' : '--ue-b') : css('--common');
-      ctx.globalAlpha = newtx ? 0.95 : 0.4; return base;
-    };
-    const first = slots.length ? slots[0].slot : 0;
-    const span = slots.length ? Math.max(n, slots[slots.length - 1].slot - first + 1) : n;
-    const xOf = (slot) => (slot - first) / span * w;
-    for (const s of slots) {
-      const x = xOf(s.slot), cw = Math.max(1, w / span);
-      for (const [owner, rb0, rb1, newtx] of s.dl) { ctx.fillStyle = color(owner, newtx); ctx.fillRect(x, half * (rb0 / nprb), cw, Math.max(1, half * (rb1 - rb0) / nprb)); }
-      for (const [owner, rb0, rb1, newtx] of s.ul) { ctx.fillStyle = color(owner, newtx); ctx.fillRect(x, half + 6 + half * (rb0 / nprb), cw, Math.max(1, half * (rb1 - rb0) / nprb)); }
-    }
-    ctx.globalAlpha = 1; ctx.fillStyle = css('--rule'); ctx.fillRect(0, half + 2, w, 2);
-    ctx.fillStyle = css('--muted'); ctx.font = `10px ${css('--font-mono')}`;
-    ctx.fillText('DL', 4, 11); ctx.fillText('UL', 4, half + 17);
-    if (!slots.length) { ctx.fillText('no scheduled slots yet', 24, 11); }
+  $('comparison').innerHTML = html + '</table>';
+  const pr = cmp.paired || {};
+  const prow = (name, x) => `<tr><td>${esc(name)}</td><td class="num">${x.n}</td><td class="num">${fmt(x.mean_x, 3)}</td><td class="num">${fmt(x.mean_y, 3)}</td><td class="num">${fmt(x.mean_diff, 3)}</td><td class="num">${x.ci95 ? `${fmt(x.ci95[0], 3)} … ${fmt(x.ci95[1], 3)}` : '–'}</td></tr>`;
+  let p = pr.note ? `<p class="muted">${esc(pr.note)}</p><table><tr><th>Series</th><th class="num">n</th><th class="num">x</th><th class="num">y</th><th class="num">x − y</th><th class="num">95% CI</th></tr>${Object.entries(pr).filter(([k]) => k !== 'note').map(([k, v]) => prow(k, v)).join('')}</table>` : '<p class="muted">The paired comparison needs both tests.</p>';
+  for (const [arm, series] of Object.entries(cmp.aa_control || {})) {
+    p += `<h3 style="margin-top:12px">A/A control: ${esc(cmp.tests[arm]?.label || arm)} run 1 vs run 2</h3><p class="muted">${esc(cmp.aa_note)}</p><table><tr><th>Series</th><th class="num">n</th><th class="num">run 1</th><th class="num">run 2</th><th class="num">diff</th><th class="num">95% CI</th></tr>${Object.entries(series).map(([k, v]) => prow(k, v)).join('')}</table>`;
   }
-}
-
-// ---------------------------------------------------------------- chart
-const CHARTS = [
-  ['aggregate', 'Aggregate DL', (c) => c.dl_rx_mbps, 'Mb/s'],
-  ['jain', 'Jain DL', (c) => c.jain_dl, ''],
-  ['delay', 'Interactive UE p99 delay', (c, cell) => { const u = state.run?.benchmark.cells[cell].ues[1].device_id; const f = Object.values(c.ues[u]?.flows || {}).filter((x) => x.direction === 'dl').map((x) => x.delay_ms.p99).filter(fin); return f.length ? Math.max(...f) : null; }, 'ms'],
-  ['util', 'DL PRB utilization', (c) => fin(c.dl_prb_util) ? 100 * c.dl_prb_util : null, '%'],
-  ['wait', 'Worst DL wait', (c) => { const v = Object.values(c.ues).map((u) => u.dl_wait_ms_max).filter(fin); return v.length ? Math.max(...v) : null; }, 'ms'],
-  ['decision', 'Decision time', (c) => c.decision_us_mean, 'µs'],
-];
-function renderChartPicker() {
-  $('chartPick').innerHTML = CHARTS.map(([key, label]) => `<button type="button" data-k="${key}" aria-pressed="${state.chart === key}">${esc(label)}</button>`).join('');
-}
-$('chartPick').addEventListener('click', (e) => {
-  const k = e.target?.dataset?.k; if (!k) return;
-  state.chart = k; try { localStorage.setItem('sb.chart', k); } catch {}
-  renderChartPicker(); drawChart();
-});
-function drawChart() {
-  const canvas = $('chart'); const segs = state.report?.segments || [];
-  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
-  canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-  const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
-  const [, label, extract, unit] = CHARTS.find((c) => c[0] === state.chart);
-  const pad = { l: 52, r: 14, t: 12, b: 26 };
-  ctx.font = `11px ${css('--font-mono')}`;
-  if (!segs.length) { ctx.fillStyle = css('--muted'); ctx.fillText('No measured seconds yet.', pad.l, pad.t + 14); return; }
-  const series = ['a', 'b'].map((cell) => segs.map((s) => { const v = extract(s.cells[cell], cell); return fin(v) ? v : null; }));
-  const all = series.flat().filter(fin);
-  let ymax = all.length ? Math.max(...all) : 1; let ymin = Math.min(0, ...all);
-  if (ymax === ymin) ymax = ymin + 1;
-  const niceStep = (range) => { const raw = range / 4, mag = 10 ** Math.floor(Math.log10(raw)), f = raw / mag; return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag; };
-  const step = niceStep(ymax - ymin); ymax = Math.ceil(ymax / step) * step; ymin = Math.floor(ymin / step) * step;
-  const total = state.report.measure_seconds;
-  const x = (k) => pad.l + (w - pad.l - pad.r) * (k + 0.5) / total;
-  const y = (v) => pad.t + (h - pad.t - pad.b) * (1 - (v - ymin) / (ymax - ymin));
-  ctx.fillStyle = css('--sunken');
-  for (const s of segs) if (!s.valid) ctx.fillRect(x(s.k) - (w - pad.l - pad.r) / total / 2, pad.t, (w - pad.l - pad.r) / total, h - pad.t - pad.b);
-  ctx.strokeStyle = css('--rule'); ctx.lineWidth = 1; ctx.fillStyle = css('--muted');
-  for (let v = ymin; v <= ymax + step / 2; v += step) {
-    ctx.beginPath(); ctx.moveTo(pad.l, y(v)); ctx.lineTo(w - pad.r, y(v)); ctx.stroke();
-    ctx.fillText(fmt(v, step < 0.1 ? 2 : step < 1 ? 1 : 0), 6, y(v) + 4);
-  }
-  const tickStep = total > 200 ? 60 : total > 60 ? 20 : 10;
-  for (let k = 0; k <= total; k += tickStep) ctx.fillText(`${k}s`, x(k) - 8, h - 8);
-  ctx.fillText(unit, 6, pad.t - 1 + 10 > 12 ? 10 : 10);
-  ['a', 'b'].forEach((cell, i) => {
-    ctx.strokeStyle = css(cell === 'a' ? '--lane-a' : '--lane-b'); ctx.lineWidth = 1.8; ctx.beginPath();
-    let pen = false;
-    series[i].forEach((v, k) => { if (!fin(v)) { pen = false; return; } const px = x(segs[k].k), py = y(v); if (pen) ctx.lineTo(px, py); else ctx.moveTo(px, py); pen = true; });
-    ctx.stroke();
-    const lastIdx = series[i].map((v, k) => fin(v) ? k : -1).filter((k) => k >= 0).pop();
-    if (lastIdx !== undefined) { ctx.fillStyle = ctx.strokeStyle; ctx.beginPath(); ctx.arc(x(segs[lastIdx].k), y(series[i][lastIdx]), 3.2, 0, Math.PI * 2); ctx.fill(); }
-  });
-  const run = state.run;
-  ctx.font = `600 11px ${css('--font-body')}`;
-  ['a', 'b'].forEach((cell, i) => {
-    ctx.fillStyle = css(cell === 'a' ? '--lane-a' : '--lane-b');
-    ctx.fillText(`cell ${cell} · ${run?.benchmark.cells[cell].scheduler_info.short || cell}`, pad.l + 8 + i * 150, pad.t + 12);
-  });
-}
-
-// ---------------------------------------------------------------- integrity
-function renderIntegrity() {
-  const r = state.report, run = state.run; if (!r || !run) return;
-  const c = r.checks || {}, s = r.sionna || {};
-  const flows = Object.entries(c.flows || {});
-  const sent = flows.reduce((a, [, f]) => a + f.sent, 0), received = flows.reduce((a, [, f]) => a + f.received, 0);
-  const rcvErr = Object.values(c.receivers || {}).map((x) => x.udp_rcvbuf_errors_delta).filter(fin);
-  const gate = run.gate;
-  const brokers = gate?.brokers || {};
-  const row = (k, v, cls = '') => `<div class="check"><span>${esc(k)}</span><span class="${cls}">${v}</span></div>`;
-  const policyOk = run.policy_check?.ok;
-  $('integrity').innerHTML = `
-    <div class="panel card"><h3>Channel</h3>
-      ${row('Sionna updates (grid points)', s.updates ?? '–')}
-      ${row('Skipped grid points', s.skipped_grid_points ?? '–', s.skipped_grid_points > 0 ? 'warn' : '')}
-      ${row('Solve time p50 / p99', `${fmt(s.generation_ms?.p50, 0)} / ${fmt(s.generation_ms?.p99, 0)} ms`)}
-      ${row('Lag behind grid p99', `${fmt(s.lag_ms?.p99, 1)} ms`)}
-      ${row('Fan-out ack skew p99', `${fmt(s.fanout_ack_skew_ms?.p99, 1)} ms`)}
-      ${row('Both brokers accepted every batch', c.fanout_all_ok ? 'yes' : 'no', c.fanout_all_ok ? 'ok' : 'bad')}
-      ${row('Channel digests recorded', c.sionna_digests ?? '–')}</div>
-    <div class="panel card"><h3>Traffic</h3>
-      ${row('Packets sent (all flows)', sent.toLocaleString())}
-      ${row('Packets received', received.toLocaleString())}
-      ${row('Receiver socket overflows', rcvErr.length ? rcvErr.reduce((a, b) => a + b, 0) : '–', rcvErr.some((v) => v > 0) ? 'bad' : 'ok')}
-      ${row('Valid / measured seconds', `${r.segments_valid} / ${r.segments_complete}`, r.segments_valid < r.segments_complete ? 'warn' : '')}
-      ${row('Senders finished', Object.keys(c.senders || {}).length ? 'yes' : 'no')}</div>
-    <div class="panel card"><h3>Radio stack</h3>
-      ${row('Scheduler policies loaded as requested', policyOk === undefined ? '–' : policyOk ? 'yes' : 'no', policyOk ? 'ok' : 'bad')}
-      ${(() => { const sa = r.lanes?.a?.metrics.resource_utilization.slots_per_s, sb = r.lanes?.b?.metrics.resource_utilization.slots_per_s;
-        const slow = fin(sa) && fin(sb) && Math.min(sa, sb) < 950; const uneven = fin(sa) && fin(sb) && Math.abs(sa - sb) > 0.03 * Math.max(sa, sb);
-        return row('Radio speed a / b (real time = 1000 slots/s)', `${fmt(sa, 0)} / ${fmt(sb, 0)}`, uneven ? 'bad' : slow ? 'warn' : 'ok'); })()}
-      ${row('SCHED lines parsed a / b', `${c.sched_lines?.a ?? 0} / ${c.sched_lines?.b ?? 0}`)}
-      ${row('C-RNTIs mapped', Object.values(c.rnti_map || {}).map((m) => Object.keys(m).length).join(' / '))}
-      ${['a', 'b'].map((cell) => row(`Broker ${cell} gaps / overflows / ZMQ errors`, brokers[cell] ? `${brokers[cell].tx_sequence_gaps} / ${brokers[cell].tx_queue_overflows} / ${brokers[cell].zmq_errors}` : '–')).join('')}
-      ${row('Gate verdict', gate?.status || 'running', gate?.status === 'passed' ? 'ok' : gate?.status ? 'bad' : '')}
-      ${row('Host load (1 min) mean / max', c.host_load?.samples ? `${fmt(c.host_load.load1_mean, 1)} / ${fmt(c.host_load.load1_max, 1)}` : '–')}
-      ${row('Other busy processes', Object.keys(c.host_load?.other_busy_processes || {}).join(', ') || 'none seen', Object.keys(c.host_load?.other_busy_processes || {}).length ? 'warn' : '')}</div>`;
-  const invalid = (r.segments || []).filter((x) => !x.valid).slice(0, 3).map((x) => `${x.k}s: ${x.reasons.join('; ')}`);
-  $('footer').textContent = invalid.length ? `First invalid seconds — ${invalid.join(' | ')}` : '';
+  $('paired').innerHTML = p;
+  renderTestPanels();
 }
 
 // ---------------------------------------------------------------- 3D scene
@@ -783,102 +559,127 @@ function initScene() {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   host.appendChild(renderer.domElement);
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 500);
-  camera.up.set(0, 0, 1); camera.position.set(-22, -30, 24);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.target.set(6, 0, 1); controls.enableDamping = true;
+  const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 5000);
+  camera.up.set(0, 0, 1);
+  const controls = new OrbitControls(camera, renderer.domElement); controls.enableDamping = true;
   scene.add(new THREE.HemisphereLight(0xffffff, 0x445566, 1.6));
   const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(-20, -30, 50); scene.add(sun);
-  const world = new THREE.Group(); scene.add(world);
-  const markers = new THREE.Group(); scene.add(markers);
-  Object.assign(scene3, { renderer, scene, camera, controls, world, markers, ready: true, trails: {} });
+  const world = new THREE.Group(), markers = new THREE.Group(); scene.add(world); scene.add(markers);
+  Object.assign(scene3, { renderer, scene, camera, controls, world, markers, ready: true });
   const resize = () => { const r = $('sceneHost').getBoundingClientRect(); renderer.setSize(r.width, r.height, false); renderer.domElement.style.width = '100%'; renderer.domElement.style.height = '100%'; camera.aspect = r.width / Math.max(1, r.height); camera.updateProjectionMatrix(); };
   new ResizeObserver(resize).observe($('sceneHost')); resize();
   const loop = () => { controls.update(); renderer.render(scene, camera); requestAnimationFrame(loop); };
   loop();
 }
-const MATERIAL_COLOR = { concrete: 0xb9bfc3, metal: 0x8aa0b4, marble: 0xd8d4cc, brick: 0xa86f5a, wood: 0x9b7a55, glass: 0x9cc6d8 };
+// The Sionna scene as Sionna sees it: every object drawn with the preview
+// colour of its ITU radio material (scene-mesh.json carries Sionna's own
+// colours and its permittivity/conductivity at the DL and UL carriers).
+const FALLBACK_RGB = [0.7, 0.7, 0.7];
 async function loadMesh() {
-  if (!scene3.ready || !state.runId) return;
-  scene3.world.clear(); scene3.meshLoaded = false;
+  const generation = state.generation;
+  if (!scene3.ready || !state.scene?.available || state.meshFor === generation) return;
+  state.meshFor = generation;
   let mesh;
-  try { mesh = await get('/api/scene_mesh' + q()); } catch { $('sceneEmpty').hidden = false; return; }
+  try { mesh = await api('/api/benchmark/scene_mesh'); } catch { state.meshFor = null; return; }
+  if (generation !== state.generation) return;
+  scene3.world.clear();
+  const materials = mesh.radio_materials || {};
+  const used = {};
   for (const obj of mesh.objects || []) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(obj.positions, 3));
     geo.setIndex(obj.indices); geo.computeVertexNormals();
-    const key = Object.keys(MATERIAL_COLOR).find((m) => String(obj.material).includes(m));
-    const mat = new THREE.MeshStandardMaterial({ color: MATERIAL_COLOR[key] ?? 0xb0b6ba, roughness: 0.9, metalness: key === 'metal' ? 0.4 : 0.05, side: THREE.DoubleSide,
-      polygonOffset: obj.kind === 'ground', polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
-    scene3.world.add(new THREE.Mesh(geo, mat));
+    const rgb = materials[obj.material]?.color_rgb || FALLBACK_RGB;
+    // Roads share the ground's material; a darker shade keeps them readable.
+    const shade = obj.kind === 'road' ? 0.72 : 1.0;
+    const color = new THREE.Color(rgb[0] * shade, rgb[1] * shade, rgb[2] * shade);
+    scene3.world.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.9, side: THREE.DoubleSide,
+      polygonOffset: obj.kind !== 'building', polygonOffsetFactor: obj.kind === 'ground' ? 2 : 1, polygonOffsetUnits: 1 })));
+    const u = used[obj.material] ||= { count: 0, kinds: {} };
+    u.count += 1; u.kinds[obj.kind] = (u.kinds[obj.kind] || 0) + 1;
   }
-  scene3.meshLoaded = true; $('sceneEmpty').hidden = true;
+  const g = state.scene.gnb || [0, 0, 0];
+  const ext = Math.max(30, ...state.scene.timeline.seconds.flatMap((s) => Object.values(s.positions).map((p) => Math.hypot(p[0] - g[0], p[1] - g[1]))));
+  scene3.camera.position.set(g[0] - ext * 0.9, g[1] - ext * 1.3, g[2] + ext * 1.1);
+  scene3.controls.target.set(g[0], g[1], 0);
+  scene3.scale = ext / 60;
+  const hex = (rgb) => '#' + rgb.map((c) => Math.round(255 * c).toString(16).padStart(2, '0')).join('');
+  $('sceneLegend').innerHTML = Object.entries(used).sort((a, b) => b[1].count - a[1].count).map(([name, u]) => {
+    const m = materials[name] || {}, dl = m.dl || {};
+    const kinds = Object.entries(u.kinds).map(([k, n]) => `${n} ${k}`).join(', ');
+    return `<span class="chip" title="${esc(kinds)}; at ${fmt((dl.frequency_hz || 0) / 1e9, 4)} GHz (UL ${fmt(m.ul?.relative_permittivity, 2)} / ${fmt(m.ul?.conductivity_s_per_m, 4)})"><span class="mat" style="background:${hex(m.color_rgb || FALLBACK_RGB)}"></span>${esc(name)} · ε<sub>r</sub> ${fmt(dl.relative_permittivity, 2)} · σ ${fmt(dl.conductivity_s_per_m, 3)} S/m</span>`;
+  }).join('') + (mesh.source ? `<span class="chip">${esc(mesh.source.attribution)}</span>` : '');
+  $('sceneEmpty').hidden = true;
   updateMarkers();
 }
+function currentSecond() {
+  const live = state.results?.runs?.find((r) => r.live)?.report;
+  if (live) return (live.segments_complete || 0) + (live.warmup_seconds || 0);
+  return 0;
+}
 function updateMarkers() {
-  if (!scene3.ready || !state.run) return;
-  const last = state.timeline[state.timeline.length - 1];
-  const nodes = state.run.scenario?.nodes || {};
-  const pos = { gnb0: last?.positions?.gnb0 || nodes.gnb0?.start_m, ue0: last?.positions?.ue0 || nodes.ue0?.route_m?.[0], ue1: last?.positions?.ue1 || nodes.ue1?.route_m?.[0] };
+  if (!scene3.ready || !state.scene?.available) return;
+  const secs = state.scene.timeline.seconds; if (!secs.length) return;
+  const t = Math.min(secs.length - 1, currentSecond()); const at = secs[t];
   const m = scene3.markers; m.clear();
-  const colorOf = (name) => new THREE.Color(css(name));
-  if (pos.gnb0) {
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.6, 1.6, 4), new THREE.MeshStandardMaterial({ color: colorOf('--accent') }));
-    cone.rotation.x = Math.PI / 2; cone.position.set(...pos.gnb0); m.add(cone);
+  const color = (v) => new THREE.Color(css(v));
+  const g = state.scene.gnb, k = scene3.scale || 1;
+  if (g) {
+    const mast = new THREE.Mesh(new THREE.ConeGeometry(1.4 * k, 4 * k, 4), new THREE.MeshStandardMaterial({ color: color('--accent'), emissive: color('--accent'), emissiveIntensity: 0.3 }));
+    mast.rotation.x = Math.PI / 2; mast.position.set(g[0], g[1], g[2] + 2 * k); m.add(mast);
   }
-  ['ue0', 'ue1'].forEach((ue, i) => {
-    const p = pos[ue]; if (!p) return;
-    const color = colorOf(i === 0 ? '--ue-a' : '--ue-b');
-    const sphere = new THREE.Mesh(new THREE.SphereGeometry(0.45, 20, 14), new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25 }));
-    sphere.position.set(...p); m.add(sphere);
-    const trail = state.timeline.map((s) => s.positions?.[ue]).filter(Boolean).slice(-300);
-    if (trail.length > 1) m.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(trail.map((t) => new THREE.Vector3(t[0], t[1], t[2] + 0.02))), new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.7 })));
-    if (pos.gnb0) {
-      const gain = last?.channels?.[`gnb0>${ue}:sionna_rt`]?.tap_gain_db;
-      const strength = fin(gain) ? Math.max(0.15, Math.min(1, (gain + 30) / 40)) : 0.3;
-      m.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...pos.gnb0), new THREE.Vector3(...p)]),
-        new THREE.LineBasicMaterial({ color, transparent: true, opacity: strength })));
-    }
-  });
-  const run = state.run, cells = run.benchmark.cells;
-  $('sceneOverlay').innerHTML = `
-    <span class="chip">scenario time <b>${last ? fmt(last.scenario_time_s, 1) : '0.0'} s</b>${last ? '' : ' (held)'}<br>grid point <b>${last?.grid_index ?? '–'}</b></span>
-    <span class="chip">channel SHA-256<br><b>${last?.digest ? last.digest.slice(0, 12) + '…' : '–'}</b></span>
-    <span class="chip">same channel in both cells<br><b>${esc(cells.a.ues.map((u, i) => `${u.device_id}=${cells.b.ues[i].device_id}`).join(' · '))}</b></span>`;
-  $('sceneLegend').innerHTML = `<span class="chip"><span class="swatch" style="background:var(--accent)"></span>gNB</span>
-    ${cells.a.ues.map((u, i) => `<span class="chip"><span class="swatch" style="background:${ROLE_COLOR[i]}"></span>${esc(u.device_id)} / ${esc(cells.b.ues[i].device_id)} · ${esc(u.role)}</span>`).join('')}
-    <span class="chip">line opacity = DL tap gain</span>`;
+  for (const h of state.scene.hotspots?.centres_m || []) {
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(2 * state.scene.hotspots.sigma_m, 48), new THREE.MeshBasicMaterial({ color: color('--warn'), transparent: true, opacity: 0.18, depthWrite: false }));
+    disc.position.set(h[0], h[1], 0.3); m.add(disc);
+  }
+  for (const ue of state.scene.ues) {
+    const p = at.positions[ue]; if (!p) continue;
+    const c = color(`--s${(ueIndex(ue) % 8) + 1}`);
+    const geometry = ueDashed(ue) ? new THREE.OctahedronGeometry(1.1 * k) : new THREE.SphereGeometry(0.9 * k, 20, 14);
+    const marker = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.35 }));
+    marker.position.set(p[0], p[1], p[2] + 0.9 * k); m.add(marker);
+    const trail = secs.slice(0, t + 1).map((x) => x.positions[ue]).filter(Boolean);
+    if (trail.length > 1) m.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(trail.map((q) => new THREE.Vector3(q[0], q[1], q[2] + 0.1))), new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.8 })));
+    if (g) m.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...g), new THREE.Vector3(...p)]), new THREE.LineBasicMaterial({ color: c, transparent: true, opacity: 0.3 })));
+  }
+  const n = state.scene.ues.length;
+  $('sceneOverlay').innerHTML = `<span class="chip">${esc(state.scene.scene_id)} · ${n} UE${n > 1 ? 's' : ''} · ${esc(state.scene.mobility || '')} · ${esc(state.scene.placement || '')}</span><span class="chip">radio time <b>${t} s</b></span>${state.scene.hotspots ? '<span class="chip">shaded discs: hotspots (2σ)</span>' : ''}<span class="chip">octahedra: ue8–ue15</span>`;
 }
 
 // ---------------------------------------------------------------- polling
-async function refreshReport() {
-  if (!state.runId) return;
-  try { state.report = await get('/api/report' + q()); } catch { return; }
-  renderHeader(); renderBoard(); drawChart(); renderIntegrity();
+let inflight = false;
+async function tick() {
+  if (inflight) return; inflight = true;
+  try {
+    const status = await api('/api/benchmark/status');
+    if (accept(status)) { state.status = status; renderStatus(); }
+    if (state.sessionId || status.session_id) {
+      const results = await api('/api/benchmark/results');
+      if (accept(results)) { state.results = results; renderRuns(); renderGates(); renderComparison(); renderStatus(); }
+      if (!state.scene?.available) {
+        const sc = await api('/api/benchmark/scene');
+        if (accept(sc)) { state.scene = sc; renderChannel(); loadMesh(); }
+      }
+      updateMarkers();
+    }
+  } catch (e) { if (e.name !== 'AbortError') $('errorBox').textContent = `poll: ${e.message}`; }
+  finally { inflight = false; }
 }
-async function refreshLive() {
-  if (!state.runId) return;
-  try { state.live = await get(`/api/live${q()}&since=${state.lastGrid}`); } catch { return; }
-  if (state.live.timeline?.length) {
-    state.timeline.push(...state.live.timeline);
-    state.timeline = state.timeline.slice(-2000);
-    state.lastGrid = state.timeline[state.timeline.length - 1].grid_index ?? state.lastGrid;
-  }
-  drawGrids(); updateMarkers(); renderUeLive();
-}
-function schedule(fn, ms) { const tick = async () => { await fn(); setTimeout(tick, typeof ms === 'function' ? ms() : ms); }; tick(); }
 
-try { state.chart = localStorage.getItem('sb.chart') || state.chart; state.runId = localStorage.getItem('sb.run') || null; } catch {}
-renderChartPicker();
-initScene();
-window.addEventListener('resize', () => { drawChart(); drawGrids(); });
-schedule(refreshSystem, 1500);
-schedule(loadRuns, 5000);
-schedule(async () => { if (state.run?.live) await refreshReport(); }, 2000);
-schedule(async () => { if (state.run?.live) await refreshLive(); }, 1000);
-// The UI starts before the bridge writes the scene sidecar: retry until it exists.
-schedule(async () => { if (state.runId && !scene3.meshLoaded) await loadMesh(); }, 3000);
-schedule(async () => { if (state.run && !state.run.live) await refreshRun(); }, 15000);
+async function boot() {
+  initScene();
+  try { state.options = await api('/api/benchmark/options'); } catch (e) { $('errorBox').textContent = `options: ${e.message}`; return; }
+  fillOptions();
+  $('scene').addEventListener('change', sceneChanged);
+  $('controls').addEventListener('change', markPending);
+  $('newSeed').addEventListener('click', () => { $('seed').value = Math.floor(Math.random() * 1e9); markPending(); });
+  $('startBtn').addEventListener('click', startBenchmark);
+  $('stopBtn').addEventListener('click', () => simple('/api/benchmark/stop', 'Stop the running benchmark? It will be marked STOPPED.'));
+  $('resetBtn').addEventListener('click', () => simple('/api/benchmark/reset', 'Stop and delete the current session\'s measurements?'));
+  await tick();
+  setInterval(tick, 1000);
+}
+boot();
 </script>
 </body>
 </html>

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Scheduler-benchmark web UI server.
 
-Serves examples/scheduler_benchmark/index.html and a read-only JSON API over
-the benchmark runs under <runs-root>/results/logs/ocudu-scheduler-benchmark:
+Two modes.
+
+Legacy (default): serves examples/scheduler_benchmark/legacy.html and a
+read-only JSON API over the two-cell benchmark runs under
+<runs-root>/results/logs/ocudu-scheduler-benchmark:
 
   /api/runs                 runs, newest first
   /api/run?id=TS            the run's configuration (benchmark.json, scenario,
@@ -13,12 +16,36 @@ the benchmark runs under <runs-root>/results/logs/ocudu-scheduler-benchmark:
   /api/scene_mesh?id=TS     the Sionna scene triangles (bridge sidecar file)
   /api/system               this host's GPU and CPU, and the run's processes
 
-It only reads files and /proc; it never signals or reconfigures a process.
+In legacy mode it only reads files and /proc; it never signals or
+reconfigures a process.
+
+Control (--control): serves examples/scheduler_benchmark/index.html, the
+single-cell benchmark dashboard, and delegates every state change to
+controller.py (one active session):
+
+  GET  /api/benchmark/options   scenes (installed + validated), UE counts, policies, profiles, defaults
+  POST /api/benchmark/start     validate, stop and clear the previous session, start a new one (202)
+  POST /api/benchmark/stop      stop the active session's processes
+  POST /api/benchmark/reset     stop and clear; no new session
+  GET  /api/benchmark/status    session id, generation, state, progress, errors
+  GET  /api/benchmark/results   per-run live/final KPIs, fairness gates, reports
+  GET  /api/benchmark/scene     scene, UE positions and channel-gain timeline of the frozen trace
+  GET  /api/benchmark/scene_mesh  scene triangles
+  GET  /api/benchmark/system    host GPU/CPU and the session's processes
+The legacy read endpoints stay available. The control API binds 127.0.0.1
+by default; on any other address it requires --token (sent as
+`Authorization: Bearer <token>`), and every POST must carry
+`X-Benchmark-Client: ui` with a JSON body and, if the browser sends one, an
+Origin equal to the Host -- a cross-site page can do neither without a CORS
+preflight, which this server never answers. Put HTTPS in front of a remote
+deployment with a reverse proxy.
 """
 
 from __future__ import annotations
 
 import argparse
+import hmac
+import ipaddress
 import json
 import os
 import pathlib
@@ -39,7 +66,9 @@ import analyze  # noqa: E402
 import definitions as bench  # noqa: E402
 
 VENDOR = HERE.parents[1] / "scripts" / "web_ui" / "vendor"
-INDEX = HERE / "index.html"
+INDEX = HERE / "legacy.html"
+CONTROL_INDEX = HERE / "index.html"
+MAX_BODY_BYTES = 8192
 RUN_ID = re.compile(r"^\d{8}T\d{6}Z$")
 REPORT_REFRESH_S = 1.0
 SYSTEM_REFRESH_S = 1.0
@@ -53,8 +82,15 @@ PROCESS_PATTERNS = (
     ("ue1", re.compile(r"srsue\b.*srsue-ue1\.conf")),
     ("ue2", re.compile(r"srsue\b.*srsue-ue2\.conf")),
     ("ue3", re.compile(r"srsue\b.*srsue-ue3\.conf")),
+    ("ue4", re.compile(r"srsue\b.*srsue-ue4\.conf")),
+    ("ue5", re.compile(r"srsue\b.*srsue-ue5\.conf")),
+    ("ue6", re.compile(r"srsue\b.*srsue-ue6\.conf")),
+    ("ue7", re.compile(r"srsue\b.*srsue-ue7\.conf")),
+    ("broker", re.compile(r"ocudu-gpu-channel\b.*/topology\.yaml")),
     ("sionna", re.compile(r"run_bridge\.py\b.*--timeline grid")),
-    ("traffic", re.compile(r"scheduler_benchmark/traffic\.py\b")),
+    ("trace build", re.compile(r"scheduler_benchmark/channel_trace\.py\b")),
+    ("replay", re.compile(r"scheduler_benchmark/replay_bridge\.py\b")),
+    ("traffic", re.compile(r"scheduler_benchmark/(?:radio_)?traffic\.py\b")),
 )
 PROCESS_CELL = {"gnb0": "a", "broker a": "a", "ue0": "a", "ue1": "a",
                 "gnb1": "b", "broker b": "b", "ue2": "b", "ue3": "b"}
@@ -357,8 +393,9 @@ class SystemSampler:
             return dict(self.data)
 
 
-def make_handler(runs: Runs, system: SystemSampler, follow_latest: bool):
-    index_bytes = INDEX.read_bytes()
+def make_handler(runs: Runs, system: SystemSampler, follow_latest: bool, control=None, results=None,
+                 token: str | None = None):
+    index_bytes = (CONTROL_INDEX if control is not None else INDEX).read_bytes()
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ocudu-scheduler-benchmark/1"
@@ -378,14 +415,83 @@ def make_handler(runs: Runs, system: SystemSampler, follow_latest: bool):
             body = json.dumps(payload, separators=(",", ":"), default=analyze._json_default).encode()
             self.send(status, body, "application/json")
 
+        def authorized(self) -> bool:
+            if token is None:
+                return True
+            header = self.headers.get("Authorization", "")
+            return header.startswith("Bearer ") and hmac.compare_digest(header[7:], token)
+
+        def control_get(self, path: str) -> bool:
+            """The control API's read endpoints; False if the path is not one."""
+
+            routes = {
+                "/api/benchmark/options": control.options,
+                "/api/benchmark/status": control.status,
+                "/api/benchmark/results": results.results,
+                "/api/benchmark/scene": results.scene,
+                "/api/benchmark/system": lambda: {**control.identity(), **system.snapshot()},
+            }
+            if path == "/api/benchmark/scene_mesh":
+                mesh = results.mesh_path()
+                if mesh is None:
+                    self.send_json({**control.identity(), "error": "no scene mesh yet"}, HTTPStatus.NOT_FOUND)
+                else:
+                    self.send(HTTPStatus.OK, mesh.read_bytes(), "application/json")
+                return True
+            if path not in routes:
+                return False
+            self.send_json(routes[path]())
+            return True
+
+        def do_POST(self) -> None:  # noqa: N802
+            url = urllib.parse.urlparse(self.path)
+            if control is None or url.path not in ("/api/benchmark/start", "/api/benchmark/stop",
+                                                   "/api/benchmark/reset"):
+                return self.send(HTTPStatus.NOT_FOUND, b"not found", "text/plain")
+            if not self.authorized():
+                return self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
+            origin = self.headers.get("Origin")
+            if self.headers.get("X-Benchmark-Client") != "ui" or (
+                    origin is not None and urllib.parse.urlparse(origin).netloc != self.headers.get("Host")):
+                return self.send_json({"error": "cross-site or non-UI request refused"}, HTTPStatus.FORBIDDEN)
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > MAX_BODY_BYTES:
+                return self.send_json({"error": "request too large"}, HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                return self.send_json({"error": "body must be JSON"}, HTTPStatus.BAD_REQUEST)
+            import controller as control_module
+            try:
+                if url.path.endswith("/start"):
+                    return self.send_json(control.start(body), HTTPStatus.ACCEPTED)
+                if url.path.endswith("/stop"):
+                    return self.send_json(control.stop())
+                return self.send_json(control.reset())
+            except control_module.ValidationError as error:
+                return self.send_json({**control.identity(), "error": "invalid configuration",
+                                       "fields": error.errors}, HTTPStatus.BAD_REQUEST)
+            except control_module.TransitionError as error:
+                return self.send_json({**control.identity(), "error": str(error)}, HTTPStatus.CONFLICT)
+            except Exception as error:
+                return self.send_json({**control.identity(), "error": f"{type(error).__name__}: {error}"},
+                                      HTTPStatus.INTERNAL_SERVER_ERROR)
+
         def do_GET(self) -> None:  # noqa: N802
             url = urllib.parse.urlparse(self.path)
             query = urllib.parse.parse_qs(url.query)
             run_id = (query.get("id") or [""])[0]
             try:
+                if url.path.startswith("/api/") and not self.authorized():
+                    return self.send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                 if url.path in ("/", "/index.html"):
-                    body = INDEX.read_bytes() if os.environ.get("SB_UI_DEV") else index_bytes
+                    page = CONTROL_INDEX if control is not None else INDEX
+                    body = page.read_bytes() if os.environ.get("SB_UI_DEV") else index_bytes
                     return self.send(HTTPStatus.OK, body, "text/html; charset=utf-8")
+                if url.path == "/legacy":
+                    return self.send(HTTPStatus.OK, INDEX.read_bytes(), "text/html; charset=utf-8")
+                if control is not None and url.path.startswith("/api/benchmark/") and self.control_get(url.path):
+                    return
                 if url.path.startswith("/vendor/"):
                     name = url.path[len("/vendor/"):]
                     path = (VENDOR / name).resolve()
@@ -429,13 +535,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         "OCUDU_NATIVE_ROOT", "/home/dev/ocudu-spark")))
     parser.add_argument("--follow-latest", action="store_true",
                         help="requests without ?id= use the newest run")
+    parser.add_argument("--control", action="store_true",
+                        help="serve the single-cell benchmark dashboard and its control API")
+    parser.add_argument("--sessions-root", type=pathlib.Path,
+                        help="control mode: session directory root (default <runs-root>/results/"
+                             "single-cell-scheduler-benchmark); only its active/ subdirectory is ever cleared")
+    parser.add_argument("--sionna-python", default=os.environ.get("OCUDU_NATIVE_SIONNA_PYTHON", sys.executable))
+    parser.add_argument("--allow-unvalidated", action="store_true",
+                        help="control mode: allow scene/UE-count combinations without validation evidence")
+    parser.add_argument("--archive", action="store_true",
+                        help="control mode: move a replaced session to archive/ instead of deleting it")
+    parser.add_argument("--token", default=os.environ.get("SB_CONTROL_TOKEN"),
+                        help="bearer token for the API; required when --bind is not a loopback address")
     args = parser.parse_args(argv)
+    if args.follow_latest and args.control:
+        parser.error("--follow-latest belongs to the legacy read-only mode")
+    try:
+        loopback = ipaddress.ip_address(args.bind).is_loopback
+    except ValueError:
+        loopback = args.bind == "localhost"
+    if args.control and not loopback and not args.token:
+        parser.error("the control API on a non-loopback address needs --token (and HTTPS via a reverse proxy)")
     runs = Runs(args.runs_root)
     system = SystemSampler()
+    control = results = None
+    if args.control:
+        import controller as control_module
+        control = control_module.Controller(
+            args.sessions_root or args.runs_root / "results/single-cell-scheduler-benchmark", args.runs_root,
+            args.sionna_python, allow_unvalidated=args.allow_unvalidated, archive=args.archive)
+        results = control_module.Results(control)
     stop = threading.Event()
     threading.Thread(target=system.loop, args=(stop,), daemon=True).start()
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(runs, system, args.follow_latest))
-    print(f"event=scheduler_benchmark_ui url=http://{args.bind}:{args.port} runs_root={args.runs_root}", flush=True)
+    server = ThreadingHTTPServer((args.bind, args.port),
+                                 make_handler(runs, system, args.follow_latest, control, results, args.token))
+    print(f"event=scheduler_benchmark_ui url=http://{args.bind}:{args.port} runs_root={args.runs_root} "
+          f"mode={'control' if args.control else 'legacy'}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

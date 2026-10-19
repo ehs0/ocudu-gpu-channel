@@ -227,10 +227,12 @@ def resolve_profile(name: str, overrides: dict[str, float] | None = None) -> dic
     return profile
 
 
-def validate_profile(profile: dict[str, Any]) -> None:
+def validate_profile(profile: dict[str, Any], ue_count: int = 2) -> None:
     ues = profile.get("ues")
-    if not isinstance(ues, list) or len(ues) != 2:
-        raise ValueError("a traffic profile defines exactly two UEs per cell")
+    if not isinstance(ues, list) or len(ues) != ue_count:
+        if ue_count == 2:
+            raise ValueError("a traffic profile defines exactly two UEs per cell")
+        raise ValueError(f"a traffic profile for {ue_count} UEs defines {ue_count} UE entries")
     for index, ue in enumerate(ues):
         if ue.get("five_qi") not in FIVE_QI:
             raise ValueError(f"ue{index}: 5QI {ue.get('five_qi')} is not in the supported table {sorted(FIVE_QI)}")
@@ -266,3 +268,120 @@ def offered_rate_mbps(flow: dict[str, Any]) -> float:
         duty = flow["on_mean_s"] / (flow["on_mean_s"] + flow["off_mean_s"])
         return flow["rate_mbps"] * duty
     return float(flow["rate_mbps"])
+
+
+# --- Single-cell mode ------------------------------------------------------------
+# One gNB serves N UEs, and the policies run one after another on the same
+# cell (single_cell_runner.py). Nothing below depends on CELLS: the topology
+# is generated from the UE count, and the policy vocabulary above is shared.
+SINGLE_CELL_GNB = {"device_id": "gnb0", "tx_port": 2000, "rx_port": 2001, "metrics_port": 8001}
+# Records exist for this many UEs (flow ids carry the UE index in 4 bits);
+# which counts may RUN is decided by scene_registry.py from validation
+# evidence, not by this table.
+MAX_SINGLE_CELL_UES = 16
+# Offered DL load of `full_buffer`, split equally over the UEs, so the cell is
+# oversubscribed (a 20 MHz SISO carrier tops out near 70 Mb/s of radio time)
+# at every UE count without the per-UE share depending on anything but N.
+FULL_BUFFER_TOTAL_DL_MBPS = 80.0
+# `mixed`: the bulk role's DL load, split over the bulk UEs.
+MIXED_TOTAL_BULK_DL_MBPS = 40.0
+
+
+def single_cell_prach_preamble(index: int) -> int:
+    """The contention preamble UE `index` pins (srsue-ra-contention.patch takes it
+    modulo 64): a stride of 4 keeps all 16 UEs on distinct preambles."""
+
+    return 4 * index
+
+
+def single_cell_ue(index: int) -> dict[str, Any]:
+    """Identity, ZMQ ports and namespace of UE `index` (ue0..ue15).
+
+    The first four equal render-multi-ue-configs.py's UES table, so a
+    single-cell run reuses the identities the multi-UE gates proved.
+    """
+
+    if not 0 <= index < MAX_SINGLE_CELL_UES:
+        raise ValueError(f"UE index {index} outside 0..{MAX_SINGLE_CELL_UES - 1}")
+    return {
+        "device_id": f"ue{index}",
+        "tx_port": 2101 + 2 * index,
+        "rx_port": 2100 + 2 * index,
+        "imsi": f"0010101234567{80 + index:02d}",
+        "imei": f"3534900698733{19 + index:02d}",
+        "netns": f"ue{index + 1}",
+        "ipv4": f"10.45.1.{2 + index}",
+    }
+
+
+SINGLE_CELL_PROFILES = {
+    "full_buffer": {
+        "title": "Full buffer, equal QoS (5QI 9)",
+        "role_rule": "every UE is bulk: a backlogged DL stream of "
+                     f"{FULL_BUFFER_TOTAL_DL_MBPS:g}/N Mb/s and a 2 Mb/s UL stream, 5QI 9",
+    },
+    "mixed": {
+        "title": "Bulk (5QI 9) + delay-sensitive (5QI 7)",
+        "role_rule": "even UE index = bulk (DL "
+                     f"{MIXED_TOTAL_BULK_DL_MBPS:g}/n_bulk Mb/s + 2 Mb/s UL, 5QI 9); odd index = "
+                     "interactive (on/off 12 Mb/s video, 100 Hz DL/UL control, 5QI 7)",
+    },
+}
+
+
+def single_cell_profile(name: str, ue_count: int) -> dict[str, Any]:
+    """The traffic profile for N UEs, with every UE's role written out.
+
+    Roles follow a fixed rule of the UE index, so ue0 has the same role and
+    flows at every N (only the bulk share scales with the number of bulk UEs)
+    and no UE is left without traffic.
+    """
+
+    if name not in SINGLE_CELL_PROFILES:
+        raise ValueError(f"unknown single-cell traffic profile {name!r}; known: {', '.join(SINGLE_CELL_PROFILES)}")
+    if not 1 <= ue_count <= MAX_SINGLE_CELL_UES:
+        raise ValueError(f"UE count must be 1..{MAX_SINGLE_CELL_UES}")
+    bulk, interactive = TRAFFIC_PROFILES["mixed"]["ues"]
+    ues = []
+    if name == "full_buffer":
+        rate = round(FULL_BUFFER_TOTAL_DL_MBPS / ue_count, 6)
+        for _ in range(ue_count):
+            ue = copy.deepcopy(bulk)
+            ue["flows"][0]["rate_mbps"] = rate
+            ues.append(ue)
+    else:
+        n_bulk = (ue_count + 1) // 2
+        rate = round(MIXED_TOTAL_BULK_DL_MBPS / n_bulk, 6)
+        for index in range(ue_count):
+            ue = copy.deepcopy(bulk if index % 2 == 0 else interactive)
+            if index % 2 == 0:
+                ue["flows"][0]["rate_mbps"] = rate
+            ues.append(ue)
+    profile = {"name": name, "ue_count": ue_count, **SINGLE_CELL_PROFILES[name], "ues": ues}
+    profile["description"] = profile["role_rule"]
+    validate_profile(profile, ue_count)
+    profile["offered_mbps"] = {
+        direction: round(sum(offered_rate_mbps(f) for ue in ues for f in ue["flows"] if f["direction"] == direction), 6)
+        for direction in ("dl", "ul")
+    }
+    return profile
+
+
+# --- Comparison tests ------------------------------------------------------------
+# A session compares two tests. Each test is the shared configuration plus the
+# fields below; today a test differs only in its MAC scheduler. Another
+# comparison dimension (traffic profile, a gNB knob, ...) is added by naming
+# its field and choices here and applying it where the policy run is built
+# (single_cell_runner.Session.run_test). Both tests may pick the same value:
+# that session is an A/A control.
+TEST_ARMS = ("test1", "test2")
+TEST_ARM_LABELS = {"test1": "Test 1", "test2": "Test 2"}
+TEST_FIELDS: dict[str, tuple[str, ...]] = {"scheduler": tuple(SCHEDULERS)}
+
+
+def test_label(arm: str, test: dict[str, Any]) -> str:
+    """'Test 1 (RR)': the arm and what distinguishes it."""
+
+    parts = [SCHEDULERS[test["scheduler"]]["short"]] if "scheduler" in test else []
+    parts += [f"{key}={value}" for key, value in sorted(test.items()) if key != "scheduler"]
+    return f"{TEST_ARM_LABELS[arm]} ({', '.join(parts)})" if parts else TEST_ARM_LABELS[arm]

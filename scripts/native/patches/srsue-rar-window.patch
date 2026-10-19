@@ -1,0 +1,43 @@
+--- a/srsue/src/stack/mac_nr/proc_ra_nr.cc	2026-10-19 08:23:00.922781994 +0000
++++ b/srsue/src/stack/mac_nr/proc_ra_nr.cc	2026-10-19 08:23:00.923608591 +0000
+@@ -229,12 +229,17 @@
+     return;
+   }
+ 
+-  // Stop rar timer
+-  rar_timeout_timer.stop();
++  // Local patch (ocudu-gpu-channel, RAR window): the pinned code stopped the
++  // RAR timer before looking at the PDU, so an RAR it could not unpack left
++  // the procedure in this state with no timer and RA never ran again, and an
++  // RAR without our RAPID went on to contention resolution anyway. TS 38.321
++  // 5.1.4: reception is successful only with a matching RAPID; otherwise keep
++  // monitoring the window and let rar_timeout_timer retransmit the preamble.
++  bool matched = false;
+   if (tb.ack && tb.payload != nullptr) {
+     srsran::mac_rar_pdu_nr pdu;
+     if (!pdu.unpack(tb.payload->msg, tb.payload->N_bytes)) {
+-      logger.warning("Error unpacking RAR PDU");
++      logger.warning("Error unpacking RAR PDU, still monitoring the RAR window");
+       return;
+     }
+ 
+@@ -244,6 +249,8 @@
+ 
+     for (auto& subpdu : pdu.get_subpdus()) {
+       if (subpdu.has_rapid() && subpdu.get_rapid() == preamble_index) {
++        matched = true;
++        rar_timeout_timer.stop();
+         logger.debug("PROC RA NR: Setting UL grant and prepare Msg3");
+         mac.set_temp_crnti(subpdu.get_temp_crnti());
+ 
+@@ -267,6 +274,10 @@
+       }
+     }
+   }
++  if (!matched) {
++    logger.info("RAR without RAPID %d, still monitoring the RAR window", preamble_index);
++    return;
++  }
+   contention_resolution_timer.set(rach_cfg.ra_ContentionResolutionTimer, [this](uint32_t tid) { timer_expired(tid); });
+   contention_resolution_timer.run();
+   logger.debug("Waiting for Contention Resolution");

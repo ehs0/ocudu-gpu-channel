@@ -221,9 +221,105 @@ def generate(seed: int, base: dict[str, Any], *, duration_s: float, speed_range:
     return out
 
 
+def generate_single_cell(seed: int, scene_id: str, ue_count: int, *, mobility: str, placement: str,
+                         duration_s: float) -> dict[str, Any]:
+    """One gNB and `ue_count` UEs in a registered scene (single-cell mode).
+
+    placement `uniform`: each UE (its position, or each waypoint of its walk)
+    is drawn uniformly over the scene's allowed region; `hotspot`: around one
+    of scene_registry.HOTSPOT_COUNT seeded centres (UE i -> centre i mod
+    count). mobility `static`: the UE stays where it was placed;
+    `pedestrian`: it walks a ping-pong random-waypoint route at
+    scene_registry.PEDESTRIAN_SPEED_MPS, every leg in line of sight.
+    Each UE draws from its own stream keyed by (scene, seed, UE id), and the
+    hotspot centres from one of their own, so adding UEs leaves ue0..ueK
+    exactly where they were.
+    """
+
+    import definitions as bench
+    import scene_registry as reg
+
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
+    if scene_id not in reg.SCENES:
+        raise ValueError(f"unknown scene {scene_id!r}")
+    if mobility not in reg.MOBILITY_MODES:
+        raise ValueError(f"mobility must be one of {reg.MOBILITY_MODES}")
+    if placement not in reg.PLACEMENT_MODES:
+        raise ValueError(f"placement must be one of {reg.PLACEMENT_MODES}")
+    if not 1 <= ue_count <= bench.MAX_SINGLE_CELL_UES:
+        raise ValueError(f"UE count must be 1..{bench.MAX_SINGLE_CELL_UES}")
+    entry = reg.SCENES[scene_id]
+    base = reg.base_scenario(scene_id)
+    if "gnb0" not in base.get("nodes", {}):
+        raise ValueError("base scenario must define gnb0")
+    area = reg.region(scene_id, base)
+    centres = reg.hotspot_centres(scene_id, seed, area) if placement == "hotspot" else []
+    ue_template = next(node for node_id, node in base["nodes"].items() if node_id != "gnb0")
+    out = {key: copy.deepcopy(value) for key, value in base.items() if key not in ("nodes", "links", "description")}
+    out["name"] = f"single-cell-{scene_id}-{ue_count}ue-{mobility}-{placement}-seed{seed}"
+    out["description"] = (f"Single-cell scheduler benchmark scenario (generator v{GENERATOR_VERSION}): one gnb0 and "
+                          f"{ue_count} {mobility} UEs, {placement} placement, in {scene_id}; every position in line "
+                          "of sight of the gNB; PathSolver seed = scenario seed.")
+    out["solver"] = dict(out.get("solver") or {}, seed=seed)
+    out["nodes"] = {"gnb0": copy.deepcopy(base["nodes"]["gnb0"])}
+    out["links"] = []
+    placements: dict[str, Any] = {}
+    for index in range(ue_count):
+        ue = f"ue{index}"
+        rng = random.Random(entry["rng_key"].format(scene=scene_id, seed=seed, ue=ue, purpose="placement"))
+        centre = centres[index % len(centres)] if centres else None
+
+        def draw() -> tuple[float, float, float]:
+            return reg.sample_near(rng, area, centre) if centre is not None else area.sample(rng)
+
+        node = {"array": copy.deepcopy(ue_template.get("array") or {"rows": 1, "cols": 1, "pattern": "iso",
+                                                                      "polarization": "V"})}
+        start = draw()
+        record: dict[str, Any] = {"start_m": list(start), "start_gnb_distance_m": round(area.horizontal_distance(start), 3),
+                                  "hotspot": index % len(centres) if centres else None}
+        if mobility == "static":
+            node.update({"mobility": "static", "start_m": list(start)})
+        else:
+            route = [list(start)]
+            travelled = 0.0
+            while travelled < reg.PEDESTRIAN_SPEED_MPS * duration_s * 1.05:
+                for _ in range(MAX_WAYPOINT_TRIES):
+                    candidate = draw()
+                    if math.dist(route[-1], candidate) >= 2.0 and area.leg_allowed(route[-1], candidate):
+                        break
+                else:
+                    raise ValueError(f"{ue}: could not extend the walk in line of sight")
+                travelled += math.dist(route[-1], candidate)
+                route.append(list(candidate))
+            node.update({"mobility": "pedestrian", "route_m": route, "route_mode": "pingpong",
+                         "speed_mps": reg.PEDESTRIAN_SPEED_MPS})
+            record.update({"speed_mps": reg.PEDESTRIAN_SPEED_MPS, "waypoints": len(route)})
+        out["nodes"][ue] = node
+        placements[ue] = record
+    for index in range(ue_count):
+        out["links"].append({"from": "gnb0", "to": f"ue{index}", "direction": "downlink", "model": "sionna_rt"})
+    for index in range(ue_count):
+        out["links"].append({"from": f"ue{index}", "to": "gnb0", "direction": "uplink", "model": "sionna_rt"})
+    out["benchmark"] = {
+        "mode": "single_cell", "seed": seed, "scene_id": scene_id, "ue_count": ue_count,
+        "mobility": mobility, "placement": placement, "generator_version": GENERATOR_VERSION,
+        "duration_s": duration_s, "region": entry["region"],
+        "hotspots": {"centres_m": [list(c) for c in centres], "sigma_m": reg.HOTSPOT_SIGMA_M} if centres else None,
+        "pedestrian_speed_mps": reg.PEDESTRIAN_SPEED_MPS if mobility == "pedestrian" else None,
+        "line_of_sight": entry["line_of_sight"], "line_of_sight_constrained": True,
+        "rng_key": entry["rng_key"], "placements": placements,
+    }
+    return out
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--single-cell-scene", help="single-cell mode: registered scene id (scene_registry.py)")
+    parser.add_argument("--ue-count", type=int, help="single-cell mode: number of UEs")
+    parser.add_argument("--mobility", default="static", help="single-cell mode: static or pedestrian")
+    parser.add_argument("--placement", default="uniform", help="single-cell mode: uniform or hotspot")
     parser.add_argument("--base", type=pathlib.Path, default=DEFAULT_BASE,
                         help="scenario supplying the scene, solver, gNB and antenna arrays")
     parser.add_argument("--duration-s", type=float, default=600.0,
@@ -241,6 +337,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("speed range must be positive and ordered")
     if args.duration_s <= 0:
         parser.error("--duration-s must be positive")
+    if args.single_cell_scene is not None:
+        if args.ue_count is None:
+            parser.error("--single-cell-scene needs --ue-count")
+        try:
+            scenario = generate_single_cell(args.seed, args.single_cell_scene, args.ue_count,
+                                            mobility=args.mobility, placement=args.placement,
+                                            duration_s=args.duration_s)
+        except ValueError as error:
+            print(f"scenario generation failed: {error}", file=sys.stderr)
+            return 2
+        args.out.write_text(json.dumps(scenario, indent=2) + "\n", encoding="utf-8")
+        print(f"event=single_cell_scenario seed={args.seed} scene={args.single_cell_scene} "
+              f"ues={args.ue_count} mobility={args.mobility} placement={args.placement} out={args.out}")
+        return 0
     base = json.loads(args.base.read_text(encoding="utf-8"))
     try:
         scenario = generate(

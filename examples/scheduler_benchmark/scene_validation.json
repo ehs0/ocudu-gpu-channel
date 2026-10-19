@@ -1,0 +1,211 @@
+{
+ "description": "End-to-end evidence that a (scene, UE count) combination runs in the single-cell scheduler benchmark: every UE attached and carried traffic in every policy run, and the fairness audit returned STRICT FAIR COMPARISON: PASS. Only combinations listed here are startable from the web UI without --allow-unvalidated. Host: GB10 (aarch64), CUDA broker, 23.04 MS/s, 15 kHz SCS, 106 PRB; sessions archived under <native-root>/results/single-cell-scheduler-benchmark/archive/<session_id>.",
+ "validated": [
+  {
+   "scene_id": "sutd_1gnb",
+   "ue_count": 1,
+   "session_id": "20261017T085732Z-g11",
+   "verdict": "STRICT FAIR COMPARISON: PASS",
+   "policies": [
+    "rr",
+    "qos"
+   ],
+   "traffic_profile": "mixed",
+   "mobility": "pedestrian",
+   "placement": "uniform",
+   "measure_seconds": 60,
+   "seed": 1,
+   "channel_trace_hash": "sha256:0857442682bb790c56f095ab135c0b1b5673405a9585ec77f3fabc5ac0e7dc99",
+   "updates_on_target": [
+    1300,
+    1300
+   ],
+   "updates_expected": 1300,
+   "real_time_ratio": [
+    0.421,
+    0.41
+   ]
+  },
+  {
+   "scene_id": "sutd_1gnb",
+   "ue_count": 2,
+   "session_id": "20261017T092854Z-g14",
+   "verdict": "STRICT FAIR COMPARISON: PASS",
+   "policies": [
+    "rr",
+    "qos"
+   ],
+   "traffic_profile": "mixed",
+   "mobility": "static",
+   "placement": "hotspot",
+   "measure_seconds": 60,
+   "seed": 1,
+   "channel_trace_hash": "sha256:b30471d53b73b8dc2d2d4cc2bf591dfd6fc3269107b71eb800ecf6441a857cac",
+   "updates_on_target": [
+    2600,
+    2600
+   ],
+   "updates_expected": 2600,
+   "real_time_ratio": [
+    0.729,
+    0.722
+   ]
+  },
+  {
+   "scene_id": "sutd_1gnb",
+   "ue_count": 4,
+   "session_id": "20261019T084447Z-g22",
+   "verdict": "STRICT FAIR COMPARISON: PASS",
+   "policies": [
+    "test1",
+    "test2"
+   ],
+   "traffic_profile": "mixed",
+   "mobility": "static",
+   "placement": "uniform",
+   "measure_seconds": 60,
+   "seed": 3,
+   "channel_trace_hash": "sha256:20324f8fabdfc760d85d8c2b85b4f4b318d6723165a97ce7454795ed7f274b1a",
+   "updates_on_target": [
+    5600,
+    5600
+   ],
+   "updates_expected": 5600,
+   "real_time_ratio": [
+    0.407,
+    0.425
+   ]
+  },
+  {
+   "scene_id": "simple_blocks_2x2",
+   "ue_count": 4,
+   "session_id": "20261019T085252Z-g23",
+   "verdict": "STRICT FAIR COMPARISON: PASS",
+   "policies": [
+    "test1",
+    "test2"
+   ],
+   "traffic_profile": "mixed",
+   "mobility": "static",
+   "placement": "uniform",
+   "measure_seconds": 60,
+   "seed": 20261016,
+   "channel_trace_hash": "sha256:13020c0299b96301a174cbe5d68540c6aedbe32357dea0734519fad9175171e7",
+   "updates_on_target": [
+    5600,
+    5600
+   ],
+   "updates_expected": 5600,
+   "real_time_ratio": [
+    0.28,
+    0.469
+   ]
+  }
+ ],
+ "superseded": {
+  "reason": "scenes robot_ring and the old sionna_SUTD_test entry (seeded_waypoint mobility) are no longer offered; the single-cell mode now runs sutd_1gnb with static/pedestrian UEs and uniform/hotspot placement. Kept as the record of the first strict-pass sessions.",
+  "entries": [
+   {
+    "scene_id": "robot_ring",
+    "ue_count": 2,
+    "session_id": "20261017T054207Z-g6",
+    "verdict": "STRICT FAIR COMPARISON: PASS",
+    "policies": [
+     "rr",
+     "qos"
+    ],
+    "traffic_profile": "mixed",
+    "mobility": "seeded_waypoint",
+    "measure_seconds": 60,
+    "seed": 1,
+    "channel_trace_hash": "sha256:c6331f244eaa4fdfb58909bafd23d91931bd4275771858789c040a8894a0cc99",
+    "updates_on_target": [
+     2600,
+     2600
+    ],
+    "updates_expected": 2600,
+    "real_time_ratio": [
+     0.491,
+     0.513
+    ]
+   },
+   {
+    "scene_id": "robot_ring",
+    "ue_count": 4,
+    "session_id": "20261017T050410Z-g2",
+    "verdict": "STRICT FAIR COMPARISON: PASS",
+    "policies": [
+     "rr",
+     "qos"
+    ],
+    "traffic_profile": "mixed",
+    "mobility": "seeded_waypoint",
+    "measure_seconds": 60,
+    "seed": 1,
+    "channel_trace_hash": "sha256:1a6b7241c6c5e5c05e7abdbc7b44185fd7e3677b929189937541e0d22b942b33",
+    "updates_on_target": [
+     5200,
+     5200
+    ],
+    "updates_expected": 5200,
+    "real_time_ratio": [
+     0.411,
+     0.417
+    ]
+   },
+   {
+    "scene_id": "sionna_SUTD_test",
+    "ue_count": 2,
+    "session_id": "20261017T053436Z-g5",
+    "verdict": "STRICT FAIR COMPARISON: PASS",
+    "policies": [
+     "rr",
+     "qos"
+    ],
+    "traffic_profile": "mixed",
+    "mobility": "seeded_waypoint",
+    "measure_seconds": 60,
+    "seed": 1,
+    "channel_trace_hash": "sha256:d26a93cc2d03dcaf69170adee94a6d0738722973033191432664865d449507be",
+    "updates_on_target": [
+     2600,
+     2600
+    ],
+    "updates_expected": 2600,
+    "real_time_ratio": [
+     0.389,
+     0.404
+    ]
+   },
+   {
+    "scene_id": "robot_ring",
+    "ue_count": 4,
+    "session_id": "20261017T055712Z-g9",
+    "verdict": "STRICT FAIR COMPARISON: PASS",
+    "policies": [
+     "rr",
+     "qos",
+     "qos",
+     "rr"
+    ],
+    "traffic_profile": "mixed",
+    "mobility": "seeded_waypoint",
+    "measure_seconds": 60,
+    "seed": 1,
+    "updates_on_target": [
+     5200,
+     5200,
+     5200,
+     5200
+    ],
+    "updates_expected": 5200,
+    "real_time_ratio": [
+     0.419,
+     0.407,
+     0.431,
+     0.431
+    ]
+   }
+  ]
+ }
+}

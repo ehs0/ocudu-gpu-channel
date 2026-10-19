@@ -8,6 +8,7 @@ with its `"scene"` field.
 | --- | --- | --- |
 | `sionna_simple_test` | Sionna built-in `simple_street_canyon` | Alias only — no files here. Six boxes and a floor that `--simple-road` splits into a road and two verges. |
 | `sionna_SUTD_test` | OpenStreetMap, SUTD campus, Singapore | Built by `scripts/sionna_rt/build_osm_scene.py`. **See its `LICENSE.md`: the data is ODbL 1.0.** |
+| `simple_blocks_2x2` | Synthetic: four 20 m square blocks around a 20 m wide crossroads, ground ±100 m | Built by `scripts/sionna_rt/build_blocks_scene.py`. NE concrete 30 m, NW glass 22 m, SW wood 9 m, SE concrete 15 m. Same manifest fields as the OSM scenes. |
 
 ## Rebuilding an OpenStreetMap scene
 

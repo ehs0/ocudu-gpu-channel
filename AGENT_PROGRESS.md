@@ -4,6 +4,62 @@
 
 ## Repository State
 
+- [2026-10-19 single-cell benchmark, follow-up user requests] Scene set
+  narrowed to `sutd_1gnb` (SUTD campus, one gNB on Building 2); UE counts
+  1/2/4 (records exist up to 16); UE type static / pedestrian (1.4 m/s); UE
+  placement uniform / hotspot (2 centres, sigma 8 m); 3D view coloured by
+  Sionna's radio-material preview colours with eps_r/sigma at DL/UL in the
+  mesh (`channel_trace.radio_materials`). Attach channel (H_attach) is now a
+  flat single tap per link with equal gain per direction: with the multipath
+  attach channel, PRACH near-far masking left one UE undetected and srsUE
+  stalled on the retry RAR (sessions g12, g15-g17). Web UI and API reworked
+  to Test 1 / Test 2: request field `tests: [{scheduler}, {scheduler}]`
+  (definitions.TEST_FIELDS, extensible), runs `NN-test1/2`, audit and
+  comparison per test, same scheduler on both sides = A/A control.
+  `tests/test_single_cell_benchmark.py` 29/29. Live on sutd_1gnb: 1 UE
+  pedestrian/uniform `20261017T085732Z-g11` and 2 UE static/hotspot
+  `20261017T092854Z-g14` STRICT PASS (before the attach-channel change, not
+  yet in scene_validation.json, whose `validated` list is empty); 4 UE
+  pedestrian/hotspot `20261017T110751Z-g18` attached but UNQUALIFIED (ue0/ue2
+  RRC release during the measurement; suspected two-ray flat fade at their
+  positions). Open decision for the user: attachability check of UE positions
+  vs lower noise floor vs accept. The Test 1/Test 2 code has not run live yet;
+  the control server on 8092 is stopped (user request), session g19 was
+  stopped cleanly (STOPPED, no leftover processes).
+
+- [2026-10-17 single-cell scheduler benchmark, user request (spec
+  SINGLE_CELL_SCHEDULER_BENCHMARK_IMPLEMENTATION.md; repo path is
+  `examples/scheduler_benchmark/`, not the spec's `use_cases/`)] One gNB, N
+  srsUEs, policies run sequentially as cold starts on one frozen channel and
+  traffic trace; web UI with Start New Benchmark / Stop / Reset. Uncommitted on
+  branch `scheduler_benchmark` (no commit requested). Broker (opt-in, untagged
+  callers unchanged): `batch_commit` `take_effect_at_sample`/`tag`/`noise_epoch`,
+  serve-call split at the target sample, `event=control_sample_applied` and
+  `event=noise_epoch` written with one write(2), `link_clock` query,
+  `ChannelProcessor::reset_receiver_noise` (CUDA; CPU returns false); new
+  `tests/test_sample_indexed_control.cpp`; ctest 13/13 in
+  `builds/ocudu-gpu-channel-single-cell` (separate build dir; the production dir
+  was untouched). New Python: channel_trace, traffic_trace, replay_bridge,
+  radio_traffic, render_single_cell, single_cell_analyze, validation,
+  single_cell_runner, controller, scene_registry (robot_ring + SUTD adapters),
+  scene_validation.json; generalized make_scenario/definitions; server.py
+  `--control` (legacy page moved to legacy.html, legacy mode unchanged);
+  new index.html; run-single-cell-{policy,policy-inner,scheduler-benchmark}.sh.
+  Legacy two-cell gate files untouched. `tests/test_single_cell_benchmark.py`
+  24/24; full Python suite passes except 6 robot_fight modules that fail on a
+  clean tree too (no pytest in system python). Container wrapper
+  `/home/dev/ocudu-setup/run-isolated-single-cell.sh` (outside repo). Live,
+  STRICT FAIR COMPARISON: PASS, mixed, 60 s + 5 s warm-up, seed 1: robot_ring
+  4 UE `20261017T050410Z-g2` (5200/5200 updates on target per run, 0.41x real
+  time, DL RR 37.09 / QoS 34.00 Mb/s), robot_ring 2 UE `20261017T054207Z-g6`,
+  SUTD 2 UE `20261017T053436Z-g5`; archived under
+  `<native-root>/results/single-cell-scheduler-benchmark/archive/`. Replace while
+  measuring, Stop (0 leftover processes) and Reset verified live. ABBA 4 UE
+  `20261017T055712Z-g9` also PASS: paired RR - QoS DL +2.04 Mb/s, but the A/A
+  control differs by -1.34/-1.65 Mb/s, so one seed does not establish the
+  throughput effect (README records this). N=1 and 8 not
+  validated. Control UI ran on 127.0.0.1:8092 (`--allow-unvalidated --archive`).
+
 - [2026-10-01 scheduler benchmark, user request] Two OCUDU cells (gnb0 `rr`,
   gnb1 `qos`, or swapped) with two srsUEs each, fed the same Sionna batch by
   bridge fan-out (method "나": the policy is bound at gNB start-up, so
