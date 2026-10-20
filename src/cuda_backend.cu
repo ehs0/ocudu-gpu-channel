@@ -1610,12 +1610,26 @@ private:
           running_power *= static_cast<double>(factor) * factor;
           break;
         }
+        case ModelStepType::Gain: {
+          // Constant YAML scale (DeviceConfig::tx_scale_db after the fold).
+          // Same Scale GpuStep as path_loss, but read from the step itself,
+          // never from `live`, so no runtime update can move it. The factor
+          // is computed with the identical double->float expression as the
+          // CPU backend so the two stay bit-comparable.
+          const float factor = static_cast<float>(std::pow(10.0, param_or(step, "gain_db", 0.0) / 20.0));
+          gpu_step = make_step(Scale, factor, 0.0F);
+          running_power *= static_cast<double>(factor) * factor;
+          break;
+        }
         case ModelStepType::Phase:
         case ModelStepType::Cfo: {
           // Phase 3 C2a: cfo_hz sourced from per-link `live`. phase_rad stays
-          // on the step (not a v1 mutable param).
+          // on the step (not a v1 mutable param). Only a `cfo` step rotates
+          // with the link's cfo_hz; a `phase` step is a fixed rotation (the
+          // shared increment used to apply the CFO twice in phase+cfo chains).
           const double fixed_phase = param_or(step, "phase_rad", 0.0);
-          const double cfo_hz = static_cast<double>(ms.live.cfo_hz);
+          const double cfo_hz =
+              step.type == ModelStepType::Cfo ? static_cast<double>(ms.live.cfo_hz) : 0.0;
           const double phase_increment =
               sample_rate_hz == 0 ? 0.0 : 2.0 * kPi * cfo_hz / static_cast<double>(sample_rate_hz);
           gpu_step = make_step(Rotate, static_cast<float>(fixed_phase + ms.phase_rad[step_index]),

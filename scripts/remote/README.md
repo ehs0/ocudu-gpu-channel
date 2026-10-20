@@ -10,8 +10,11 @@ Reproducible workflows that run on the RTX workstation. Every script sources
 | `init-workspace.sh` | Create the remote workspace directory tree once. |
 | `bootstrap-user-tools.sh` | Install user-space CMake / CUDA Toolkit / ZeroMQ under `~/ocudu-gpu-channel-workspace/tools/`. No root. |
 | `probe.sh` | Sanity-check the remote toolchain (cmake, nvcc, nvidia-smi, ZeroMQ). |
-| `sync.sh` | rsync the local working tree to the remote project root. |
+| `sync.sh` | Fetch and fast-forward the remote clone to the current branch on origin; local uncommitted changes are not uploaded. |
+| `bootstrap-sionna.sh` | Install the optional bridge dependencies in the remote workspace’s `venvs/sionna`; requires a synchronized checkout. |
 | `common.sh` | Shared sourcing (sourced by every other script). |
+
+The GPU sequence, performance sweeps and selected smoke scripts upload the local working tree with rsync before running. Their shared `rsync-excludes.txt` keeps local settings, research, tooling and generated artifacts out of the upload; excluded remote files are preserved. Ordinary untracked source is included. This upload is separate from `sync.sh`’s Git update.
 
 ## Build + run
 
@@ -31,14 +34,19 @@ Reproducible workflows that run on the RTX workstation. Every script sources
 | `ocudu-rank1-4x1-multi-ue-smoke.sh` | R3-MU | 4T4R gNB + **two** 1-antenna srsUEs: both uplinks superpose on the four gNB receive ports |
 | `ocudu-rank1-2x1-triple-ue-smoke.sh` | — | 2T2R + **three** srsUEs. **Blocked**: all three reach RRC, PDU unreliable |
 | `ocudu-rank1-2x1-quad-ue-smoke.sh` | — | 2T2R + **four** srsUEs. **Blocked**: only the last-started UE attaches |
-
-Measured results for every gate above, including why the three- and four-UE
-gates are blocked, are recorded in [`docs/live-gate-results.md`](../../docs/live-gate-results.md).
-The three- and four-UE scripts are committed as reproducible investigations, not
-as passing gates; **two UEs per cell is the supported multi-user configuration.**
 | `ocudu-multi-ue-smoke.sh` | B | 1 gNB + 2 UEs on one cell |
 | `ocudu-multi-gnb-smoke.sh` | C | 2 gNBs + 2 UEs, inter-cell interference |
 | `ocudu-interop-smoke.sh` | — | Broader OCUDU interop sanity |
+
+Measured results for every gate above, including why the three- and four-UE
+gates are blocked, are recorded in [`docs/reports/validation/live-gate-results.md`](../../docs/reports/validation/live-gate-results.md).
+The three- and four-UE scripts are committed as reproducible investigations, not
+as passing gates; **two UEs per cell is the supported multi-user configuration.**
+
+The static two-cell gate uses one antenna per gNB, with TX ports 3000 and
+3002. Sionna mode uses four antennas per gNB, with TX ports 3000/3002/3004/3006
+and 3010/3012/3014/3016. Custom topologies and scenarios must match the selected
+mode's antenna dimensions and endpoints.
 
 The Milestone C script also runs directly on a GPU host without SSH or
 `.config`. The local launcher enables the Sionna RT channel by default:
@@ -55,11 +63,11 @@ to complete RRC attach, PDU-session setup, and ping. Results are written under
 
 ## Perf sweeps
 
-Three sweep scripts with overlapping but distinct scopes:
+Four sweep scripts with overlapping but distinct scopes:
 
 | Script | Backend(s) | Configs | What it measures | When to use |
 |---|---|---|---|---|
-| `perf-sweep.sh` | CPU + CUDA | Every YAML in `examples/` | Per-phase latency + throughput + memory per backend per config. Populates the §21 perf table. | Wide regression sanity after a backend change. |
+| `perf-sweep.sh` | CPU + CUDA | Every YAML in `use_cases/` | Per-phase latency + throughput + memory per backend per config. Populates the §21 perf table. | Wide regression sanity after a backend change. |
 | `perf-fanin-sweep.sh` | CUDA only | 21 generated one-to-N configs (N = 1, 2, 4, 8, 16, 32) plus TDL profile fan-ins | Per-config bench latency + per-phase GPU µs + `nvidia-smi` snapshot + memory delta + a short `nsys` trace per config. | Fan-in scaling curves (Diagram T / Diagram U); kernel-level timing dives. |
 | `perf-backend-compare.sh` | CPU vs CUDA | Synthetic fan-in (one-to-N for N = 1, 4, 16) + TDL-A..E profiles | Per-config p99 latency for both backends + per-RX-node cumulative `avg_power` for CPU↔CUDA matching verification. | Verify CPU↔CUDA parity and quantify speedup at the same time. |
 | `perf-deep-profile.sh` | CUDA | One config (default: `topology.stress-16-edge.cuda.yaml`) | PCIe throughput, host + device memory, SM utilisation, `ncu` kernel metrics where accessible. | Drill into a single config's resource bottleneck. |
@@ -70,19 +78,9 @@ Output of every sweep lives under `~/ocudu-gpu-channel-workspace/results/<sweep_
 
 `scripts/remote/` is the supported live-test path and the one every live claim
 should cite. It provisions its own Docker network and 5GC, selects a free
-subnet instead of assuming one, and self-provisions the Python it needs, so a
-clone plus this host is enough to reproduce every live gate.
+subnet instead of assuming one, and self-provisions the Python it needs, within each gate's pinned-image and host prerequisites.
 
-`scripts/native/` is a rootless, user-namespace harness inherited from the
-rank-1 workstream. It is retained because its verification tooling is shared --
-`verify-mimo-matrix-capture.py` is the checker the Docker gates call -- and
-because its fixtures document the gNB constraints. It is **not** reproducible
-from this repository: `bootstrap-workspace.sh` has build provisioning disabled
-by design, so the workspace it expects (OCUDU, srsRAN_4G, Open5GS and MongoDB
-at pinned revisions under `~/ocudu-native-workspace`) has to be produced by a
-process that is not committed here, and its scripts hard-code `/home/ubuntu`
-and `/opt/conda` paths. Treat the native gate scripts as a record of how the
-original runs were performed, not as a path a reader can execute.
+`scripts/native/` provides a rootless, user-namespace workflow and the matrix checker shared with the Docker gates. Its `bootstrap-workspace.sh` can download locked inputs, create a user-space dependency overlay and build the native stack; `--verify-only` audits an existing workspace and `--root` selects its location. This is an audited Ubuntu 24.04 host contract, not a hermetic clean-host build: the base compiler/runtime and 48 Debian dependency clauses are supplied by the host. See [native preparation](../native/README.md) and the [platform guide](../../docs/guides/platforms.md) before choosing this route.
 
 The rank-1 gates above are the Docker ports of `scripts/native/run-ocudu-rank1-*.sh`.
 They use the same channel matrices, the same gNB cell configuration and the same
@@ -124,4 +122,4 @@ carried the attach. The two directions do not carry the same weight:
 
 ## Notes
 
-Use Wi-Fi only for SSH/control unless a wired low-latency data path has been validated. Distributed IQ transport requires the network criteria in [`docs/distributed.md`](../../docs/distributed.md).
+Use Wi-Fi only for SSH/control unless a wired low-latency data path has been validated. Distributed IQ transport requires the network criteria in [`docs/guides/distributed.md`](../../docs/guides/distributed.md).

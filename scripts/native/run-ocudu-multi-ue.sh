@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Native multi-UE attach gate: one OCUDU gNB, two srsUEs, Open5GS, and this
-# tree's broker on examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml, with no
+# tree's broker on use_cases/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml, with no
 # container runtime anywhere.
 #
 # This is the Docker-free counterpart of scripts/remote/ocudu-multi-ue-smoke.sh.
@@ -28,25 +28,27 @@ channel_mode="${OCUDU_NATIVE_CHANNEL_MODE:-legacy}"
 sionna_scenario="${OCUDU_NATIVE_SIONNA_SCENARIO:-}"
 sionna_python="${OCUDU_NATIVE_SIONNA_PYTHON:-}"
 sionna_update_hz="${OCUDU_NATIVE_SIONNA_UPDATE_HZ:-10}"
-# Live node positions for the bridge (robot arena). The bridge runs inside the
+# Live node positions for the bridge (an external publisher). The bridge runs inside the
 # inner network namespace, so the publisher must bind an ipc:// socket on the
 # shared filesystem; a tcp://127.0.0.1 endpoint would not reach it.
 sionna_position_endpoint="${OCUDU_NATIVE_SIONNA_POSITION_ENDPOINT:-}"
 sionna_position_offset="${OCUDU_NATIVE_SIONNA_POSITION_OFFSET:-}"
 sionna_position_timeout_s="${OCUDU_NATIVE_SIONNA_POSITION_TIMEOUT_S:-}"
 web_port="${OCUDU_NATIVE_WEB_PORT:-8080}"
-# Receiver noise floor for the Sionna links (R4a): the SNR a unit-gain link
+# Receiver noise floor for the Sionna links: the SNR a unit-gain link
 # sees against an absolute per-node floor, so a shadowed UE really decodes
 # worse than one in line of sight. 40 dB puts a line-of-sight UE of the ring
 # scene (tap -2.5 dB) at a reported 34 dB and the pillar shadow (-27 dB) at
 # ~16 dB, which srsUE keeps in sync; 26.6 (shadow ~0 dB) and 34.6 (~8 dB)
-# both break its initial access and sync there (ROBOT_FIGHT_MILESTONES.md
-# R4a). `off` renders the floor-less topology the Sionna mode always had.
+# both break its initial access and sync there. `off` renders the floor-less topology the Sionna mode always had.
 # Only the scenario-driven (sionna) renderer honours it; the fixed-TDL
 # fixtures carry their own awgn steps.
 sionna_awgn_snr_db="${OCUDU_NATIVE_SIONNA_AWGN_SNR_DB:-40}"
 sionna_tx_power_dl="${OCUDU_NATIVE_SIONNA_TX_POWER_DL:-}"
 sionna_tx_power_ul="${OCUDU_NATIVE_SIONNA_TX_POWER_UL:-}"
+# Emitted UE power relative to the gNB (dB), folded into each UE port's
+# tx_scale_db by the renderer; default 23 dBm - 30 dBm. See ue_tx_scale_db.
+sionna_ul_power_offset_db="${OCUDU_NATIVE_SIONNA_UL_POWER_OFFSET_DB:-}"
 # Run length (the broker's --duration), and what runs next to the stack:
 # OCUDU_NATIVE_MUE_UE_EXEC starts a command inside each UE's netns once that
 # UE has pinged the core (placeholders {ue_id} {ue_ip} {ue_index} {ue_netns}
@@ -63,6 +65,16 @@ mue_strict_realtime="${OCUDU_NATIVE_MUE_STRICT_REALTIME:-0}"
 # noise floor is sized against.
 mue_wire_capture_samples="${OCUDU_NATIVE_MUE_WIRE_CAPTURE_SAMPLES:-0}"
 mue_wire_capture_skip_seconds="${OCUDU_NATIVE_MUE_WIRE_CAPTURE_SKIP_SECONDS:-60}"
+# X6: the gNB lower-PHY thread profile the renderer writes into gnb.yaml
+# (single|dual|triple; empty = fixture untouched). See
+# docs/reports/experiments/x6-gnb-realtime-traffic/README.md: on OCUDU a1916edc the zmq driver
+# forces the sequential profile after parsing, so this is accepted but inert
+# until the gNB source is patched; the summary records the mode it printed.
+gnb_lower_phy_profile="${OCUDU_NATIVE_GNB_LOWER_PHY_PROFILE:-}"
+# X6: the gNB main worker pool size (expert_execution.threads.main_pool.nof_threads;
+# empty = OCUDU default, which the 5-core GB10 pin shrinks to 2 and which
+# deadlocks under two-UE traffic -- see the renderer and the plan note).
+gnb_main_pool_threads="${OCUDU_NATIVE_GNB_MAIN_POOL_THREADS:-}"
 if [[ "${channel_mode}" == "sionna" ]]; then
   renderer="${script_dir}/render-sionna-multi-ue-configs.py"
 else
@@ -106,6 +118,8 @@ number_re='^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
   usage_error "OCUDU_NATIVE_SIONNA_TX_POWER_DL must be a number"
 [[ -z "${sionna_tx_power_ul}" || "${sionna_tx_power_ul}" =~ ${number_re} ]] || \
   usage_error "OCUDU_NATIVE_SIONNA_TX_POWER_UL must be a number"
+[[ -z "${sionna_ul_power_offset_db}" || "${sionna_ul_power_offset_db}" =~ ${number_re} ]] || \
+  usage_error "OCUDU_NATIVE_SIONNA_UL_POWER_OFFSET_DB must be a number"
 # The attach window is 150 s of the run; anything shorter cannot verify.
 [[ "${mue_duration_seconds}" =~ ^[1-9][0-9]*$ && "${mue_duration_seconds}" -ge 160 ]] || \
   usage_error "OCUDU_NATIVE_MUE_DURATION_SECONDS must be an integer >= 160"
@@ -114,6 +128,10 @@ number_re='^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
   usage_error "OCUDU_NATIVE_MUE_WIRE_CAPTURE_SAMPLES must be a non-negative integer"
 [[ "${mue_wire_capture_skip_seconds}" =~ ^(0|[1-9][0-9]*)$ ]] || \
   usage_error "OCUDU_NATIVE_MUE_WIRE_CAPTURE_SKIP_SECONDS must be a non-negative integer"
+[[ -z "${gnb_lower_phy_profile}" || "${gnb_lower_phy_profile}" =~ ^(single|dual|triple)$ ]] || \
+  usage_error "OCUDU_NATIVE_GNB_LOWER_PHY_PROFILE must be single, dual, triple or empty"
+[[ -z "${gnb_main_pool_threads}" || "${gnb_main_pool_threads}" =~ ^[1-9][0-9]?$ ]] || \
+  usage_error "OCUDU_NATIVE_GNB_MAIN_POOL_THREADS must be a small positive integer or empty"
 # CPU placement from platform-profiles.json (spark-gb10: gNB 5-9, broker
 # 15-17, UEs 18,19; a no-op on an unknown host; OCUDU_NATIVE_PLATFORM=none
 # turns it off). The same resolver the OAI gates use, so the pinned runs
@@ -129,7 +147,7 @@ for path in "${inner}" "${renderer}" \
   "${native_root}/builds/srsran4g-zmq-release/srsue/src/srsue" \
   "${native_root}/builds/open5gs-v2.7.6/tests/app/5gc" \
   "${native_root}/install/mongodb-6.0.29/bin/mongod" \
-  "${repo_root}/examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml"; do
+  "${repo_root}/use_cases/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml"; do
   [[ -e "${path}" ]] || usage_error "missing required path: ${path}"
 done
 [[ -c /dev/net/tun ]] || usage_error "/dev/net/tun is absent"
@@ -182,6 +200,9 @@ if [[ "${channel_mode}" == "sionna" && "${sionna_awgn_snr_db}" != "off" ]]; then
   [[ -z "${sionna_tx_power_dl}" ]] || renderer_args+=(--tx-power-dl "${sionna_tx_power_dl}")
   [[ -z "${sionna_tx_power_ul}" ]] || renderer_args+=(--tx-power-ul "${sionna_tx_power_ul}")
 fi
+if [[ "${channel_mode}" == "sionna" ]]; then
+  [[ -z "${sionna_ul_power_offset_db}" ]] || renderer_args+=(--ul-power-offset-db "${sionna_ul_power_offset_db}")
+fi
 "/usr/bin/python3" "${renderer}" "${renderer_args[@]}" >"${log_dir}/render.log" 2>&1 || {
   cat "${log_dir}/render.log" >&2; usage_error "config rendering failed"
 }
@@ -229,11 +250,11 @@ declare -a inner_args=(
   "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" "${OCUDU_NATIVE_GNB_CPUS:-}" \
   "${OCUDU_NATIVE_BROKER_CPUS:-}" "${OCUDU_NATIVE_NRUE_CPUS:-}" "${OCUDU_NATIVE_BROKER_ENV:-}" \
   "${mue_ue_exec}" "${mue_root_exec}" "${mue_wire_capture_samples}" "${mue_wire_capture_skip_seconds}" \
-  "${sionna_scenario}" "${sionna_position_endpoint}"
+  "${sionna_scenario}" "${sionna_position_endpoint}" "${gnb_lower_phy_profile}" "${gnb_main_pool_threads}"
 import json, sys
 (out, channel_mode, ue_count, duration, strict, awgn, tx_dl, tx_ul, profile, gnb_cpus,
  broker_cpus, ue_cpus, broker_env, ue_exec, root_exec, cap_samples, cap_skip,
- scenario, position_endpoint) = sys.argv[1:]
+ scenario, position_endpoint, gnb_lower_phy_profile, gnb_main_pool_threads) = sys.argv[1:]
 json.dump({
     "channel_mode": channel_mode, "ue_count": int(ue_count),
     "run_duration_seconds": int(duration), "strict_realtime": int(strict),
@@ -245,12 +266,14 @@ json.dump({
     "broker_env": broker_env, "ue_exec": ue_exec, "root_exec": root_exec,
     "wire_capture": {"samples": int(cap_samples), "skip_seconds": int(cap_skip)},
     "sionna_scenario": scenario or None, "sionna_position_endpoint": position_endpoint or None,
+    "gnb_lower_phy_profile": gnb_lower_phy_profile or None,
+    "gnb_main_pool_threads": int(gnb_main_pool_threads) if gnb_main_pool_threads else None,
 }, open(out, "w"), indent=2, sort_keys=True)
 PY
-printf 'event=native_multi_ue_gate_parameters duration=%ss strict_realtime=%s platform=%s gnb_cpus=%s broker_cpus=%s ue_cpus=%s awgn_snr_db=%s\n' \
+printf 'event=native_multi_ue_gate_parameters duration=%ss strict_realtime=%s platform=%s gnb_cpus=%s broker_cpus=%s ue_cpus=%s awgn_snr_db=%s gnb_lower_phy_profile=%s gnb_main_pool_threads=%s\n' \
   "${mue_duration_seconds}" "${mue_strict_realtime}" "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" \
   "${OCUDU_NATIVE_GNB_CPUS:-}" "${OCUDU_NATIVE_BROKER_CPUS:-}" "${OCUDU_NATIVE_NRUE_CPUS:-}" \
-  "${sionna_awgn_snr_db}"
+  "${sionna_awgn_snr_db}" "${gnb_lower_phy_profile:-default}" "${gnb_main_pool_threads:-default}"
 web_pid=""
 if [[ "${channel_mode}" == "sionna" ]]; then
   # ipc:// under the run directory, so the control and telemetry sockets live
@@ -265,7 +288,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     --control-endpoint "${control_endpoint}"
     --telemetry-endpoint "${telemetry_endpoint}"
     --sionna-python "${sionna_python}"
-    --sionna-bridge "${repo_root}/scripts/sionna_rt/run_bridge.py"
+    --sionna-bridge "${repo_root}/apps/sionna_bridge/run_bridge.py"
     --sionna-scenario-config "${sionna_scenario}"
     --sionna-status-jsonl "${sionna_status_jsonl}"
     --sionna-update-hz "${sionna_update_hz}"
@@ -275,10 +298,10 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   )
   # Read-only observer. It tails the status JSONL the bridge writes and
   # subscribes to broker telemetry; it never touches the control socket.
-  "${sionna_python}" "${repo_root}/scripts/web_ui/server.py" \
+  "${sionna_python}" "${repo_root}/apps/dashboard/server.py" \
     --port "${web_port}" --telemetry-endpoint "${telemetry_endpoint}" \
     --status-jsonl "${sionna_status_jsonl}" \
-    --index "${repo_root}/scripts/web_ui/index.html" \
+    --index "${repo_root}/apps/dashboard/index.html" \
     >"${log_dir}/web-ui.log" 2>&1 &
   web_pid="$!"
   printf 'Web UI: http://127.0.0.1:%s\n' "${web_port}"
@@ -289,8 +312,13 @@ unshare --user --map-root-user --net --mount --fork --kill-child --propagation p
   "${inner}" "${inner_args[@]}"
 inner_status="$?"
 set -e
-[[ -n "${web_pid}" ]] && kill "${web_pid}" >/dev/null 2>&1
-[[ -n "${web_pid}" ]] && wait "${web_pid}" >/dev/null 2>&1
+# `|| true`: under set -e the command after the final && is NOT exempt, and
+# `wait` returns the killed Web UI's 143 -- which used to end the gate here,
+# before the result line, with exit 143 even for a passing Sionna run.
+if [[ -n "${web_pid}" ]]; then
+  kill "${web_pid}" >/dev/null 2>&1 || true
+  wait "${web_pid}" >/dev/null 2>&1 || true
+fi
 
 summary="${report_dir}/attach-summary.json"
 if [[ "${inner_status}" -eq 0 && -f "${summary}" ]]; then

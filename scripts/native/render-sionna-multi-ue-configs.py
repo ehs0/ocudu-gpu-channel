@@ -33,7 +33,7 @@ MODEL_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 SUPPORTED_GNB_PORTS = frozenset((1,))
 DEFAULT_UE_COUNT = 2
 
-# Receiver noise floor for the Sionna links (R4a). Sionna's taps carry the
+# Receiver noise floor for the Sionna links. Sionna's taps carry the
 # scene's path gain (+ the bridge's gain offset, 60 dB by default), so a UE
 # behind a pillar receives ~25 dB less than one in line of sight -- but an
 # `awgn` step with `snr_db` sizes its noise against the *faded* signal and
@@ -45,13 +45,47 @@ DEFAULT_UE_COUNT = 2
 # TX_POWER_* are mean |x|^2 over the *active* samples of a wire capture of
 # the pinned fixtures (idle slots excluded; scripts/native/wire-capture-power.py),
 # in the IQ float units the ZMQ radios exchange. Measured on the DGX Spark
-# multi-UE run 20260929T130021Z (ROBOT_FIGHT_MILESTONES.md R4a): the OCUDU gNB
+# multi-UE run 20260929T130021Z: the OCUDU gNB
 # (gnb_zmq_b210_fdd_srsue.yaml, default amplitude control) puts 1.12e-2
 # (-19.5 dB, peak amplitude 0.39) on the wire; srsUE (srsue_zmq_multi_ue.conf.in,
 # whose [rf] tx_gain = 50 dB the ZMQ radio applies numerically, peak 313)
 # 2.8e4-3.3e4 (+44..45 dB) while sending PUCCH/SRS/ping-sized PUSCH.
+# Under traffic (X6, docs/reports/experiments/x6-gnb-realtime-traffic/README.md, runs 20261001T114501Z
+# and T115125Z, two UEs at 20 Mbit/s UL, capture at run-second 20): the gNB's
+# PDSCH-filled slots measure 3.4e-3..3.7e-3 (-24.7..-24.3 dB) and a UE sending
+# full-rate PUSCH 9.7e3..9.9e3 (+39.9 dB), both ~5 dB below the idle-regime
+# values above, while a UE sending only control bursts still measures 3.25e4.
+# The UL/DL ratio -- all ue_tx_scale_db uses -- is 64.6 dB vs 64.3 dB here, so
+# the constants stay at the idle-regime values they document; moving only
+# TX_POWER_UL to the traffic value would skew the UE scale by +4.9 dB, and
+# moving both would shift the absolute floor the SNR calibration rests on.
 TX_POWER_DL = 1.12e-2
 TX_POWER_UL = 3.0e4
+# Emulated transmit powers. The wire levels above are software scales (srsUE
+# multiplies by its 50 dB tx_gain numerically, the gNB sits at -19.8 dB), so
+# the uplink arrives 64 dB hotter than the downlink although a 23 dBm UE is
+# ~7 dB *weaker* than a 30 dBm small cell. The broker's per-device
+# `tx_scale_db` brings every UE port onto the gNB's scale:
+#   ue_tx_scale_db = (UL_dBm - DL_dBm) - 10 log10(TX_POWER_UL / TX_POWER_DL)
+# so that "0 dB tap" means the same emitted power for both directions and a
+# UE<->UE edge (where it is physical, i.e. TDD) is no longer an 80 dB jammer.
+# srsUE cannot do this itself: a negative [rf] tx_gain means "automatic"
+# (measured: -21 -> 40 dB applied) and its floor is 0 dB.
+TX_POWER_DL_DBM = 30.0
+TX_POWER_UL_DBM = 23.0
+UL_POWER_OFFSET_DB = TX_POWER_UL_DBM - TX_POWER_DL_DBM
+
+
+def ue_tx_scale_db(tx_power_dl: float = TX_POWER_DL, tx_power_ul: float = TX_POWER_UL,
+                   ul_power_offset_db: float = UL_POWER_OFFSET_DB) -> float:
+    """Per-UE-port `tx_scale_db` that puts the uplink on the downlink's scale."""
+
+    for label, value in (("tx_power_dl", tx_power_dl), ("tx_power_ul", tx_power_ul)):
+        if not (math.isfinite(value) and value > 0.0):
+            raise ValueError(f"{label} must be a positive finite power: {value}")
+    if not math.isfinite(ul_power_offset_db):
+        raise ValueError(f"ul_power_offset_db must be finite: {ul_power_offset_db}")
+    return ul_power_offset_db - 10.0 * math.log10(tx_power_ul / tx_power_dl)
 
 
 def load_multi_ue_renderer():
@@ -211,11 +245,13 @@ def load_live_shape(path: Path, ue_count: int = DEFAULT_UE_COUNT) -> LiveShape:
 
 def rx_noise_powers(shape: LiveShape, awgn_snr_db: float | None,
                     tx_power_dl: float = TX_POWER_DL,
-                    tx_power_ul: float = TX_POWER_UL) -> dict[str, float]:
+                    tx_power_ul: float = TX_POWER_UL,
+                    ue_scale_db: float = 0.0) -> dict[str, float]:
     """Absolute receiver noise per node for a reference SNR, or {} for none.
 
     The UEs hear the gNB (downlink transmit power); the gNB hears the UEs
-    (uplink transmit power). Both floors give a unit-gain link `awgn_snr_db`.
+    (uplink transmit power AFTER the broker's per-UE `tx_scale_db`,
+    `ue_scale_db`). Both floors give a unit-gain link `awgn_snr_db`.
     """
 
     if awgn_snr_db is None:
@@ -225,20 +261,22 @@ def rx_noise_powers(shape: LiveShape, awgn_snr_db: float | None,
     for label, value in (("tx_power_dl", tx_power_dl), ("tx_power_ul", tx_power_ul)):
         if not (math.isfinite(value) and value > 0.0):
             raise ValueError(f"{label} must be a positive finite power: {value}")
+    if not math.isfinite(ue_scale_db):
+        raise ValueError(f"ue_scale_db must be finite: {ue_scale_db}")
     ratio = 10.0 ** (awgn_snr_db / 10.0)
-    floors = {shape.gnb.node_id: tx_power_ul / ratio}
+    floors = {shape.gnb.node_id: tx_power_ul * 10.0 ** (ue_scale_db / 10.0) / ratio}
     for ue in shape.ues:
         floors[ue.node_id] = tx_power_dl / ratio
     return floors
 
 
 def render_topology(shape: LiveShape, rx_noise: dict[str, float] | None = None,
-                    gnb_ports: tuple[int, int] = (2000, 2001)) -> str:
+                    gnb_ports: tuple[int, int] = (2000, 2001),
+                    ue_scale_db: float | None = None) -> str:
     """Generate the broker topology the scenario describes.
 
     Endpoints follow `render-multi-ue-configs.py`'s UE table and the gNB's
-    fixed 2000/2001 pair (`gnb_ports`; the robot-fight gate's second cell uses
-    2010/2011), so the ports the gate pre-checks and the srsUE configs use are
+    fixed 2000/2001 pair (`gnb_ports`; a second cell uses 2010/2011), so the ports the gate pre-checks and the srsUE configs use are
     the ones the broker binds. REP sockets bind loopback: every peer is in this
     namespace.
     """
@@ -265,6 +303,17 @@ def render_topology(shape: LiveShape, rx_noise: dict[str, float] | None = None,
             f"    tx_endpoint: tcp://127.0.0.1:{tx_port}\n"
             f"    rx_endpoint: tcp://127.0.0.1:{rx_port}\n"
         )
+        # Carrier labels (FDD band 3 fixture): a port only hears its own
+        # carrier, so the broker refuses an edge from a UE TX (uplink carrier)
+        # into another UE RX (downlink carrier) at startup instead of summing a
+        # physically non-existent ~80 dB jammer into the victim UE.
+        if node.node_id == shape.gnb.node_id:
+            devices += "    tx_carrier: n3-dl\n    rx_carrier: n3-ul\n"
+        else:
+            devices += "    tx_carrier: n3-ul\n    rx_carrier: n3-dl\n"
+            # Uplink wire level -> emitted power (see ue_tx_scale_db).
+            if ue_scale_db is not None:
+                devices += f"    tx_scale_db: {ue_scale_db:.3f}\n"
         # The receiver model is applied once to the port's summed receive
         # signal, after every incoming link, so the floor is per node and a
         # profile_swap (which only replaces a link's leading tdl) leaves it.
@@ -388,6 +437,15 @@ def self_test() -> None:
             assert token in noisy, token
         assert noisy.count("type: awgn") == 3, noisy
         assert rx_noise_powers(shape, None) == {}
+        # Uplink scale: 64.3 dB wire gap plus the 7 dB power difference.
+        scale = ue_tx_scale_db()
+        assert abs(scale - (-7.0 - 10 * math.log10(TX_POWER_UL / TX_POWER_DL))) < 1e-9, scale
+        assert -72.0 < scale < -70.0, scale
+        scaled = rx_noise_powers(shape, 20.0, tx_power_dl=1.0, tx_power_ul=0.1, ue_scale_db=-10.0)
+        assert abs(scaled["gnb0"] - 1e-4) < 1e-12, scaled
+        with_scale = render_topology(shape, floors, ue_scale_db=scale)
+        assert with_scale.count("tx_scale_db:") == 2, with_scale
+        assert "tx_scale_db" not in render_topology(shape, floors), "no scale unless asked"
         assert "rx_model" not in render_topology(shape), "no floor unless asked"
         try:
             render_topology(shape, {"ue9": 1e-3})
@@ -454,6 +512,8 @@ def main() -> int:
                         help="gNB transmit power on the wire, mean |x|^2 of active samples")
     parser.add_argument("--tx-power-ul", type=float, default=TX_POWER_UL,
                         help="srsUE transmit power on the wire, mean |x|^2 of active samples")
+    parser.add_argument("--ul-power-offset-db", type=float, default=UL_POWER_OFFSET_DB,
+                        help="emitted UE power relative to the gNB, dB (default 23 dBm - 30 dBm)")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     render_args = (
@@ -480,18 +540,20 @@ def main() -> int:
     shape = load_live_shape(scenario, args.ue_count)
     ues = gate_ues(args.ue_count)
     try:
-        rx_noise = rx_noise_powers(shape, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul)
+        ue_scale = ue_tx_scale_db(args.tx_power_dl, args.tx_power_ul, args.ul_power_offset_db)
+        rx_noise = rx_noise_powers(shape, args.awgn_snr_db, args.tx_power_dl, args.tx_power_ul,
+                                   ue_scale)
     except ValueError as error:
         legacy.fail(str(error))
     gnb_source = legacy.read_regular(
-        repo_root / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture"
+        repo_root / "use_cases/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture"
     )
     open5gs_source = legacy.read_regular(
         native_root / "src/ocudu/docker/open5gs/open5gs-5gc.yml",
         "pinned OCUDU Open5GS template",
     )
     srsue_source = legacy.read_regular(
-        repo_root / "examples/configs/ran/srsue/srsue_zmq_multi_ue.conf.in",
+        repo_root / "use_cases/configs/ran/srsue/srsue_zmq_multi_ue.conf.in",
         "native srsUE template",
     )
     _, subscriber_path, _ = legacy.LAYOUTS[args.ue_count]
@@ -500,7 +562,7 @@ def main() -> int:
     )
     rendered = {
         "gnb.yaml": legacy.render_gnb(gnb_source, log_dir),
-        "topology.yaml": render_topology(shape, rx_noise),
+        "topology.yaml": render_topology(shape, rx_noise, ue_scale_db=ue_scale),
         "open5gs.yaml": legacy.render_open5gs(open5gs_source, native_root),
         "subscriber.csv": legacy.validate_subscriber(subscriber_source, ues),
     }
@@ -521,6 +583,7 @@ def main() -> int:
             for link in shape.links
         ],
         "ue_count": args.ue_count,
+        "ue_tx_scale_db": ue_scale,
         "rx_noise": {
             "awgn_snr_db": args.awgn_snr_db,
             "tx_power_dl": args.tx_power_dl,

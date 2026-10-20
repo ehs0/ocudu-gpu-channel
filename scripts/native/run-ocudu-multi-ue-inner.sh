@@ -34,7 +34,7 @@ sionna_ready_seconds="180"
 sionna_position_endpoint=""
 sionna_position_offset=""
 sionna_position_timeout_s=""
-# R4a: run length, strict-realtime pass-through, side processes and wire
+# Multi-UE gate: run length, strict-realtime pass-through, side processes and wire
 # capture. The defaults are the values this gate always used.
 run_duration_seconds="240"
 strict_realtime="0"
@@ -107,7 +107,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   [[ "${sionna_update_hz}" =~ ^[0-9]+(\.[0-9]+)?$ ]] || \
     usage_error "invalid Sionna update rate: ${sionna_update_hz}"
   # tcp://127.0.0.1 would be this namespace's own loopback; only a filesystem
-  # socket bound by the arena outside reaches the bridge in here.
+  # socket bound by the publisher outside reaches the bridge in here.
   [[ -z "${sionna_position_endpoint}" || "${sionna_position_endpoint}" == ipc:///* ]] || \
     usage_error "Sionna position endpoint must be ipc://"
 fi
@@ -156,6 +156,10 @@ ue_gateway="10.45.1.1"
 # per-UE near/far channel asymmetry set the sync times, which is where the
 # separation has to come from.
 stagger_ues="${OCUDU_NATIVE_MUE_STAGGER:-0}"
+# Strict attach verdict (X0): a UE counts as attached only if it also stayed
+# attached -- no scheduling-request failure, no PRACH after RRC Connected, no
+# RLF, and every ping answered. 0 restores the old "ever pinged once" verdict.
+attach_strict="${OCUDU_NATIVE_ATTACH_STRICT:-1}"
 
 mount_active=0
 root_tun=""
@@ -297,7 +301,7 @@ case "${srsue_variant}" in
       grep -qx "patch=${srsue_patch_path##*/} sha256=${srsue_patch_sha}" "${srsue_manifest}" || \
         usage_error "local srsUE was built from other patches than srsue-local-patches.lock.json; rebuild it"
     done < <(/usr/bin/python3 -c 'import json,sys
-for p in json.load(open(sys.argv[1]))["patches"]: print(p["path"], p["sha256"])' "${repo_root}/scripts/native/srsue-local-patches.lock.json")
+for p in json.load(open(sys.argv[1]))["patches"]: print(p["path"], p["sha256"])' "${repo_root}/integrations/srsran/srsue-local-patches.lock.json")
     ;;
   *) usage_error "OCUDU_NATIVE_SRSUE must be local or stock" ;;
 esac
@@ -340,7 +344,7 @@ for name in "${ue_netns[@]}"; do
   nsenter --net="/run/netns/${name}" -- ip link set lo up
 done
 
-# Side processes (R4a). A template is expanded with the run's placeholders
+# Side processes. A template is expanded with the run's placeholders
 # and run through `bash -c`, so it can be a pipeline or a script path with
 # arguments. Started with start_group: same logs, same teardown.
 run_dir="${netns_dir%/netns}"
@@ -447,7 +451,7 @@ broker_exit_deadline=$((SECONDS + run_duration_seconds + 10))
 # Both lines mean the same thing here: that node's transport is bound.
 for id in "${ue_ids[@]}"; do
   wait_log "${log_dir}/broker.log" "event=socket_ready device=${id}" "${broker_pid}" 15 \
-    || usage_error "broker did not bind ${id}"
+    || { grep -m1 "event=fatal" "${log_dir}/broker.log" >&2 || true; usage_error "broker did not bind ${id}"; }
 done
 
 # Sionna has to be streaming before the gNB is admitted. Every link starts as a
@@ -513,7 +517,7 @@ for index in "${!ue_ids[@]}"; do
     srsue_env=(env "SRSUE_PRACH_PREAMBLE_INDEX=$((index * 8))")
   fi
   # Per-second UE metrics (rsrp, dl_snr, dl_mcs, dl_bler, ul_bler, ...) as CSV,
-  # the link-quality record the R4 analysis joins with the bridge positions.
+  # the link-quality record the multi-UE analysis joins with the bridge positions.
   # The CSV clock is seconds since this UE started, so its start is recorded.
   date -u +%s%3N >"${log_dir}/srsue-${id}.start_unix_ms"
   start_group "srsue-${id}" "${log_dir}/srsue-${id}.log" "${srsue_env[@]}" "${ue_pin[@]}" "${srsue}" \
@@ -584,11 +588,11 @@ for pid in "${srsue_pids[@]}"; do process_running "${pid}" || srsue_alive=0; don
 /usr/bin/python3 - \
   "${log_dir}" "${native_root}/results/reports/ocudu-multi-ue/${timestamp}/attach-summary.json" \
   "${timestamp}" "${broker_status}" "${gnb_alive}" "${srsue_alive}" \
-  "${rrc[*]}" "${pdu[*]}" "${ping_ok[*]}" "${ue_ids[*]}" <<'PY'
+  "${rrc[*]}" "${pdu[*]}" "${ping_ok[*]}" "${ue_ids[*]}" "${attach_strict}" <<'PY'
 import json, pathlib, re, sys
 
 (log_dir, out_path, timestamp, broker_status, gnb_alive, srsue_alive,
- rrc, pdu, ping_ok, ue_ids) = sys.argv[1:]
+ rrc, pdu, ping_ok, ue_ids, attach_strict) = sys.argv[1:]
 
 log_dir = pathlib.Path(log_dir)
 stop = ""
@@ -606,8 +610,53 @@ per_ue = {
     }
     for ue, r, p, q in zip(ids, rrc.split(), pdu.split(), ping_ok.split())
 }
+
+def attach_evidence(ue):
+    """Strict evidence from the srsUE console log and the ping log. A UE that
+    attached and then lost the link (Scheduling request failed -> RRC release
+    -> renewed PRACH) once pinged, so rrc/pdu/ping_ok alone call it attached.
+    "Received RRC Release" is deliberately not counted: the gate's own
+    teardown releases every UE once right before "Stopping ..".
+    """
+    text = ""
+    path = log_dir / f"srsue-{ue}.log"
+    if path.exists():
+        text = path.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    first_connected = next((i for i, l in enumerate(lines) if "RRC Connected" in l), None)
+    reattach = 0
+    if first_connected is not None:
+        reattach = sum(1 for l in lines[first_connected + 1:] if "Random Access Transmission" in l)
+    sent = received = 0
+    ping_path = log_dir / f"ue-ping-{ue}.log"
+    if ping_path.exists():
+        m = re.search(r"(\d+) packets transmitted, (\d+) (?:packets )?received",
+                      ping_path.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            sent, received = int(m.group(1)), int(m.group(2))
+    return {
+        "sr_failures": text.count("Scheduling request failed"),
+        "reattach_attempts": reattach,
+        "rlf_count": sum(1 for l in lines if re.search(r"RLF|Radio Link Failure", l, re.I)),
+        "ping_sent": sent,
+        "ping_received": received,
+    }
+
+
+for ue, v in per_ue.items():
+    v.update(attach_evidence(ue))
+    v["attach_clean"] = int(bool(v["rrc_connected"] and v["pdu_session_established"]
+                                 and v["ping_sent"] > 0 and v["ping_received"] == v["ping_sent"]
+                                 and v["sr_failures"] == 0 and v["reattach_attempts"] == 0
+                                 and v["rlf_count"] == 0))
+    print(f"event=ue_attach_evidence ue={ue} rrc={v['rrc_connected']} "
+          f"pdu={v['pdu_session_established']} ping={v['ping_received']}/{v['ping_sent']} "
+          f"sr_failures={v['sr_failures']} reattach_attempts={v['reattach_attempts']} "
+          f"rlf={v['rlf_count']} clean={v['attach_clean']}", flush=True)
 all_attached = all(v["rrc_connected"] and v["pdu_session_established"] and v["ping_ok"]
                    for v in per_ue.values())
+if int(attach_strict):
+    all_attached = all_attached and all(v["attach_clean"] for v in per_ue.values())
 strict_clean = all(counters.get(k, 1) == 0
                    for k in ("tx_queue_overflows", "tx_sequence_gaps", "zmq_errors"))
 summary = {
@@ -615,6 +664,7 @@ summary = {
     "docker_used": False,
     "runtime_mode": "rootless_user_net_mount_namespace",
     "ue_count": len(ids),
+    "attach_strict": int(attach_strict),
     "per_ue": per_ue,
     "broker_status": int(broker_status),
     "gnb_alive_at_broker_stop": int(gnb_alive),
@@ -626,7 +676,7 @@ summary = {
 summary.update({k: counters.get(k, -1) for k in
                 ("tx_pulls", "rx_requests", "rx_starvations",
                  "tx_queue_overflows", "tx_sequence_gaps", "zmq_errors")})
-# Recorded, not gated (R4a): the control plane and Sionna feed counters, the
+# Recorded, not gated: the control plane and Sionna feed counters, the
 # last heartbeat per device (its puller idle / producer stall counts are the
 # per-device view of rx_starvations), and how the run was configured.
 summary["control"] = {k: counters.get(k) for k in
@@ -646,6 +696,13 @@ for line in (log_dir / "broker.log").read_text(encoding="utf-8", errors="replace
                 "producer_stall": int((re.search(r"producer\[[^\]]*stall=(\d+)", line) or [0, -1])[1]),
             }
 summary["last_heartbeat"] = heartbeats
+# X6: which lower-PHY executor profile the gNB really ran ("Lower PHY in
+# executor sequential baseband mode." etc.), so a profile request that the
+# gNB silently overrides (zmq forces sequential on a1916edc) is visible here.
+console = log_dir / "gnb-console.log"
+summary["gnb_lower_phy_mode"] = next(
+    (line.strip() for line in console.read_text(encoding="utf-8", errors="replace").splitlines()
+     if line.startswith("Lower PHY in ")), None) if console.exists() else None
 status_jsonl = log_dir / "sionna-status.jsonl"
 if status_jsonl.exists():
     updates = 0

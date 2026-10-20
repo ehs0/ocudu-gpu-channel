@@ -17,6 +17,8 @@ set -euo pipefail
 #                               lost contention still completed RA (S16)
 #   srsue-rar-window.patch      an unparsable RAR or one without our RAPID
 #                               ended RA for good instead of a retransmission
+#   srsue-zmq-rx-sleep.patch    opt-in removal of the receive sleep when the
+#                               channel broker already paces IQ samples
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -24,7 +26,7 @@ die() { printf 'error: %s\n' "$1" >&2; exit 1; }
 
 native_root="${OCUDU_NATIVE_ROOT:?set OCUDU_NATIVE_ROOT}"
 jobs="${OCUDU_SRSUE_BUILD_JOBS:-$(nproc)}"
-lock="${script_dir}/srsue-local-patches.lock.json"
+lock="${script_dir}/../../integrations/srsran/srsue-local-patches.lock.json"
 pinned="${native_root}/src/srsRAN_4G"
 pinned_build="${native_root}/builds/srsran4g-zmq-release"
 src_dir="${native_root}/src/srsRAN_4G-local"

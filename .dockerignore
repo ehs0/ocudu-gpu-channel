@@ -1,5 +1,5 @@
 # Keep the build context small + fast. The image needs only the source tree
-# required by CMake: CMakeLists.txt, src/, include/, apps/, tests/, examples/.
+# required by CMake: CMakeLists.txt, src/, include/, apps/, tests/, benchmarks/, use_cases/.
 
 # Version control
 .git
@@ -31,12 +31,25 @@ tmp
 *.pcapng
 
 # Local tooling and editor/OS noise
+.agents
 .claude
+.build
+.venv-docs
 .playwright-mcp
 .config
 writing
-.DS_Store
+slides
+**/.DS_Store
 
 # The Docker files themselves
 Dockerfile
 .dockerignore
+
+# Python package outputs
+**/*.egg-info
+dist
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.py[cod]

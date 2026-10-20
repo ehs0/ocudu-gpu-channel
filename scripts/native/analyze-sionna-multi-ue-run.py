@@ -9,7 +9,7 @@ and per-link tap gains). Each metrics row then carries the UE's position and
 the downlink gain Sionna gave it at that moment, and rows are classed as
 `los` (within 6 dB of the link's best gain in the run) or `shadow` (15 dB or
 more below it). The report says whether the UE's reported SNR, MCS and BLER
-differ between the two -- the R4 evidence that the ring's geometry reaches
+differ between the two -- the evidence that the ring's geometry reaches
 the decoder -- and the correlation between the Sionna gain and the reported
 SNR over the whole run.
 
@@ -156,7 +156,7 @@ def analyse_ue(ue: str, gnb: str, rows: list[dict], updates: list[dict], keys: l
 def load_broker_health(broker_log: pathlib.Path, steady_after_s: int) -> dict | None:
     """Per-device starvation/gap/overflow timeline from the broker heartbeat.
 
-    R4c added `starvations=<delta since last heartbeat> starvations_total=<n>`
+    The heartbeat carries `starvations=<delta since last heartbeat> starvations_total=<n>`
     (and gaps/overflows) to `event=heartbeat`, so a starvation during attach
     can be told apart from one during the measured window. Older brokers only
     have the run totals in `event=stop`; then this returns None.
@@ -220,7 +220,7 @@ def main() -> int:
                   f"gaps={entry['total'].get('gaps', 0)} overflows={entry['total'].get('overflows', 0)} "
                   f"starvation seconds={entry['seconds'][:40]}")
     else:
-        print("== broker: heartbeat has no per-second health counters (pre-R4c broker); "
+        print("== broker: heartbeat has no per-second health counters (older broker); "
               "only the event=stop run totals are available")
     for csv_path in sorted(args.log_dir.glob("srsue-metrics-*.csv")):
         ue = csv_path.stem[len("srsue-metrics-"):]

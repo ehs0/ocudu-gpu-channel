@@ -13,6 +13,7 @@
 /datasets/
 /tmp/
 *.log
+!/docs/reports/**/*.log
 *.pcap
 *.pcapng
 
@@ -23,6 +24,9 @@
 
 # Python-generated caches.
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.py[cod]
 
 # Downloaded reference material -- 3GPP specs, papers, third-party source
@@ -38,3 +42,14 @@ __pycache__/
 
 # User's local LaTeX work, intentionally untracked.
 /writing/
+
+# Local slide files.
+/slides/
+
+# Python package build outputs
+*.egg-info/
+dist/
+
+# Documentation environments and generated publication artifacts.
+/.build/
+/.venv-docs/

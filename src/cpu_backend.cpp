@@ -154,6 +154,11 @@ void CpuChannelProcessor::refresh_lane_grids(LinkState& state, const ModelConfig
 
 void CpuChannelProcessor::prepare(const TopologyConfig& config)
 {
+  if (config.runtime.cpu_threads == 0) {
+    throw std::invalid_argument("runtime.cpu_threads must be greater than zero");
+  }
+  sample_executor_ = config.runtime.cpu_threads > 1
+      ? std::make_unique<SampleExecutor>(config.runtime.cpu_threads) : nullptr;
   // State is keyed by the SAME resolved lane table the broker drives serves
   // from, so a key can never be missing at serve time -- process_superposition
   // must never insert into the map concurrently.
@@ -291,6 +296,16 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
         }
         break;
       }
+      case ModelStepType::Gain: {
+        // Constant YAML scale (carries DeviceConfig::tx_scale_db after the
+        // load-time fold). Deliberately NOT sourced from `live`: a runtime
+        // path_loss_db update or a profile swap must leave it untouched.
+        const float factor = static_cast<float>(std::pow(10.0, param_or(step, "gain_db", 0.0) / 20.0));
+        for (std::size_t i = 0; i != current.size(); ++i) {
+          next[i] = scale(current[i], factor);
+        }
+        break;
+      }
       case ModelStepType::Awgn: {
         // v1-fin-A: AWGN with two source modes.
         //   - explicit `noise_power`: an absolute knob, independent of
@@ -318,9 +333,13 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
       case ModelStepType::Phase:
       case ModelStepType::Cfo: {
         // Phase 3 C2a: cfo_hz sourced from per-link `live`. phase_rad stays on
-        // the step (not a v1 mutable param).
+        // the step (not a v1 mutable param). Only a `cfo` step rotates with the
+        // link's cfo_hz: a `phase` step is a fixed rotation. Sharing the
+        // increment made every chain with both steps apply the CFO twice
+        // (configured 125 Hz arrived as 250 Hz at the radios).
         const double fixed_phase = param_or(step, "phase_rad", 0.0);
-        const double cfo_hz = static_cast<double>(state.live.cfo_hz);
+        const double cfo_hz =
+            step.type == ModelStepType::Cfo ? static_cast<double>(state.live.cfo_hz) : 0.0;
         const double phase_increment =
             sample_rate_hz == 0 ? 0.0 : 2.0 * std::numbers::pi * cfo_hz / static_cast<double>(sample_rate_hz);
         for (std::size_t i = 0; i != current.size(); ++i) {
@@ -407,11 +426,11 @@ ocg::PhysicalLinkRuntime* CpuChannelProcessor::apply_chain_to_link(const std::st
                                 state.link->clock.slot_start_samples,
                                 state.link->fading.lane_grids[static_cast<std::size_t>(state.lane_index)]
                                                         [step_index],
-                                state.los_coefficient);
+                                state.los_coefficient, sample_executor_.get());
         } else {
           apply_tdl_step(current.data(), next.data(), current.size(),
                          effective_taps, effective_polyphase,
-                         step_state.delay_line);
+                         step_state.delay_line, sample_executor_.get());
         }
         break;
       }

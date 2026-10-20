@@ -12,7 +12,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/common.sh"
 
 duration_seconds="${1:-15}"
-target_yaml="${PERF_DEEP_TARGET:-examples/configs/topologies/perf/topology.stress-16-edge.cuda.yaml}"
+target_yaml="${PERF_DEEP_TARGET:-use_cases/configs/topologies/perf/topology.stress-16-edge.cuda.yaml}"
 
 case "${REMOTE_PROJECT_ROOT}" in
   "~/"*) remote_dest="${REMOTE_PROJECT_ROOT#\~/}" ;;
@@ -21,7 +21,7 @@ esac
 
 echo "== syncing working tree =="
 rsync -az --delete \
-  --exclude '.git' --exclude 'build*' --exclude '.config' \
+  --exclude-from="${script_dir}/rsync-excludes.txt" \
   -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
   "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
 

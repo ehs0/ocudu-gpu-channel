@@ -36,7 +36,7 @@ enum class CudaHostMemory {
 // attribute); High/Low map onto the device's priority range. Priority only
 // changes when the GPU starts this broker's work relative to other streams in
 // the SAME context (an MPS server's clients share one), never what the
-// kernels compute (ROBOT_FIGHT_MILESTONES.md R5a).
+// kernels compute.
 enum class CudaStreamPriority {
   Default,
   High,
@@ -48,7 +48,14 @@ enum class ModelStepType {
   Awgn,
   Phase,
   Cfo,
-  Tdl
+  Tdl,
+  // Constant complex-free amplitude scale, `gain_db` (positive = gain,
+  // negative = attenuation). Unlike `path_loss`, whose path_loss_db is a
+  // runtime-mutable parameter sourced from the link's live MutableParams, a
+  // `gain` step is a fixed YAML constant: it is never touched by the control
+  // plane, a profile swap, or a matrix_profile_swap. That is what makes it the
+  // carrier for DeviceConfig::tx_scale_db (see fold_device_tx_scales).
+  Gain
 };
 
 // Doppler power spectrum shape applied to faded taps. Phase 1.4 implements the
@@ -87,6 +94,9 @@ struct TapSpec {
 
 struct RuntimeConfig {
   Backend backend = Backend::Cuda;
+  // CPU TDL sample workers, shared across receiving nodes. One keeps the
+  // serial reference; CUDA processing does not use this pool.
+  std::size_t cpu_threads = 1;
   int gpu_device = 0;
   bool batch_samples_auto = true;
   std::size_t batch_samples = 0;
@@ -106,6 +116,11 @@ struct RuntimeConfig {
   // mapped access crosses PCIe (ZERO_COPY_MILESTONES.md Z3-Z6).
   CudaHostMemory cuda_host_memory = CudaHostMemory::Auto;
   CudaStreamPriority cuda_stream_priority = CudaStreamPriority::Default;
+  // Throttle every producer to the sample rate. Set false when a live radio
+  // (e.g. a USRP bridge) is the clock: that source is already real time, and
+  // pacing the UE->radio direction would hold back the UE's zero-padded TX
+  // prefix at real time, so its uplink would never catch up with air time.
+  bool pacing = true;
 };
 
 // A node in the channel-emulation graph. gNBs and UEs are the SAME class -- a
@@ -123,6 +138,14 @@ struct DeviceConfig {
   std::string tx_endpoint;
   std::string rx_endpoint;
   std::string rx_model;
+  // Opt-in carrier labels (empty = unlabelled, never checked). A port only
+  // hears its own carrier, so a link is physical only when
+  // from.tx_carrier == to.rx_carrier: an FDD UE (tx "n3-ul", rx "n3-dl") can
+  // never be heard by another FDD UE's RX port, while an FDD gNB (tx "n3-dl",
+  // rx "n3-ul") can. YAML: `tx_carrier:` / `rx_carrier:`, or `carrier:` to set
+  // both at once (a TDD port). Free-form strings compared for equality.
+  std::string tx_carrier;
+  std::string rx_carrier;
   // Constant TX-start-time offset for THIS endpoint, in samples. Models the
   // case where one radio brought its ZMQ socket up later than others — the lag
   // is a property of the device, not of any particular link. Applies uniformly
@@ -132,6 +155,25 @@ struct DeviceConfig {
   // Distinct from LinkConfig::propagation_delay_samples below — that one is a
   // per-link (geometry-driven) physical propagation delay.
   double tx_timing_offset_samples = 0.0;
+  // Constant amplitude scale, in dB, applied to every sample THIS device puts
+  // on the wire, before any outgoing link's channel model. Every radio on a
+  // ZMQ emulator transmits at an arbitrary software scale (one radio's
+  // numeric tx_gain is another's unity), and the receiver sums lanes from
+  // different transmitters, so the correction is a property of the device.
+  // Linear factor 10^(tx_scale_db/20); 0 (default) is bit-identical to no
+  // scaling. Must be finite and |tx_scale_db| <= 200.
+  //
+  // Folded at load time into a per-link model clone as a `gain` step placed
+  // right after the chain-leading tdl (fold_device_tx_scales). It is NOT
+  // folded into the tdl's tap gains, because a profile_swap /
+  // matrix_profile_swap replaces that leading tdl wholesale and the scale
+  // must survive the swap.
+  double tx_scale_db = 0.0;
+  // Capacity of this device's broker TX ring (and the largest single ZMQ
+  // payload it accepts). 0 = runtime.queue_samples. srsRAN's ZMQ TX pads
+  // transmit gaps with one large zero payload, so a UE needs a deep ring
+  // while a live-radio source should keep a shallow one (ring = latency).
+  std::size_t tx_queue_samples = 0;
 };
 
 // A RadioNode: the owner of a common sample epoch and, from M1 onward, of the
@@ -163,6 +205,12 @@ struct LinkConfig {
   std::string from;
   std::string to;
   std::string model;
+  // The model id as written in the YAML. Load-time folds (leading delay,
+  // device tx_scale_db) may point `model` at a synthesized clone, but the
+  // link's identity -- `link_key()`, the control-plane link_id a Sionna bridge
+  // addresses, lane/physical keys -- stays "from>to:<declared model>". Empty
+  // for links built in code; then `model` is the identity.
+  std::string declared_model;
   // Physical propagation delay along THIS edge, in samples. Models the time it
   // takes for the source's signal to reach the receiver — a per-link, geometry-
   // driven effect (one sample at 23.04 MS/s is ~13 m of free-space propagation).
@@ -251,9 +299,8 @@ struct SpatialCorrelationConfig {
 // rank-1 component of H, not an independent draw per lane. This declares that
 // relationship. A lane with no entry carries the default 1 + 0j.
 //
-// It is declared rather than computed from antenna geometry because array
-// geometry, beamforming and CDL are mission non-goals (AGENT_GOAL.mimo.md)
-// until the user expands the mission.
+// Coefficients are declared explicitly; this model does not derive them from
+// antenna geometry, beamforming weights or a CDL model.
 struct LosCoefficient {
   int rx = 0;
   int tx = 0;
@@ -285,7 +332,7 @@ struct ModelConfig {
 
   // M3. `fixed_mimo` states what H IS; `spatial_correlation` states the
   // covariance of a random H. Declaring both says H twice, so the validator
-  // rejects the combination (docs/plans/m3-spatial-correlation-and-los.md
+  // rejects the combination (docs/history/designs/m3-spatial-correlation-and-los.md
   // section 2.6).
   SpatialCorrelationConfig spatial_correlation;
   LosMatrixConfig los_matrix;
@@ -472,6 +519,16 @@ std::vector<std::string> validate_config(const TopologyConfig& config);
 // load_config_file; programmatic builders of TopologyConfig must call this
 // themselves before handing the config to a channel processor.
 void fold_link_leading_delays(TopologyConfig& config);
+
+// Folds each source device's tx_scale_db into every outgoing link as a
+// constant `gain` step inserted right after the chain-leading tdl (or at the
+// chain head when there is none) of a per-link synthesized model clone. A
+// device with tx_scale_db == 0 leaves its links untouched, so the default is
+// bit-identical to a topology without the key. Called automatically by
+// load_config_file (after fold_link_leading_delays); programmatic builders of
+// TopologyConfig must call it themselves before handing the config to a
+// channel processor.
+void fold_device_tx_scales(TopologyConfig& config);
 
 std::string to_string(Backend backend);
 std::string to_string(ModelStepType type);

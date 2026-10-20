@@ -167,6 +167,19 @@ SocketPtr make_socket(void* context, int type)
 //                       the channel writes each output row straight into its
 //                       RX ring storage instead of a staging row that is then
 //                       pushed (falls back when the tail space wraps).
+// Fail-fast knob:
+//   OCG_BROKER_WEDGE_TIMEOUT_MS
+//                       relay wedge detector (default 10000; 0 disables). Once
+//                       every puller has pulled at least once (every radio has
+//                       transmitted), a run in which NO worker -- puller,
+//                       producer or REP -- makes progress for this long is
+//                       declared wedged: `event=relay_wedged` is logged with
+//                       every worker's state, BrokerStats.relay_wedged is set,
+//                       zmq_errors is bumped so the gate scripts and the strict
+//                       exit path fail, and the run stops. Lock-step radios can
+//                       only freeze all together (the 2026-10-01 multi-UE gates
+//                       sat 190 s with every puller in recv_reply), so a frozen
+//                       relay is never a valid measurement, only a void one.
 struct BrokerDiagKnobs {
   std::chrono::microseconds poll{50};
   bool tight_slack = false;
@@ -177,6 +190,7 @@ struct BrokerDiagKnobs {
   std::chrono::microseconds spin_budget{0};
   bool fewer_copies = false;
   bool direct_rows = false;
+  std::chrono::milliseconds wedge_timeout{10000};
 };
 
 // True unless the variable is set to "0".
@@ -208,6 +222,9 @@ BrokerDiagKnobs read_diag_knobs()
   }
   knobs.fewer_copies = env_default_on("OCG_BROKER_FEWER_COPIES");
   knobs.direct_rows = env_default_on("OCG_BROKER_DIRECT_ROWS");
+  if (const char* wedge = std::getenv("OCG_BROKER_WEDGE_TIMEOUT_MS"); wedge != nullptr && *wedge != '\0') {
+    knobs.wedge_timeout = std::chrono::milliseconds(std::strtol(wedge, nullptr, 10));
+  }
   return knobs;
 }
 
@@ -416,6 +433,7 @@ struct PortRuntime {
   IqRing tx_ring;
   std::mutex ring_mutex;
   std::size_t batch = 0;
+  std::size_t queue_samples = 0; // tx_ring capacity
   // Index of the owning RadioNodeRuntime, and this port's position in that
   // node's tx/rx port lists (the canonical matrix index from M1 onwards).
   std::size_t node_index = 0;
@@ -519,6 +537,7 @@ struct AtomicStats {
   std::atomic<std::uint64_t> tx_queue_overflows{0};
   std::atomic<std::uint64_t> tx_sequence_gaps{0};
   std::atomic<std::uint64_t> zmq_errors{0};
+  std::atomic<std::uint64_t> relay_wedged{0};
 };
 
 // Lock-free live diagnostics for one worker thread. `state` always points at a
@@ -715,7 +734,9 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
     auto port = std::make_unique<PortRuntime>();
     port->config = &device;
     port->batch = resolve_batch_samples(config_.runtime, device.sample_rate_hz);
-    port->tx_ring.reset(config_.runtime.queue_samples);
+    port->queue_samples =
+        device.tx_queue_samples != 0 ? device.tx_queue_samples : config_.runtime.queue_samples;
+    port->tx_ring.reset(port->queue_samples);
     if (!capture_.directory.empty() && capture_.samples_per_port > 0) {
       port->capture_limit = capture_.samples_per_port;
       port->capture_skip = capture_.skip_samples;
@@ -947,7 +968,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
       // recv_buf must hold the largest single ZMQ payload the peer can send.
       // The ring capacity is that hard upper bound: a larger payload could
       // never be relayed and is rejected by recv_samples_into().
-      IqBuffer recv_buf(std::max<std::size_t>(config_.runtime.queue_samples, dev.batch));
+      IqBuffer recv_buf(std::max<std::size_t>(dev.queue_samples, dev.batch));
       bool request_outstanding = false;
       // FEWER_COPIES keeps the received message itself and pushes from it.
       zmq_msg_t held;
@@ -1397,7 +1418,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
         // multi-port ZMQ radio dead-locks on a burst rather than absorbing it.
         // See `pacing.h` for the OCUDU-side mechanism.
         const auto due = pacer.charge(std::chrono::steady_clock::now(), count);
-        if (due > std::chrono::steady_clock::now()) {
+        if (config_.runtime.pacing && due > std::chrono::steady_clock::now()) {
           diag.state.store("throttle");
           std::this_thread::sleep_until(due);
         }
@@ -1694,8 +1715,46 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
     std::cout.flush();
   };
 
+  // Relay wedge detector (OCG_BROKER_WEDGE_TIMEOUT_MS). The sum of every
+  // worker's progress counter is the relay's clock; it arms once every puller
+  // has pulled (the stagger-started UEs are all up) and trips when that clock
+  // has not moved for the timeout. It does not try to say WHO stopped -- the
+  // per-worker states in the event line do that -- only that a run with no
+  // movement anywhere is void and must not run out its duration in silence.
+  const auto relay_progress = [&]() {
+    std::uint64_t total = 0;
+    for (const auto& d : puller_diag) {
+      total += d.progress.load(std::memory_order_relaxed);
+    }
+    for (const auto& d : producer_diag) {
+      total += d.progress.load(std::memory_order_relaxed);
+    }
+    for (const auto& d : rep_diag) {
+      total += d.progress.load(std::memory_order_relaxed);
+    }
+    return total;
+  };
+  const auto report_relay_wedged = [&](std::chrono::steady_clock::duration waited) {
+    std::ostringstream line;
+    line << "event=relay_wedged waited_ms="
+         << std::chrono::duration_cast<std::chrono::milliseconds>(waited).count() << " ports=[";
+    for (std::size_t d = 0; d != ports.size(); ++d) {
+      const WorkerDiag& p = puller_diag[d];
+      const WorkerDiag& s = producer_diag[ports[d]->node_index];
+      const WorkerDiag& r = rep_diag[d];
+      line << (d == 0 ? "" : " ") << ports[d]->config->id << ":puller=" << p.state.load() << "/"
+           << p.progress.load() << "/" << p.total_samples.load() << ",producer=" << s.state.load() << "/"
+           << s.progress.load() << ",rep=" << r.state.load() << "/" << r.progress.load();
+    }
+    line << "]\n";
+    std::cout << line.str() << std::flush;
+  };
+
   const auto start = std::chrono::steady_clock::now();
   auto next_heartbeat = start + std::chrono::seconds(1);
+  bool wedge_armed = false;
+  std::uint64_t wedge_last_progress = 0;
+  auto wedge_last_change = start;
   while (!stop_requested.load()) {
     const auto now = std::chrono::steady_clock::now();
     if (duration.count() > 0 && now - start >= duration) {
@@ -1705,6 +1764,33 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
       const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start).count();
       emit_heartbeat(static_cast<std::uint64_t>(elapsed));
       next_heartbeat += std::chrono::seconds(1);
+    }
+    if (knobs.wedge_timeout.count() > 0) {
+      if (!wedge_armed) {
+        wedge_armed = true;
+        for (std::size_t p = 0; p != ports.size(); ++p) {
+          if (ports[p]->tx_port >= 0 && puller_diag[p].progress.load(std::memory_order_relaxed) == 0) {
+            wedge_armed = false;
+          }
+        }
+        wedge_last_progress = relay_progress();
+        wedge_last_change = now;
+      } else {
+        const std::uint64_t progress = relay_progress();
+        if (progress != wedge_last_progress) {
+          wedge_last_progress = progress;
+          wedge_last_change = now;
+        } else if (now - wedge_last_change >= knobs.wedge_timeout) {
+          report_relay_wedged(now - wedge_last_change);
+          stats.relay_wedged.store(1);
+          // Counted as a transport error too: it is the counter the gate
+          // scripts and the strict exit path already fail on, and a relay no
+          // radio answers is dead transport whatever the radios' reason.
+          stats.zmq_errors.fetch_add(1);
+          stop_requested.store(true);
+          break;
+        }
+      }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
@@ -1755,7 +1841,8 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
   // sampled once a second -- these percentiles cover EVERY slot the run
   // processed, so they can be quoted as percentiles. `n` is the slot count they
   // were computed from; quote it alongside any figure taken from this line.
-  // Values are bucket upper edges at 5 us resolution.
+  // Percentiles are bucket upper edges at 5 us resolution; the maximum is
+  // the exact elapsed time already recorded by the receiver accumulator.
   for (std::size_t n = 0; n != nodes.size(); ++n) {
     const WorkerDiag& diag = producer_diag[n];
     const std::uint64_t samples = process_sample_count(diag);
@@ -1765,7 +1852,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
               << " p95_us=" << process_percentile_us(diag, 0.95)
               << " p99_us=" << process_percentile_us(diag, 0.99)
               << " p999_us=" << process_percentile_us(diag, 0.999)
-              << " max_us=" << process_percentile_us(diag, 1.0) << '\n';
+              << " max_us=" << slot_timing[n].calls.max_us << '\n';
   }
   std::cout.flush();
 
@@ -1822,6 +1909,7 @@ BrokerStats Broker::run(std::chrono::milliseconds duration)
   result.tx_queue_overflows = stats.tx_queue_overflows.load();
   result.tx_sequence_gaps = stats.tx_sequence_gaps.load();
   result.zmq_errors = stats.zmq_errors.load();
+  result.relay_wedged = stats.relay_wedged.load();
   return result;
 }
 

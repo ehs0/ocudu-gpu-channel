@@ -1,6 +1,6 @@
 # srsUE 구성에서 DL MISO 이득이 측정되지 않은 이유
 
-관련 문서: [`rank1-feasibility-report.md`](rank1-feasibility-report.md) · [`why-radionode-and-srsue-rank1-ko.md`](why-radionode-and-srsue-rank1-ko.md) · [`examples/ran_benchmark/README.md`](../examples/ran_benchmark/README.md) "gNB antennas"
+관련 문서: [`rank1-feasibility-report.md`](rank1-feasibility-report.md) · [`why-radionode-and-srsue-rank1-ko.md`](why-radionode-and-srsue-rank1-ko.md) · [`use_cases/ran_benchmark/README.md`](../use_cases/ran_benchmark/README.md) "gNB antennas"
 
 ## 결론
 
@@ -31,7 +31,7 @@ OCUDU 기준은 repo가 고정한 커밋 `a1916edc`이다 (경로는 OCUDU 소�
 |---|---|---|
 | 1 | DL 안테나가 2개면 OCUDU는 NZP-CSI-RS를 `nof_antennas_dl` 크기, 즉 2-port(FD-CDM2)로 만든다. | `lib/scheduler/config/builder/csi_meas_config.cpp:21` (`csi_params.nof_ports = cell_cfg.dl_carrier.nof_ant`) |
 | 2 | srsUE NR(PoC)은 2-port CSI-RS 리소스 매핑을 구현하지 않았다. `Resource mapping is invalid or not implemented`가 나고 RRC connection setup 전체가 실패한다. | [`rank1-feasibility-report.md`](rank1-feasibility-report.md) §6 제약 #2 |
-| 3 | 접속을 살리려고 모든 srsUE 2T/4T 구성이 `csi_rs_enabled: false`, `nof_cell_csi_res: 0`을 쓴다. | `examples/configs/ran/ocudu/*/gnb_*_rank1*_srsue.yaml`, `render_single_cell.GNB_2T2R_CHANGES` |
+| 3 | 접속을 살리려고 모든 srsUE 2T/4T 구성이 `csi_rs_enabled: false`, `nof_cell_csi_res: 0`을 쓴다. | `use_cases/configs/ran/ocudu/*/gnb_*_rank1*_srsue.yaml`, `render_single_cell.GNB_2T2R_CHANGES` |
 | 4 | scheduler는 UE의 DL port 수를 CSI-RS 리소스의 port 수로 계산한다. CSI 측정 설정이 없으면 1이다. 셀은 2T인데 UE는 1-port로 취급된다. | `lib/scheduler/config/ue_configuration.cpp:364`, `:632` |
 | 5 | 1-port UE의 PDSCH에는 프리코딩 정보를 붙이지 않는다. | `lib/scheduler/ue_context/ue_channel_state_manager.h:56` |
 | 6 | FAPI 변환에서 프리코딩 정보가 없는 PDSCH는 "omnidirectional" 행렬을 받는다. 이 행렬은 `make_one_layer_one_port(N, 0)`, 즉 `w = [1, 0, …]ᵀ`이다. | `lib/fapi_adaptor/precoding_matrix_mapper.cpp:95`, `lib/fapi_adaptor/precoding_matrix_table_generator.cpp` (`generate_pdsch_omnidirectional`) |
@@ -75,7 +75,7 @@ OCUDU에 다른 송신 방식이 있었다면 우회할 수 있었겠지만, 없
 
 ### 4.3 CSI-on 구성의 DL 4×1 캡처
 
-- `scripts/web_ui/index.html`에 기록된 실행: CSI-RS를 켠 상태에서 DL 4×1 `y=Hx` 5.27e-08, 무음 선언 없이 off-diagonal share 0.081.
+- `apps/dashboard/index.html`에 기록된 실행: CSI-RS를 켠 상태에서 DL 4×1 `y=Hx` 5.27e-08, 무음 선언 없이 off-diagonal share 0.081.
 - 측정한 것: CSI가 켜지면 OCUDU가 실제로 port 0 이외에도 신호를 싣고, 에뮬레이터가 그것을 정확히 합성한다.
 - **같은 실행에서 attach가 완료되지 않는다** (§2의 2단계). 그래서 UE 링크 품질 비교는 불가능하다.
 - MISO 관점: 조건 1은 성립하지만 조건 2가 불성립.

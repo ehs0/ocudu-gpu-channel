@@ -169,7 +169,7 @@ if [[ "${mode}" == "run" && "${channel_mode}" == "sionna" ]]; then
   [[ "${sionna_ready_seconds}" =~ ^[1-9][0-9]*$ ]] || usage_error "invalid Sionna ready timeout"
   [[ "${live_ready_event}" =~ ^[a-z0-9_]+$ ]] || usage_error "invalid live-ready event"
   # tcp://127.0.0.1 would be this namespace's own loopback; only a filesystem
-  # socket bound by the arena outside reaches the bridge in here.
+  # socket bound by the publisher outside reaches the bridge in here.
   [[ -z "${sionna_position_endpoint}" || "${sionna_position_endpoint}" == ipc:///* ]] || \
     usage_error "Sionna position endpoint must be ipc://"
 fi

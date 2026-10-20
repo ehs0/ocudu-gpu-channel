@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -25,9 +26,38 @@ from typing import NoReturn
 
 PLACEHOLDER_RE = re.compile(r"\$\{[A-Z0-9_]+\}|@[A-Z0-9_]+@")
 
+# X6 (docs/reports/experiments/x6-gnb-realtime-traffic/README.md): the OCUDU gNB's lower-PHY thread
+# profile. Unset (the default) renders the fixture untouched, so every run so
+# far is unchanged. `single`, `dual` or `triple` append
+#   expert_execution.threads.lower_phy.execution_profile
+# (the key the gNB's own YAML writer emits, apps/units/flexible_o_du/split_8/
+# helpers/ru_sdr_config_yaml_writer.cpp). Caveat measured on 2026-10-01: with
+# device_driver zmq, OCUDU a1916edc overrides this to `blocking` after parsing
+# (ru_sdr_config_cli11_schema.cpp autoderive_ru_sdr_parameters_after_parsing)
+# and maps blocking to the worker manager's `sequential` profile
+# (ru_sdr_config_translator.cpp fill_sdr_worker_manager_config), so the knob is
+# accepted by the dry run but changes nothing until the gNB source is patched.
+# The gate records the "Lower PHY in ... mode" line the gNB prints, so a run
+# shows which profile it really had.
+LOWER_PHY_PROFILE_ENV = "OCUDU_NATIVE_GNB_LOWER_PHY_PROFILE"
+LOWER_PHY_PROFILES = ("single", "dual", "triple")
+# X6: the gNB's main worker pool size, `expert_execution.threads.main_pool.nof_threads`
+# (apps/services/worker_manager/worker_manager_cli11_schema.cpp). OCUDU sizes the
+# pool as min(cells*(dl_ant+ul_ant+1)+2, avail_cpus-3) = min(5, avail_cpus-3)
+# (worker_manager.cpp get_default_nof_workers), so the GB10 pin to five cores
+# (platform-profiles.json gnb 5-9) leaves TWO workers. In ZMQ mode every DU-high
+# cell/UE executor is a `sync` strand over that pool (du_high_executor_mapper.cpp
+# is_sync = !rt_mode), and the gdb dump of the 2026-10-01 wedge (run
+# 20261001T115125Z) shows both workers parked in sync_task_executor::defer (RLC
+# buffer-state update from an F1-U DL PDU; a timer handler) while phy_worker waits
+# in sync_task_executor::execute for the slot indication: the pool starves itself
+# and the lock-step relay stops. Unset = fixture untouched; a positive integer is
+# written as nof_threads (5 restores the unpinned default).
+MAIN_POOL_THREADS_ENV = "OCUDU_NATIVE_GNB_MAIN_POOL_THREADS"
+
 # One entry per UE. The ZMQ port pairs and the broker device ids must agree with
-# examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml; the IPv4 addresses must
-# agree with examples/configs/ran/open5gs/subscriber-multi-ue.csv. Each UE gets its
+# use_cases/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml; the IPv4 addresses must
+# agree with use_cases/configs/ran/open5gs/subscriber-multi-ue.csv. Each UE gets its
 # own network namespace because srsUE moves its TUN device into the namespace
 # named in [gw], and two UEs sharing one namespace would collide on
 # ip_devname.
@@ -74,10 +104,10 @@ UES = (
 # models the gate asserts (each UE on its own channel, so a per-UE regression
 # cannot hide behind a shared one).
 LAYOUTS = {
-    2: ("examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml",
-        "examples/configs/ran/open5gs/subscriber-multi-ue.csv", ("near", "far")),
-    4: ("examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue-quad.cuda.yaml",
-        "examples/configs/ran/open5gs/subscriber-multi-ue-quad.csv", ("near", "mid1", "mid2", "far")),
+    2: ("use_cases/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue.cuda.yaml",
+        "use_cases/configs/ran/open5gs/subscriber-multi-ue.csv", ("near", "far")),
+    4: ("use_cases/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue-quad.cuda.yaml",
+        "use_cases/configs/ran/open5gs/subscriber-multi-ue-quad.csv", ("near", "mid1", "mid2", "far")),
 }
 
 
@@ -117,8 +147,32 @@ def write_new(path: Path, text: str) -> None:
         handle.write(text)
 
 
+def expert_execution_block() -> str:
+    """The expert_execution section the X6 environment knobs ask for.
+
+    Empty when neither OCUDU_NATIVE_GNB_LOWER_PHY_PROFILE nor
+    OCUDU_NATIVE_GNB_MAIN_POOL_THREADS is set, so the default render is
+    byte-identical to what it always was.
+    """
+    profile = os.environ.get(LOWER_PHY_PROFILE_ENV, "")
+    pool = os.environ.get(MAIN_POOL_THREADS_ENV, "")
+    if not profile and not pool:
+        return ""
+    lines = ["", "# X6 knobs (OCUDU_NATIVE_GNB_LOWER_PHY_PROFILE / OCUDU_NATIVE_GNB_MAIN_POOL_THREADS).",
+             "expert_execution:", "  threads:"]
+    if profile:
+        if profile not in LOWER_PHY_PROFILES:
+            fail(f"{LOWER_PHY_PROFILE_ENV} must be one of {LOWER_PHY_PROFILES}, got {profile!r}")
+        lines += ["    lower_phy:", f"      execution_profile: {profile}"]
+    if pool:
+        if not pool.isdigit() or int(pool) < 1 or int(pool) > 64:
+            fail(f"{MAIN_POOL_THREADS_ENV} must be an integer in 1..64, got {pool!r}")
+        lines += ["    main_pool:", f"      nof_threads: {int(pool)}"]
+    return "\n".join(lines) + "\n"
+
+
 def render_gnb(source: str, log_dir: Path) -> str:
-    """Identical to the 1x1 gNB rendering.
+    """Identical to the 1x1 gNB rendering, plus the optional X6 expert_execution knobs.
 
     One cell serves both UEs, so nothing about the gNB changes with UE count.
     """
@@ -153,6 +207,11 @@ def render_gnb(source: str, log_dir: Path) -> str:
         "  ngap_filename: /tmp/gnb_ngap.pcap\n": f"  ngap_filename: {log_dir / 'gnb_ngap.pcap'}\n",
     }.items():
         rendered = replace_exact(rendered, old, new, 1, "gNB run artifact path")
+    block = expert_execution_block()
+    if block:
+        if "expert_execution:" in rendered:
+            fail("gNB fixture already carries an expert_execution section; reconcile explicitly")
+        rendered += block
     return rendered
 
 
@@ -301,7 +360,7 @@ def main() -> int:
     log_dir = safe_directory(args.log_dir, "log directory")
 
     gnb_source = read_regular(
-        repo_root / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture"
+        repo_root / "use_cases/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml", "gNB fixture"
     )
     topology_source = read_regular(
         repo_root / topology_path, "multi-UE topology"
@@ -310,7 +369,7 @@ def main() -> int:
         native_root / "src/ocudu/docker/open5gs/open5gs-5gc.yml", "pinned OCUDU Open5GS template"
     )
     srsue_source = read_regular(
-        repo_root / "examples/configs/ran/srsue/srsue_zmq_multi_ue.conf.in", "srsUE template"
+        repo_root / "use_cases/configs/ran/srsue/srsue_zmq_multi_ue.conf.in", "srsUE template"
     )
     subscriber_source = read_regular(
         repo_root / subscriber_path, "subscriber fixture"

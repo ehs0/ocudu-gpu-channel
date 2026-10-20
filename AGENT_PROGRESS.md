@@ -1,600 +1,306 @@
 # Progress
 
-**This file is the live-state record for the workspace. Historical progress through 2026-08-16 is preserved in [`archive/progress/AGENT_PROGRESS-2026-08-16.md`](archive/progress/AGENT_PROGRESS-2026-08-16.md).**
+> **Entry rules:** One bullet per meaningful change; at most two sentences and 40 words. Record outcomes, decisive checks and blockers; link details and omit repeated context. Apply the [harness rules](AGENT_HARNESS.md#progress-entries) before finishing.
+
+## Current Objective
+
+Project review and corrections are complete; [validation and remaining limits](docs/reports/validation/project-review-20261016.md) are recorded. Git records the commit and publication state.
 
 ## Repository State
 
-- [2026-10-19 single-cell benchmark, follow-up user requests] Scene set
-  narrowed to `sutd_1gnb` (SUTD campus, one gNB on Building 2); UE counts
-  1/2/4 (records exist up to 16); UE type static / pedestrian (1.4 m/s); UE
-  placement uniform / hotspot (2 centres, sigma 8 m); 3D view coloured by
-  Sionna's radio-material preview colours with eps_r/sigma at DL/UL in the
-  mesh (`channel_trace.radio_materials`). Attach channel (H_attach) is now a
-  flat single tap per link with equal gain per direction: with the multipath
-  attach channel, PRACH near-far masking left one UE undetected and srsUE
-  stalled on the retry RAR (sessions g12, g15-g17). Web UI and API reworked
-  to Test 1 / Test 2: request field `tests: [{scheduler}, {scheduler}]`
-  (definitions.TEST_FIELDS, extensible), runs `NN-test1/2`, audit and
-  comparison per test, same scheduler on both sides = A/A control.
-  `tests/test_single_cell_benchmark.py` 29/29. Live on sutd_1gnb: 1 UE
-  pedestrian/uniform `20261017T085732Z-g11` and 2 UE static/hotspot
-  `20261017T092854Z-g14` STRICT PASS (before the attach-channel change, not
-  yet in scene_validation.json, whose `validated` list is empty); 4 UE
-  pedestrian/hotspot `20261017T110751Z-g18` attached but UNQUALIFIED (ue0/ue2
-  RRC release during the measurement; suspected two-ray flat fade at their
-  positions). Open decision for the user: attachability check of UE positions
-  vs lower noise floor vs accept. The Test 1/Test 2 code has not run live yet;
-  the control server on 8092 is stopped (user request), session g19 was
-  stopped cleanly (STOPPED, no leftover processes).
+- Local presentation artifacts remain in ignored `slides/`; the directory is also excluded from uploads and Docker builds. Vocabulary review is complete, with 80 definitions and six unresolved wording or protected-name records.
 
-- [2026-10-17 single-cell scheduler benchmark, user request (spec
-  SINGLE_CELL_SCHEDULER_BENCHMARK_IMPLEMENTATION.md; repo path is
-  `examples/scheduler_benchmark/`, not the spec's `use_cases/`)] One gNB, N
-  srsUEs, policies run sequentially as cold starts on one frozen channel and
-  traffic trace; web UI with Start New Benchmark / Stop / Reset. Uncommitted on
-  branch `scheduler_benchmark` (no commit requested). Broker (opt-in, untagged
-  callers unchanged): `batch_commit` `take_effect_at_sample`/`tag`/`noise_epoch`,
-  serve-call split at the target sample, `event=control_sample_applied` and
-  `event=noise_epoch` written with one write(2), `link_clock` query,
-  `ChannelProcessor::reset_receiver_noise` (CUDA; CPU returns false); new
-  `tests/test_sample_indexed_control.cpp`; ctest 13/13 in
-  `builds/ocudu-gpu-channel-single-cell` (separate build dir; the production dir
-  was untouched). New Python: channel_trace, traffic_trace, replay_bridge,
-  radio_traffic, render_single_cell, single_cell_analyze, validation,
-  single_cell_runner, controller, scene_registry (robot_ring + SUTD adapters),
-  scene_validation.json; generalized make_scenario/definitions; server.py
-  `--control` (legacy page moved to legacy.html, legacy mode unchanged);
-  new index.html; run-single-cell-{policy,policy-inner,scheduler-benchmark}.sh.
-  Legacy two-cell gate files untouched. `tests/test_single_cell_benchmark.py`
-  24/24; full Python suite passes except 6 robot_fight modules that fail on a
-  clean tree too (no pytest in system python). Container wrapper
-  `/home/dev/ocudu-setup/run-isolated-single-cell.sh` (outside repo). Live,
-  STRICT FAIR COMPARISON: PASS, mixed, 60 s + 5 s warm-up, seed 1: robot_ring
-  4 UE `20261017T050410Z-g2` (5200/5200 updates on target per run, 0.41x real
-  time, DL RR 37.09 / QoS 34.00 Mb/s), robot_ring 2 UE `20261017T054207Z-g6`,
-  SUTD 2 UE `20261017T053436Z-g5`; archived under
-  `<native-root>/results/single-cell-scheduler-benchmark/archive/`. Replace while
-  measuring, Stop (0 leftover processes) and Reset verified live. ABBA 4 UE
-  `20261017T055712Z-g9` also PASS: paired RR - QoS DL +2.04 Mb/s, but the A/A
-  control differs by -1.34/-1.65 Mb/s, so one seed does not establish the
-  throughput effect (README records this). N=1 and 8 not
-  validated. Control UI ran on 127.0.0.1:8092 (`--allow-unvalidated --archive`).
+- README contributor credits include Quanlong Zhao; Markdown rendering and whitespace checks passed on RTX.
 
-- [2026-10-01 scheduler benchmark, user request] Two OCUDU cells (gnb0 `rr`,
-  gnb1 `qos`, or swapped) with two srsUEs each, fed the same Sionna batch by
-  bridge fan-out (method "나": the policy is bound at gNB start-up, so
-  alternating 1-s periods were infeasible). New, all opt-in: bridge
-  `--fanout-control-endpoint`, `--timeline grid`, `--hold-until-file`,
-  `--profile-digest`; `examples/scheduler_benchmark/` (seeded scenario,
-  definitions, traffic, analyzer, campaign, gNB metrics recorder, UI server
-  and page on port 8090); `examples/scheduler_benchmark/render-scheduler-benchmark-configs.py`
-  and `run-ocudu-scheduler-benchmark{,-inner}.sh`; container wrappers
-  `/home/dev/ocudu-setup/run{,-isolated}-scheduler-benchmark.sh`;
-  `tests/test_scheduler_benchmark.py`. 120 related unit tests and the renderer
-  self-test pass. Eight live `mixed` runs (seeds 1, 2); campaign
-  `20261001T082912Z`..`084126Z` = seed 1 and 2 swap pairs + seed 1 A/A, 120 s
-  each. Same-seed channel: positions and tap structure identical at every grid
-  point, 89-98% of batches bit-identical, rest within 0.0038 dB / 0.0005 rad.
-  Cell-bias-free effects (qos − rr, mean of two seeds, ±95%): DL PRB
-  utilization +0.95 ± 0.11 points, decision time +3.6 ± 0.3 µs, bulk UE worst
-  DL wait per second +2.0 ± 1.1 ms; aggregate DL −0.14 ± 0.71 Mb/s, Jain
-  −0.002 ± 0.007, interactive (5QI 7) UE p99 delay −43 ± 55 ms and PDB
-  violation −6.7 ± 8.0 points are not resolved. The A/A run shows a real cell
-  bias (cell a bulk p99 +244 ms, aggregate DL −0.84 Mb/s), so single-run CIs
-  must not be read as policy effects. Radio speed 393-654 slots/s varies run
-  to run. Run `083826Z` lost cell a after 60 s to an srsUE abort
-  (`rlc_am_nr.cc:1776`); the gate now fails on an srsUE crash. Committed on
-  `integration-0928` at the user's request, not pushed; the container
-  wrappers under `/home/dev/ocudu-setup` are outside the repository.
+- Comprehensive RTX validation is complete; launcher fixes are committed as `fb07a67` and dashboard corrections as `2b31656`. Five live configurations passed connectivity; timing misses remain; see the [report](docs/reports/validation/full-validation-20261009.md).
 
-- [2026-10-01 renewed Web inspection] The 900-second run `20261001T042042Z`
-  expired normally and cleaned up its Web service. Started the same one-cell,
-  one-gNB, two-UE robot-fight runtime as `20261001T043626Z` for a 3600-second
-  inspection window. `http://127.0.0.1:8080` returned HTTP 200 after startup;
-  leave the runtime to its timed cleanup at approximately 05:36:26 UTC.
+- Current files and the generated site are sanitized; measurements and runtime behavior are preserved. Cleanup is committed as `b02687a`; existing commits retain their original content (`validation/text-redaction-20261009/`).
 
-- [2026-10-01 live one-cell/two-UE inspection] Started run `20261001T042042Z`
-  with a 900-second inspection window and Web UI at `http://127.0.0.1:8080`.
-  Both UEs initially completed random access, RRC, PDU session and 3/3 gateway
-  pings. UE0 first lost PHY synchronization at 04:22:56.140 UTC during fight
-  13, retried PRACH without completing a second attach, and the gNB released
-  C-RNTI `0x4601` at 04:23:04.697 after its RLF timer reported maximum
-  consecutive undecoded CSI. Fight 14 records UE0 command gaps and 0.7 seconds
-  stale control; from fight 15 UE0 has no brain result or commands while UE1
-  remains active. The gate is configured to stop after 900 seconds and each
-  fight after 20 seconds; the runtime is intentionally left to its timed cleanup.
+- Whole-project cleanup is validated and committed: obsolete source stubs and generated clutter removed, current guidance repaired, upload exclusions shared, and unused diagram styles trimmed. Evidence: `validation/cleanup-20261009/`.
 
-- [2026-09-30 current container setup complete] Prepared and live-validated the GB10/aarch64 container for one-cell/two-robot execution. The pinned native stack, repository-locked two-UE srsUE patch build, CUDA channel broker, Sionna RT and robot environments are under `/home/dev/ocudu-spark`, `/home/dev/venvs` and `/home/dev/ocudu-setup`. Run `20260930T114817Z` passed both UEs RRC/PDU/ping checks and completed 16 radio fights with zero sequence gaps, queue overflows and ZMQ errors. Use `sudo bash /home/dev/ocudu-setup/run-isolated.sh`; details are in `/home/dev/ocudu-setup/README.md`.
+- Root milestone cleanup is validated and committed: six forwarding files removed, current links updated, and full historical records retained.
 
-- [2026-09-30 R7 campaign complete] Completed the requested continuation:
-  eight radio arena gates, nine requested radio-probe conditions and 96 local
-  impairment fights. Final report docs/robot-fight-r7.md, four static figures,
-  and comparison/probe/robustness/audit JSONs were published in19667aa to
-  MinwooEun/ocudu-gpu-channel:integration-0928; remote tip verified after push. Scope is measured control benefit
-  and its failure envelope, not strict radio deadlines or general stability.
-- [Corrected radio sweep] Explicit sudo forwarding and actual rendered-config
-  auditing account for all nine conditions: baseline and AWGN34/30/27/24,
-  SR40 and HARQ-retx1 passed; K2=8 and K1=7/K2=8 were rejected by pinned gNB
-  a1916edcdb (both supported ranges1..4, defaults4). Original sweep stopped at
-  K2 exit2; corrected-ran resumed remaining conditions. Sweep now records native
-  config failures and continues, while wrapper/GPU refusals stop it. Actual
-  topology noise, RX wiring, sample rates and both gNB settings were checked.
-  AWGN medians remain near16ms; SR40 gives19.5ms; resolved losses0. Unresolved
-  requests and late bursts are retained; median stability is not a tail bound.
-- [Fresh fixed-parameter repeat] run_r7_repeat.sh ran300s per side, new seeds9000,
-  jitter0, both plain brokers and the existing200us-request MPS hog. Comp0 had
-  22 complete fights, comp1 had28; matched seeds9000–9021 yield44 fights,
-  comp33/plain10/draw1 and comp8/plain13 falls. RTT per-fight-p50 medians37.5/
-  37.6ms. Both actual policies, seeds, speed0.7 and shared gains were verified
-  for every complete pair. The earlier zero-comp-fall result does not generalize.
-  Last run finished08:25:56UTC, session68465 exited0, GPU processes empty08:26:16.
-- [Local robustness] 96/96 complete real-time UDP/MuJoCo fights: baseline
-  comp20/plain3/draw1, outage100ms21/2/1, outage300ms19/5/0, loss10%21/3/0.
-  All impairment runs had actual drops. One compensated fall occurred under
-  the300ms condition; no blackout immunity or blackout-specific gain claimed.
-  Ideal-delay500ms blackout made both policies fall. Source/raw artifacts remain
-  under results/robot-fight/r7-robustness-20260930T075317Z; no Spark load for these.
-- [Reproducibility and validation] Added small-artifact collection preserving
-  failures/incomplete fights, configuration and console-lifecycle auditing,
-  supported local report paths, probe/fixed-repeat launchers and plot generators.
-  23 focused tooling tests passed (auditor16, collector2, sweep2, launcher3),
-  plus Python compilation, shell syntax and diff checks. Figures visually reviewed.
-  All eight arena runs show one observed attach/RRC/PDU perUE and no console
-  reconnection markers. Deployed srsUE eea87b1d8 NR sync callbacks are empty;
-  internal logs remain unscanned and continuous PHY sync is not certified.
-  Strict realtime was disabled, starvation counters nonzero. No UE/gNB source
-  edits. Spark int0928/Fable tree preserved; run artifacts under
-  /workspace/gpuch/r7-validation-results and native results. Local copies:
-  results/robot-fight/r7-live and r7-corrected. No R7 batch remains running.
+- Documentation migration is complete in five stages: Markdown site, current guidance, reports/history, compatibility routing and RTX validation. The structure and documentation commits are published on `origin/main`.
 
-- [2026-09-30 publication checkpoint] User requested publishing all current
-  work to MinwooEun/ocudu-gpu-channel. Checkpoint fcbcb6e was pushed and
-  verified at remote integration-0928; local branch tracks minwoo/integration-0928.
-  Publication preserves
-  the existing contributor history and Fable edits. Includes R6c/R7 tools,
-  controller and launcher fixes, Sionna profiling, tests and result summaries.
-  Spark publication-check mirror: robot suite 39 passed/5 skipped; Sionna
-  adapter/position/UI suite 83 passed (13 subtests). Raw logs and videos remain
-  outside Git. This checkpoint is not a claim that all R7 conditions are done.
+- Approved structure migration is published: `use_cases/`, runtime apps, grouped integrations/tests, Python packaging and documentation navigation. Validation evidence is in `validation/structure-20261009/`.
 
-- [2026-09-30 R7 initial continuation, historical checkpoint] User requested continuing Fable's
-  R7 rather than further Sionna profiling. Recovered 192 existing local fights
-  and the completed 11-run radio-probe batch. Audit under
-  `results/robot-fight/r7-prep-audit/` proves eight AWGN/RAN labels invalid:
-  inherited overrides were erased by sudo; all actual AWGN values are 40 dB
-  and requested RAN overrides absent. Original artifacts preserved.
-- [2026-09-30 R7 fixes] Atomically snapshot controller state and its timestamp
-  to avoid RX races in prediction age; regression covers both clock modes.
-  Added `RF_POLICY_0/1` and policy/link-estimate summaries to the arena launcher,
-  plus `run_r7_spark.sh` with explicit native override forwarding, rejection of
-  inherited overrides, unique output tags and gate exit preservation. New
-  comparison analyzer excludes incomplete/lockstep/non-real-time fights and
-  pairs common seeds across side swaps. No UE/gNB source changes.
-- [2026-09-30 R7 validation batch completed] Isolated source checkout on Spark is
-  `/workspace/gpuch/r7-validation-0930`, native build
-  `/workspace/ocudu-spark/builds/gpuch-r7-0930-release`; Fable's `int0928` is
-  untouched. Spark controller/balance/renderer tests 14/14 pass. Fixed-code
-  workstation delay60ms/side swap at seeds7000–7011 reproduced 12/12 wins for
-  compensated control on each side. Live batch in
-  `/workspace/gpuch/r7-validation-results/batch.sh` runs baseline and symmetric
-  GPU-contention comp0/comp1 plus same-policy controls, 180s each. All six
-  gates passed and batch.log records BATCH_DONE. Matched-seed side swaps:
-  baseline comp15/plain3/draw2 (20 fights); contention comp23/plain1 (24).
-  Same-policy controls: plain18 fights,13 falls; comp7 fights,0 falls.
-  Summaries are promoted to docs/robot-fight-r7-results.json. Strict realtime
-  was disabled; this does not qualify zero-starvation radio timing or hours
-  of uninterrupted connectivity. AWGN/RAN conditions were still unvalidated at this checkpoint; the completed
-  follow-up above supersedes that state.
+- Checkout: `main` in `${HOME}/Documents/GitHub/ocudu-gpu-channel`. PRs #2–#6 are integrated through normal merges; Git records the current commit and publication state.
+- Integration and cleanup were published on 2026-09-14. Normal merges `22a51ba` and `e59e095` retain contributor tips `066a702` and `e31fe51`; no history rewrite or release tag.
+- Only this channel worktree and local `main` remain. Origin branch cleanup was verified on 2026-09-14; contributor remotes `ehs0` and `fork` remain.
+- Agent-file updates: concise harness/progress, full historical archive, short-entry rules and the user-requested mission reset. Pre-existing runtime/publication notes are preserved in the archive and summarized below.
+- Integration checks used isolated RTX 5090 workspace `validation/pr-merge-20261008`; existing radio services were not changed. September PIDs and inspection windows are historical.
+- Separate UE checkout: `${HOME}/Documents/GitHub/srsran-sa-recovery`, last recorded branch `fix/sa-ra-recovery-5090`, tested source `daa167ae3443b046ce560df646c7dc5f17e5c1dd`, report `cb58e6085`. Its publication status has not been rechecked.
 
-- Current work (2026-09-30, supersedes the September 14 checkout/runtime notes
-  below): `/home/minwoo/ocudu-work/ocudu-integration`, branch `integration-0928`,
-  base `a9009a6`. User explicitly authorized Sionna generation profiling while
-  Fable continues R7, and parallel review. R7 brain/fight/native/renderer and
-  scenario edits were preserved. Spark `int0928` remains its older dirty tree;
-  profiling ran only in `/workspace/gpuch/sionna-profile-0930`, never by syncing
-  or resetting that active tree. R7 probe batch had completed all 11 gate runs
-  by 14:48 SGT; the baseline-only table is not a full R7 analysis.
-- [2026-09-30 profiling] Added opt-in `--profile-timing` generation stages to
-  `scripts/sionna_rt/run_bridge.py` and `profile_replay.py` for recorded-position
-  diagnostics. Existing solve/control timing semantics remain intact. Output
-  includes per-round stats, environment/version/source hashes and per-sample
-  coefficient fingerprints. Host stages do not force GPU synchronization.
-- [2026-09-30 robustness] Optional `Paths.vertices` evaluation was outside its
-  exception handler. Moved it inside; a geometry-build failure disables only
-  visualization and leaves profiles intact. Regression covers missing geometry,
-  raised accessor, unchanged channel output and no retry. No UE/gNB source was
-  edited. User's local-patch-only requirement is recorded in the harness.
-- [2026-09-30 validation] Spark adapter/position/UI tests 83/83 pass; bridge
-  `--dry-run --iterations 4 --profile-timing` emits per-group stage fields.
-  R4b recorded-position replay (GB10, no radio/broker, 40 positions x2 at 10 Hz)
-  measured 23.0 ms mean / 21.9 ms median / 79.5 ms max; historical live mean
-  87.8 ms is not an equivalent workload. Disabling geometry did not demonstrate
-  a mean improvement. Evidence and limitations are in `docs/sionna-integration.md`
-  and local `/home/minwoo/ocudu-work/sionna-profile-0930/`. Included in the
-  September 30 publication checkpoint.
-  Next diagnostic: use this opt-in instrumentation during an isolated live
-  R4b-equivalent run after coordinating GPU use with R7; no live speedup or
-  40 ms deadline guarantee has been established.
+## Current Capabilities and Limits
 
-- Branch cleanup (2026-09-14): only `main` remains as a local branch and on the user-owned `origin` repository. Removed four local branches and three origin branches after verifying every tip is an ancestor of main. Contributor remotes `ehs0` and `fork` remain configured; their repositories and remote-tracking references were not deleted. Exact removed tips are recorded under `.git/branch-cleanup-20260914T081423Z.json`.
-- Publication (2026-09-14): user explicitly requested a push. Fetched `origin/main`, confirmed it had no new commits, and successfully pushed `f51c3fd..0113ddd` to `zhouyou-gu/ocudu-gpu-channel:main`. The integration, retained contributor history, cleanup record and README edit are now published. This documentation follow-up corrects the current guide/reference publication status; no tag or release was created. Runtime qualification limits are unchanged.
-- README cleanup (2026-09-14): focused prose edit on current-folder `main`; Status is now a 91-word capabilities/validation/limits summary. All 12 comparison rows, eight command blocks, section headings, contributor credits and copyright remain unchanged. Detailed channel/update limits and revision-specific validation results remain linked or summarized. Documentation-only change; remote runtime and source are unchanged.
-- Current checkout: `main` in `/Users/charles_gu/Documents/GitHub/ocudu-gpu-channel`. User explicitly authorized merging everything here and automatically resolving conflicts. Integration `0e0a6c3` was merged by `22a51ba`; retained local launcher tip `5f55bb7` was merged by `e59e095`. The contributor tip `066a702` remains an ancestor. The merge was initially local; the later user-authorized push is recorded above. `origin/main` was fetched at `f51c3fd` before the merge.
-- New merge source `e59e095` passes all 90 Python tests, both frontend regressions and shell syntax on the RTX 5090 host. Channel/OCUDU/UE source is unchanged from the integrated revisions. Moving two-UE traffic and strict zero-miss real-time qualification remain failed; see `docs/sionna-integration.md` and `docs/main-merge-validation.md`.
-- Existing edits were backed up under `.git/merge-backups/main-20260914T075710Z` and stash `5021c39660e39aab3b5dd9784a8c2f4e399300aa`. Latest pending workflow notes and the historical merge plan are carried into this checkout. The old English UI and hold/keepalive edits are represented by the newer integrated implementations; their exact original bytes remain in the backup and stash. The obsolete integration worktree was subsequently archived and removed during the authorized cleanup below; new channel work belongs in this folder. The separate UE repository remains intact.
-- Validation uses only `~/ocudu-gpu-channel-workspace/validation/main-merge-20260914`; existing runtime services were not changed, restarted or stopped by the merge. Earlier live-demo expiry and PID notes below are historical and must not be treated as a current service inventory.
+- Rank-1 2×1/4×1 DL MISO and 1×2/1×4 UL SIMO work through the CUDA broker with a one-port srsUE. Synthetic captures prove multi-branch computation; the tested live DL radiates only gNB port 0, so live DL evidence is a scalar check.
+- Identical and gain/phase-only matrix updates preserve CPU/CUDA history. Delay/layout changes reset history and warmup. Control delays are limited to 1023 samples with a 1031-sample device ring; dynamic CUDA matrices require the device-channel route.
+- Sionna RT integration and one multi-gNB dashboard are merged. Delivery freshness uses two seconds; scheduler freshness remains five seconds. Connected, stale, empty and disconnected feeds are distinct.
+- **Continuous moving two-UE traffic and strict zero-miss real-time qualification remain failed.** Stationary connectivity and bounded fresh-attachment recovery pass only in the documented configurations.
+- Geometry changes are not seamless; full NR RLM, seamless handover and same-PRB MU-MIMO remain unqualified. OAI rank-2 gates and contributor evidence are now merged; srsUE remains rank-1, and live OAI trials were not repeated during integration.
+- CMX500/X310 bridge tools and contributor attachment evidence are merged, but uplink timing remains late and IP traffic untested. Optional `RU-lite` remains unimplemented; corrected static two-cell connectivity passes while strict real-time qualification remains failed.
+- Attached fractional-TDL hardware claims still require a common guard or a validated streaming filter: the centered eight-tap filter can zero-fill up to three future samples at block boundaries. Burst operation and X310-absolute updates need finite-tail, off-air advance and update interfaces.
 
-- Folder cleanup (2026-09-14): only the current channel worktree on `main` remains registered. Removed sibling `ocudu-sionna-history-fix` plus local `build/`, `build-release/`, `build-review/`, `build-review-main-20260914/`, `Testing/` and `.playwright-mcp/`. Verified full archives and a per-file SHA-256 manifest are stored in `.git/cleanup-backups/20260914T080717Z`; `.git/cleanup-backups/latest.txt` points there. All original commit history remains; obsolete branch names were subsequently removed as recorded above. Source, references, writing, the separate UE repository and remote runtime were not removed.
+## Validation Record
 
-### Earlier repository states (historical)
+The latest row covers combined-tree checks on RTX 5090; other rows are historical. Synthetic broker checks do not establish live-radio or hardware qualification.
 
-- Documentation update (2026-09-14): integration HEAD `0e0a6c3f840cd69b01b551ccd4573168ef0646ec` in `/Users/charles_gu/Documents/GitHub/ocudu-sionna-history-fix`. The README now owns normalized credits for project lead Zhouyou Gu, Minwoo Eun (`@MinwooEun`) and Hyunsoo Lee (`@ehs0`). Current behavior and portable UE results are in `docs/sionna-integration.md`; implementation tested at channel/Web `b07df66` and UE `daa167ae3` is unchanged. Documentation commit only; no push or main merge.
+| Scope / revision | Recorded result | Limit |
+|---|---|---|
+| Project review, 2026-10-16 | CPU/CUDA 13/13 each; GPU 9/9; 221 Python tests; frontend, six browser views, 99 shell scripts and strict documentation checks passed | Three Python skips; no new live-radio, hardware or Docker qualification; [report](docs/reports/validation/project-review-20261016.md) |
+| Full validation, 2026-10-09 | CPU/CUDA 12/12 each; GPU 9/9; 222 Python tests; frontend, Docker, packaging, documentation and five live connectivity configurations passed | Live runs recorded 2–11 starvations; OAI/CMX/GB10/Orin untested; [report](docs/reports/validation/full-validation-20261009.md) |
+| Text cleanup, 2026-10-09 | Strict build; 114 fragment routes, 71 evidence files, 22 diagrams, 18 browser views; 23 tests and 19 subtests passed | Exactly 26 evidence path fields normalized; measurements preserved; existing commits unchanged |
+| Whole-project cleanup, 2026-10-09 | Strict documentation and browser checks; 71 evidence hashes, 8 pixel-identical diagram views, 98 shell scripts, transfer/Docker checks, 4 tests and 19 subtests passed | Organization and upload filtering only; runtime and live-radio tests unnecessary and not repeated |
+| Documentation migration, 2026-10-09 | Strict build, 114 fragment routes, 71 evidence hashes, desktop/mobile review; CPU/CUDA CTest 12/12 each, Python 211 passed/3 skipped, frontend and synthetic walkthroughs passed | Documentation and exercised synthetic commands only; live qualification unchanged |
+| Structure migration, 2026-10-09 | CPU/CUDA CTest 12/12 each; GPU 9/9; Python 209 + 2 focused passed, 3 skipped; frontend, package, Docker and path checks; live rank-1 250/250 pings and matrix capture passed | Two live receive starvations; prebuilt radio images; native OAI/CMX/platform trials not repeated |
+| PRs #2–#6 integration, 2026-10-08 | CPU/CUDA CTest 12/12 each; GPU sequence 9/9; Python 208 passed + one new focused test, 3 skipped; both frontend checks; 98 shell scripts | No new live-radio, CMX, GB10 or Orin qualification |
+| Channel fixes `16af288` | CTest 12/12, Python 75/75, nine GPU stages, Node disconnect and shell checks passed; earlier extended CUDA sanitizer runs clean | Does not establish strict real-time operation |
+| Main merge `e59e095` | Python 90/90, both Node frontend regressions and shell syntax passed | Launcher/dashboard checks; no new radio qualification |
+| Cleanup `3bae52c` | Python 90/90, rank-1 renderer self-test, shell syntax and 61 documentation links/anchors passed | Executable behavior unchanged |
+| Stationary two-gNB/four-port + two-UE/one-port Sionna/CUDA | Both UEs passed 250/250 pings on PCI 1 / PCI 2 | 56 starvations fail strict runtime gate |
+| Moving SUTD, UE `daa167ae3`, 600.049 s | UE0: 58/58 perfect traffic batches; UE1: 19/58, with 36 zero-reply batches; final pings 10/10 and 0/10 | Continuous moving connectivity failed |
+| UE `daa167ae3` | 18/18 focused tests; controlled UE0 loss recovered with new PDU and 10/10 replies in 3.974 s; three UE1 PCI 2 returning sessions passed | One PCI 1 return failed 1/10; no uninterrupted-connectivity claim |
 
-- Current UE follow-up (2026-09-14): tested source `daa167ae3443b046ce560df646c7dc5f17e5c1dd`, report commit `cb58e60858e3b9a02f9e70ecdf7ce9c558314b6d` in `/Users/charles_gu/Documents/GitHub/srsran-sa-recovery`, branch `fix/sa-ra-recovery-5090`. This supersedes older active-runtime notes below. All 18 focused tests pass on RTX 5090; automatic UE0 controlled-loss recovery and UE1 cross-gNB fresh attachment pass, but uninterrupted moving UE1 traffic fails. Current run `20260914T071025Z` has one dashboard at http://127.0.0.1:19080 until about 16:10 Singapore. The integration remains `b07df66`; contributor history and existing edits are preserved. No push or main merge.
-
-- Unified RAN dashboard delivered (2026-09-14): integration commit `5c6cafd` changes only Web metrics ingestion, the existing RAN panel and tests. Repeat `--gnb-metrics-source ID=URL` for independent named feeds; `/api/status.ran_gnbs` contains per-gNB snapshots and legacy `ran` remains the first source. Single-endpoint callers remain compatible. Independent scheduler clocks retain the exact five-second threshold; empty/stale/disconnected feeds and HTTP failure do not falsely report current UE rows. RTX 5090 Python 79/79 and both Node frontend regressions pass; remote Chrome verified grouped live gNB0/gnb1, scene, ray/label toggles and antenna filtering. No GPU performance tests repeated.
-- Current user inspection URL is http://127.0.0.1:19080 only. Replaced Web PIDs 2253118/2253119 with unified Web PID 2294446; remote owner/PID files are `fix-validation/unified-ran-service.pid` and `unified-ran-web.pid`, log `unified-ran-live.log`. The owner stops its Web child when the existing test supervisor 2251879 exits. Port 19081 has no Web service. Radio container IDs, broker PID 2253065 and moving Sionna PID 2253117 were unchanged; two gNB subscriptions are connected but scheduler reports were stale at final inspection, displayed as historical. Staging service and remote test Chrome were stopped. Local tunnel PID 70319 stays running for user access. Existing agent-note edits remain uncommitted and preserved; contributor tip remains an ancestor.
-
-- Active moving user web session (2026-09-14, supersedes stationary session below): user requested the colleague’s original moving setup. Stopped only previous supervisor 2238563 and its owned stack, then restarted real two-gNB/two-UE OCUDU/Open5GS/Sionna/CUDA using unchanged `examples/configs/sionna/scenarios/sutd/multi-gnb-sutd.json` (no diff against contributor `066a702`) and requested 500 Hz update rate. New supervisor PID 2251879, remote log `validation/sionna-history-20260913/fix-validation/user-web-moving.log`, PID file `user-web-session.pid`; 3600-second inspection hold. Existing tunnel PID 70319 exposes dashboards 19080/19081, both HTTP 200. Moving positions and live backend application were verified; both UEs initially joined PCI 1. UE0 then released RRC, made seven further random-access attempts and had no second RRC/PDU success at inspection. Installed srsUE source `/src/srsran_4g/srsue/src/stack/rrc_nr/rrc_nr.cc`, `rrc_nr::ra_problem()`, leaves standalone RA failure handling as TODO; do not promise automatic reconnection. Leave this requested moving session running.
-
-- Active user web session (2026-09-14): real OCUDU two-gNB/four-port + two-srsUE/one-port + Open5GS + Sionna/CUDA restarted on the RTX 5090 using the stationary covered SUTD scenario. Both cells are up; dashboard RAN feeds report UE0 on PCI 1 and UE1 on PCI 2 with backend applied. The supervisor holds the stack for 3600 seconds for the user’s inspection; do not clean it up prematurely. Remote supervisor PID 2238563, recorded in `validation/sionna-history-20260913/fix-validation/user-web-session.pid`; log `user-web-session.log`. Both UEs passed fresh 5/5 pings; both local dashboard health checks returned HTTP 200. Local SSH tunnel PID 70319 (exec session 94439) exposes http://127.0.0.1:19080 (gNB0) and http://127.0.0.1:19081 (gNB1), recorded in the integration worktree’s `build-review-20260914/user-web-tunnel.pid`. This active session supersedes the earlier final-cleanup note.
-
-- Current execution (2026-09-13): `integration/sionna-history-fix` merges main `f51c3fd` with contributor `066a702` in an isolated worktree. Earlier state notes below are historical. The original checkout and its uncommitted edits are preserved.
-- Minimum history fix is complete after normal merge `3f4c234`; validation and scope are recorded in `docs/sionna-matrix-history.md`. This branch has not been published or merged into main.
-
-- Branch: `rank1-miso-simo`, branched from `a801155` and merged with upstream `main` at the
-  documentation-publication checkpoint. It carries the rank-1 MISO/SIMO implementation described below.
-- `main` and `origin/main` are aligned at the documentation publication checkpoint containing the MIMO/Sionna assessment and workspace-maintenance changes.
-- The published documentation change set contains the MIMO/Sionna assessment report, the Sionna live-channel plan, removal of the former `docs/superpowers/` documentation tree, the dated progress archive, and this reset live-state file.
-- A clean detached checkout of `origin/main` at `216a28b` configured and built successfully on macOS, and all eight registered CPU-backend CTest tests passed on 2026-08-17. CUDA was unavailable on the test host, so this validation did not exercise the GPU backend.
-- Remote inspection found no open or historical GitHub pull request and no branch other than `main`; there is currently no separate merge target.
-- The worktree contains the CMX500/X310/srsUE feasibility study and the multi-UE
-  attach fix: the four-UE topology, the generalised and network-hardened OCUDU
-  smokes, and the README milestone update.
-- srsUE for the live gates is built from `zhouyou-gu/srsRAN_4G` master
-  (`SRSRAN_4G_REPO`/`SRSRAN_4G_REF`), which carries the
-  `SRSUE_PRACH_PREAMBLE_INDEX` override. `src/broker.cpp` is unchanged.
-
-- CUDA OCUDU integration (2026-09-10 to 2026-09-25): the WG1 CUDA-accelerated OCUDU (`cuda_accelerated_ocudu`, pin `5830c9cb`) is integrated as a separate gNB build selected by an audited lock, without changing the CPU gNB or the channel emulator. Roadmaps and evidence: [`CUDA_MILESTONES.md`](CUDA_MILESTONES.md) (RTX 5090, C0-C7), [`SPARK_MILESTONES.md`](SPARK_MILESTONES.md) (DGX Spark GB10, S0-S6), [`JETSON_MILESTONES.md`](JETSON_MILESTONES.md) (Jetson AGX Orin, J0-J4). Tooling lives under `scripts/cuda/`; vendor-code changes are kept as reviewed patches in `scripts/cuda/patches/`. On GB10 the candidate patch plus the D8/D9 fixes gives live BLER/SINR parity with the CPU gNB on matched allocations; on Orin the D6/D7 layer gives the first full pass of the vendor PHY suite and an all-acceleration live attach.
-
-
-## Workspace Artifacts
-
-- Rank-1 MISO/SIMO and Sionna integration assessment: `docs/mimo-integration-report.html`.
-- Sionna live-channel plan: `docs/plans/sionna-live-channel.md`.
-- CMX500/X310/GPU/srsUE feasibility study: `docs/plans/cmx500-x310-srsue-feasibility.md`.
-- Four-UE interop topology: `examples/configs/topologies/ocudu_docker/topology.ocudu-docker.multi-ue-quad.cuda.yaml`.
-- Archived historical progress: `archive/progress/AGENT_PROGRESS-2026-08-16.md`.
-- The project source, tests, examples, deployment scripts, and primary technical reference remain in their existing locations.
+Reports: [integration guide](docs/history/milestones/sionna-integration-20260914.md), [merge validation](docs/reports/validation/main-merge-validation.md), [channel fix validation](docs/reports/validation/sionna-merge-fixes-validation.md), [metrics recovery](docs/reports/validation/metrics-recovery-validation.md), and [rank-1 results](docs/history/translations/ko/rank1-feasibility-report.md).
 
 ## Completed Changes
 
-- [2026-09-14 credit publication] User authorized publishing the Yonsei affiliations (`4150733`), Jihong Park steering credit (`d32f3ea`) and normalized names/affiliations (`a0774c9`) to origin main. Pre-push fetch confirmed three local commits and no remote-only commits. This progress record accompanies the credit-update push; no runtime files, contributor history or release tags changed.
-- [2026-09-14 credit normalization] Standardized current README/reference bylines as Name (Affiliation); the authoritative table now has a separate affiliation column and consistent linked names. Zhouyou Gu and Jihong Park use SUTD, expanded to Singapore University of Technology and Design in the table; Minwoo Eun and Hyunsoo Lee use Yonsei University. Confirmed Jihong Park’s current affiliation from his official SUTD profile (https://www.sutd.edu.sg/profile/park-jihong/) and linked it without inventing a GitHub handle. Synchronized the integration guide; roles, contribution descriptions, emulator comparison, commands and Git authorship are unchanged.
-- [2026-09-14 steering credit] Added “Steering: Jihong Park” immediately after Zhouyou Gu’s project-lead credit in the README and technical-reference header/footer. Added the steering role directly after the project lead in the authoritative credits table and synchronized the integration guide. No affiliation or GitHub profile was inferred; existing contributor roles and Git authorship remain unchanged. Targeted diff and whitespace checks passed.
-- [2026-09-14 contributor affiliations] Added the user-confirmed Yonsei University affiliation for Minwoo Eun and Hyunsoo Lee to the README introductory credits and authoritative contributor table, technical-reference header/footer and current integration guide. Roles, contribution descriptions, GitHub profiles and original Git author metadata are unchanged. Checked the targeted diff and Git whitespace; no runtime or test changes.
-- [2026-09-14 obsolete branches] Removed local `ehs0-sionna-rt-integration` (`5f55bb7`), `integration/sionna-history-fix` (`0e0a6c3`), `minwooeun-rank1-miso-simo` (`3fdc1e6`) and `review-fixes` (`d00e84e`). Removed origin `ehs0-sionna-rt-integration` (`b726ab3`), `minwooeun-rank1-miso-simo` (`3fdc1e6`) and `minwooeun-rank1-miso-simo-review-fixes` (`d00e84e`) in one atomic deletion with expected-tip leases. All tips were proven merged into main before deletion; refreshed origin and verified it and local heads contain only main. No commits, tags, contributor repositories or runtime files were removed.
-- [2026-09-14 publication] Successful normal push advanced GitHub main from `f51c3fd` to `0113ddd`; no force push or history rewrite. Updated current documentation to reflect publication on main while retaining failed moving-connectivity/strict-real-time qualification and the absence of a tagged release.
-- [2026-09-14 README writing] Reduced README from 348 to 274 lines, replaced the long Status milestone history with three concise bullets, tightened introductory/comparison prose, and retained compact channel models, 1023-sample control-delay bounds, history-reset conditions and rank-1 limitations under What’s inside. Distinguished latest 90 Python/frontend checks at `e59e095` from earlier channel/GPU checks at `16af288` and separate UE tests at `daa167ae3`; moving connectivity and strict deadline failures remain explicit.
-- [2026-09-14 README validation] RTX 5090 checks confirm byte-identical comparison table (12 rows), all eight command blocks, contributor section, copyright and introductory credits; section headings are unchanged. Nine-document local-link/anchor validation passes (147 links, zero failures/HTML errors). Six Chrome previews cover Status, comparison and credits at desktop/mobile widths; screenshots inspected. Remote evidence: `validation/readme-cleanup-20260914`; local preview copy: `.git/readme-review-20260914`. Temporary preview server/tab closed; no radio restart, backend test or GPU performance retest.
-- [2026-09-14 unused-folder cleanup] Archived and hash-verified all 898 regular files from the obsolete integration worktree and 575 files from six generated folders before deletion. Rechecked originals against their saved hashes, removed the worktree through Git and deleted only the enumerated ignored folders. Net payload reduction after archive storage is approximately 272.7 MiB. Git lists only this main checkout; contributor/integration ancestry remains intact, the separate UE repository is clean and SSH tunnel PID 70319 remains alive. No source or runtime change required a backend test rerun.
-- [2026-09-14 merge documentation validation] On RTX 5090, nine documents passed 147 local-link/anchor checks, contributor normalization and HTML parsing with zero errors. Six isolated Chrome previews passed, including desktop/mobile credits and the merge report; screenshots were inspected. Source hashes match the tested remote mirror. Temporary documentation server/tab were closed without touching the radio runtime.
-- [2026-09-14 local main merge] Completed normal merges `22a51ba` and `e59e095` in the user’s current folder. Resolved the sole source conflict in `scripts/remote/ocudu-multi-gnb-smoke.sh` by preserving the integrated subnet/antenna/hold/keepalive logic and restoring legacy Sionna extra arguments through the new wrapper. Fixed SSH transport of those arguments and the empty core-port position. Original commits and authorship are retained.
-- [2026-09-14 merge regression] Four new launcher cases cover default/extra wrapper arguments, bridge-only forwarding, SSH whitespace/metacharacter handling and empty core-port/default arguments. Forwarding test fails against `22a51ba`; fixed `e59e095` passes 90/90 Python tests, both Node frontend regressions and shell syntax on RTX 5090. These are launcher/dashboard checks, not a new live-radio or performance qualification.
-- [2026-09-14 edit reconciliation] Preserved both checkouts’ uncommitted workflow notes, restored the historical merge plan with a current-guide pointer, and retained the original stash/byte backups. Equivalent older UI translations and hold/keepalive behavior were reconciled with the newer integrated implementation instead of replacing it with obsolete files. Updated README/guide/reference to distinguish local main from an unpublished remote release.
+### RAN benchmark — 2026-10-17–20
 
-- [Merge planning 2026-09-13] Added `docs/plans/merge-miso-siso-sionna-rt-5090.md` covering integration from pinned main `f51c3fd` and contribution `066a702`, conflict handling, behavior review, full regression/live-radio scope, evidence collection, and rollback. No merge or push was executed.
-- [Merge preview 2026-09-13] Fetched both targets and computed a merge preview without changing the index/worktree; conflicts are limited textually to the progress file and multi-gNB smoke helper. Preserved both pre-existing uncommitted code/UI edits.
-- [Preliminary validation 2026-09-13] Exported contribution `066a702` into a temporary directory; all 70 discovered Python tests and the rank-1 renderer self-test passed. These results cover the source branch only, not a merged candidate or CUDA/live radio.
-- [Host inspection 2026-09-13] Inspected the configured RTX 5090 workstation without changing its running services. Recorded available GPU/toolchain/Sionna packages and the failed rootless namespace probe; distinguished this host from the older LXD environment.
-- [History requirement 2026-09-13] Recorded the user's explicit requirement to retain contributor Git history in the reusable harness and merge plan, including ancestry checks before and after publication. Explained snapshot resets versus buffered coefficient updates; no scope change was approved.
-- [2026-09-14 integration review] `integration/sionna-history-fix` at `88cbe6d` is **not ready for main** despite passing local/RTX 5090 CTest (12/12), Python (73/73), GPU regression (9/9), and Compute Sanitizer memcheck/initcheck/synccheck. Focused 5090 probes confirmed that matrix delays accepted through 1023 samples become wrong above the fixed 128-sample device capacity, and that a receiver forced onto CUDA host staging ignores its active matrix profile while telemetry reports it applied. The shipped `multi-gnb-sutd` Web UI launcher pairs a 1x1 topology with 1x4/4x1 updates and exits before ready. With the matching topology, the live dashboard ran about 430 seconds / 860 updates and rendered SUTD, matrices, resources, and antenna filters, but remained falsely green (`CUDA READY 10/10`, output usable) after the broker stopped because stored telemetry has no freshness gate. All test-owned processes were removed; existing Open5GS/research containers were preserved. Detailed ignored artifact: `/Users/charles_gu/Documents/GitHub/ocudu-sionna-history-fix/build-review-20260914/review.md`.
-- [2026-09-13 planning] Merge preview conflicts in `AGENT_PROGRESS.md` and `scripts/remote/ocudu-multi-gnb-smoke.sh`. Source review found a matrix-control delay limit of 1023 samples versus a 128-sample CUDA history, repeated profile-history resets, and no corresponding CUDA extension in the new CPU matrix-update processing test. These need validation/fixes before merge acceptance.
-- [2026-09-13 host inspection] Configured RTX 5090 host reports Linux `6.8.0-137-lowlatency`, no virtualization, driver `580.173.02`, CUDA 12.8.1, CMake 3.31.12, and visible OptiX. Sionna packages report 2.0.1 / Mitsuba 3.8.0 / Dr.Jit 1.3.1. Rootless namespace creation fails at `uid_map`; native launchers are blocked. No native workspace was found at the three conventional locations checked. Active Open5GS and research containers must be preserved.
+- Merged `main` into `RAN_benchmark` on 2026-10-20; the benchmark moved from `examples/ran_benchmark/` to [`use_cases/ran_benchmark/`](use_cases/ran_benchmark/README.md) and `srsue-rar-window.patch` to `integrations/srsran/patches/`.
 
-- [2026-09-14 final bounded validation] Executable source `16af288050750932ab5f7d48fb6cca1f14a7c9d3` passes RTX 5090 CTest 12/12, Python 75/75, all nine GPU regression stages, Node disconnect regression and shell syntax. Earlier extended memcheck/initcheck/synccheck runs reported zero errors; checked source hashes match the tested mirror. Report: `docs/sionna-merge-fixes-validation.md`.
-- [2026-09-14 sustained comparison] Sequential uncontended reviewed/fixed 600-second windows recorded 601 samples each, no collection failures and ten advancing links. Reviewed receiver deadline misses were 86/79/179/180; fixed misses were 72/72/117/143. Both fail strict zero-miss qualification. No thresholds or host scheduling settings changed.
-- [2026-09-14 actual OCUDU] Real two-gNB/four-port + two-srsUE/one-port + Open5GS tested through Sionna/CUDA. Moving SUTD reached both PDU sessions but UE0 ping failed (3,763 starvations). Stationary covered positions placed UE0 on PCI 1 and UE1 on PCI 2; each passed 250/250 pings, both scheduler feeds reported real rows, and all antenna endpoints/dimensions matched. Stationary connectivity passes, but 56 starvation events fail strict runtime qualification. Zero queue overflows, sequence gaps, ZMQ errors or gNB RF overflow in both cases. These live results supersede any synthetic-only interpretation.
-- [2026-09-14 dashboard/runtime evidence] The synthetic dashboard had no gNB subscription; the installed OCUDU `2563975` uses `enable_sched` and rejects `enable_sched_ue`. Connected one dashboard per gNB using supported options and verified actual UE KPI rows in remote Chrome. Remote browser also passed ray/label toggles, reset view, antenna filtering and HTTP-unavailable rendering. API stop-Sionna/stale-broker/restart checks pass; repeated stationary updates retained one warmup event per link. Synthetic clients needed restart after broker loss.
-- [2026-09-14 cleanup] Removed only test-owned processes, isolated live containers and test browser; no test listener/GPU compute process remained. The 11 existing core and two research containers remain running. Original edits and contributor ancestry are retained; main remains unchanged.
+- Renamed the scheduler benchmark to the RAN benchmark and documented srsUE limits: CQI is always 15 and the 2-antenna cell is SISO on the DL ([`docs/srsue-dl-miso-gap-ko.md`](docs/srsue-dl-miso-gap-ko.md)).
 
-- [2026-09-14 validation steering] All remaining validation runs on the RTX 5090 workstation, including CPU reference tests. User explicitly requires real OCUDU runtime connectivity; the two-gNB/two-UE Sionna gate is queued after the uncontended timing comparison. Existing synthetic sessions are not live-radio evidence.
+- Added per-test link adaptation (fixed MCS, AMC, AMC + OLLA, HARQ-driven OLLA), Max C/I, a 2-antenna gNB and cell KPI comparison. Validated scenes and UE counts are gated by `scene_validation.json`.
 
-- [2026-09-14 browser follow-up] The corrected supplied SUTD launcher passed with ten CUDA links. Chrome verified scene ray/label toggles, reset view and antenna filtering. Normal launcher shutdown exposed a second stale-readiness path when the HTTP service itself disappears; added a bounded status request and explicit unavailable rendering for header/delivery/rows, retaining historical values without inventing warmup. A Node regression checks the disconnect state. Installed the declared PyYAML dependency only into the existing remote Sionna venv. All three CUDA sanitizer tools completed with zero errors over short/long and scalar/matrix tests.
-- [2026-09-14 GPU validation] Fixed RTX 5090 CTest 12/12 and Python 75/75 pass. The new long-delay regression was compiled against the reviewed 88cbe6d library and failed with a CPU/CUDA echo mismatch; it passes against the fixed library. The current nine-stage GPU suite passes. Added scalar profile maximum-delay parity and explicit oversized device-construction checks; defer device-capacity rejection until route selection so static host-staged configurations retain their original behavior. Sustained comparison and browser restart/staleness validation remain pending; the first baseline overlapped compilation and will not be used for timing comparison.
-- [2026-09-14 dashboard fix] Delivery readiness and fresh-link counts now use monotonic receipt age with a two-second limit. Cached values stay visible as stale; backend/header/resource status no longer claims output is usable after telemetry expires. Added controlled-clock boundary, partial staleness, missing timestamp and recovery tests; the regression failed before the fix at the stale-ready assertion and passes afterward. All 75 Python tests and JavaScript syntax checks pass locally. Zero backend warmup remains authoritative and brief text distinguishes preserving updates.
-- [2026-09-14 launcher fix] SUTD synthetic demo now selects the four-port Sionna topology and starts every gNB/UE antenna endpoint. Added a preflight consistency validator and dependency declaration; fixture test accepts the correct topology, rejects missing ports and reproduces the old scalar topology mismatch. Shell syntax passes; direct RTX 5090 launcher validation follows the baseline run.
-- [2026-09-14 fallback fix] CUDA preparation records whether each physical link uses device processing. Matrix control now rejects host-staged links before changing shadow/sequence state, including within aborted batches. Static mixed processing remains supported. Added control recovery and CUDA mixed-route/static-output tests; local CTest 12/12 passes. Previous review probe demonstrated this route silently processing original taps.
-- [2026-09-14 delay fix] Shared the 1023-sample runtime profile limit with the preallocated 1031-sample CUDA ring; removed silent truncation and checked device construction/refresh bounds. Added long-delay CPU/CUDA echo sweeps over all five antenna shapes and invalid-control-delay checks. Local CTest 12/12 passes. Earlier RTX 5090 probes at reviewed commit 88cbe6d demonstrated lost echoes above capacity; updated GPU validation is pending. The approved ten-minute baseline/fixed comparison and remaining three minimum fixes are in progress.
-- [History fix, 2026-09-13] Matrix gain/phase and identical updates preserve IQ history across all antenna lanes on CPU/CUDA. Exact non-coefficient comparisons determine a shared reset result; scalar behavior and control formats remain unchanged. Backend zero warmup is authoritative in the UI and ACKs no longer invent reset intervals.
-- [Validation, 2026-09-13] Demonstrated the lost delayed echo before the fix. Afterward, 12/12 CTest and 73/73 Python tests passed locally and on RTX 5090; all nine current GPU sequence stages passed; Compute Sanitizer found zero errors in the five-shape history regression. Tests and builds used isolated validation directories. Made the NVML timing fixture deterministic and restricted the remote build-directory exclusion so source `build_osm_scene.py` is copied.
-- [Integration] Preserved contributor commit ancestry with a normal merge; combined main's network/srsUE settings with the contribution's multi-antenna/Sionna launcher. Preserved the contributor's full progress record in `archive/progress/AGENT_PROGRESS-ehs0-066a702.md`. The requested history-preservation fix and GPU validation follow this merge as a separate commit.
+- Added the single-cell mode: one gNB, N srsUEs, policies run sequentially on one frozen channel and traffic trace, with a Test 1 / Test 2 web UI. The broker gained opt-in sample-indexed control (`tests/core/test_sample_indexed_control.cpp`).
 
-- [Research/MIMO] Produced a source-backed HTML assessment of OCUDU MIMO, the CUDA-accelerated OCUDU fork, srsUE NR limitations, the local project gap, and an initial 2x2 matrix-TDL integration path; the later rank-1 decision below supersedes that initial recommendation.
-- [Research/Sionna] Extended the assessment with a source-backed Sionna RT 2.0.1 bridge and added `docs/plans/sionna-live-channel.md`: Sionna remains an out-of-process producer; the proposed broker consumes buffered sparse CIR geometry epochs and complex coefficient horizons by absolute IQ sample; geometry changes may reset delay history while coefficient-only updates preserve it.
-- [Plan/Sionna] Defined the parallel MIMO/Sionna dependency graph, bounded v1 multipart record, explicit antenna/link mapping, broker-owned sample timeline, chunk-continuity and epoch-readiness rules, delay-ring bounds, underrun/fallback behavior, record/replay/live modes, S0-S4 phases, and objective validation gates.
-- [Validation/Sionna docs] Verified diff whitespace, HTML IDs/anchors/local links, and Markdown local links. Two fresh-reader passes drove fixes for roadmap ordering, current control-batch semantics, startup delay-ring preallocation, wire/link identity, chunk coverage, sample-origin ownership, underrun defaults, S0 pass/fail criteria, navigation, and planned-versus-current wording.
-- [Docs/Cleanup] Removed `docs/superpowers/specs/2026-05-26-docker-runtime-design.md` and the now-empty `docs/superpowers/` tree while preserving every document under `docs/plans/`.
-- [Workspace Maintenance] Archived the former cumulative progress ledger under `archive/progress/` and reset this file to current live state.
-- [Decision/Rank-1] Narrowed the srsUE 5G integration target to OCUDU 2×1/4×1 downlink rank-1 MISO and 1×2/1×4 uplink rank-1 SIMO; revised the HTML report’s endpoint contract, architecture, roadmap, validation gates, risks and claim boundaries, with rank&gt;1 and same-PRB MU-MIMO deferred.
-- [Docs/Rank-1 limits] Added a dedicated hard-limits section distinguishing current broker gaps, unverified live DL MISO integration, srsUE PHY limits, one-antenna physical limits, beam/precoder limits, unsupported same-PRB MU-MIMO, the absence of end-to-end 4×4 behavior and srsUE SA restrictions.
-- [Docs/Controlling brief] Added a user-owned front section to the HTML report listing the project goal, intended rank-1 experiments, technical requirements, writing/claim requirements and a scope-change rule that governs later report sections.
-- [Decision/Sionna export] Made buffered Sionna RT channel-state export part of the controlling brief and approved decision: Sionna produces sparse CIR geometry and coefficient horizons through record/replay then live look-ahead, while the GPU emulator retains real-time IQ timing and processing; added the current implementation gap to the hard-limits table.
-- [Review/Sionna integration] Re-reviewed the HTML report and synchronized `docs/plans/sionna-live-channel.md` with the approved rank-1 scope. Added separate FDD DL/UL solves, exact 2×1/1×2 then 4×1/1×4 tensor mappings and IQ equations, ordered endpoint/antenna/polarization manifests, Sionna synthetic-versus-explicit array semantics, baseband coefficient ownership, current 32-tap/128-sample CUDA bounds, coefficient-period/look-ahead sizing, binary ingress lifecycle, and explicit retrace-continuity limits.
-- [Validation/Sionna semantics] Checked Sionna RT 2.0.1 primary documentation for `Paths.cir()`/`Paths.taps()` axes and defaults, Numpy export, Doppler time evolution, path validity, `reverse_direction`, and the path solver's default synthetic-array plane-wave approximation. Corrected the oracle claim: Sionna uses an ideal sinc response, while this project uses an 8-tap Hamming-windowed fractional-delay filter, so non-integer delays require declared time/frequency/energy tolerances rather than bit-exact comparison.
-- [Git] Published the rank-1 MIMO/Sionna documentation and progress-archive checkpoint directly to `origin/main`.
-- [Validation/Git] Fetched and independently built `origin/main` at `216a28b`; all eight CPU-backend tests passed and `git diff --check HEAD^ HEAD` reported no whitespace errors. Confirmed that the pushed commit was already on `main`, with no pull request or additional remote branch to merge.
-- [Research/CMX500 integration] Added a primary-source-backed feasibility study for a CMX500 analog FR1 connection through one X310/UBX-160 to the GPU channel and srsUE. Selected a conservative n3 SA/FDD/20 MHz/15 kHz/SISO baseline and an in-process `rf_dev_t` UHD/GPU adapter that preserves RX hardware timestamps and timed TX; the current timestamp-free, synthetically paced ZMQ path is not approved for the hardware loop.
-- [Design/CMX500 timing] Separated modeled common/excess delay, fixed RF transport calibration, compute/deadline latency, and the current fractional-filter guard. Defined the 1 ms receive/4 ms srsUE scheduling timeline, a single srsUE-owned `time_adv_nsamples`, UHD partial-transfer and burst-tail rules, minimum-slack telemetry, three directional integer-delay sweeps, and the current approximately 120-sample device tap limit at 23.04 MS/s.
-- [Validation/CMX500 study] Independently recalculated sample periods, sc16/fc32 rates and NR timing-advance scale; checked local links, external source responses and diff whitespace. A fresh-reader review found the current centered fractional FIR's future-sample block-boundary artifact and TX-advance ambiguity; the final study now requires either a common three-sample guarded profile or a validated streaming lookahead/causal filter before fractional TDL qualification, and the follow-up review passed with no remaining material contradiction.
-- [Architecture/RU-DU] Extended the CMX500 study with an O-RAN/eCPRI-derived separation analysis. Kept time-domain IQ and the in-process RF adapter as the approved first path, rejected literal 7.2x for srsUE, and specified an optional non-compliant `RU-lite` gateway contract with absolute sample indices, separate user/control/sync/telemetry concerns, bounded delivery windows, one-way-delay/queue measurements, reference-point calibration and R0–R3 disaggregation gates.
-- [Validation/RU-DU study] A fresh-reader pass tightened the optional separated mode to one gateway-owned GPU channel, extended the sole srsUE TX-advance rule across the transport, added the complete two-network-crossing FDD deadline inequality and two-point TX-slack measurement, defined early/late windows with fixed delay, PDV and clock error, and corrected the P1 stock-UHD versus P2–P5 adapter wording.
-- [Design/UL-DL pipeline] Added the proposed local CMX500/X310/GPU/srsUE downlink and uplink execution pipelines: analog/RF and UHD conversion stages, absolute sample-range ownership, direction-specific causal GPU chains and persistent state, guarded partial-transfer handling, sole srsUE TX advance, timed UHD enqueue, bounded preallocation/concurrency rules, calibrated noise ownership, fault/re-arm behavior, end-to-end deadline placement and the optional gateway-owned `RU-lite` variation. P2 is deliberately continuous-TX, contiguous-call and immutable-profile only; burst tails, off-air state advancement and X310-absolute live updates require new backend interfaces.
-- [Validation/UL-DL pipeline] Fresh-reader implementation questions drove explicit gap/burst restrictions, finite-tail/off-air API requirements, per-partial-send deadline watchdogs, deterministic fault teardown/re-arm, alias-safe IQ conversion, guard-aware tap bounds, immutable attached-radio epochs and reproducible DL/UL physical-noise feasibility rules rather than relying on implicit backend capabilities.
+- Live strict passes include robot_ring 4 UE `20261017T050410Z-g2` and SUTD 1/2 UE `g11`/`g14`; one ABBA seed did not separate RR from QoS beyond the A/A control.
 
-- [Fix/Multi-UE attach] Generalised `ocudu-multi-ue-smoke.sh` from a fixed two-UE gate to `OCUDU_MUE_UE_COUNT` UEs, with per-UE srsUE config, Open5GS subscriber, container, ping and summary entry, plus `OCUDU_MUE_TOPOLOGY`/`OCUDU_MUE_GATE_NAME`. Added the four-UE topology. Four UEs now attach 4/4, each on its first random-access attempt, with distinct preambles, C-RNTIs, PDU sessions and IPs.
-- [Fix/srsUE preamble index] Root cause of the multi-UE failure was srsUE, not the broker or the channel: `release_23_11` hardcodes `preamble_index = 0` in `proc_ra_nr.cc`, so every UE derives the same RA-RNTI, decodes the same random access response and lands on one C-RNTI, and the losers report a successful attach and stop retrying. Latest upstream `master` resolves the attach failure, but measurement shows it is not via the random preamble selection that master added for TS 38.321 5.1.2: with this cell config `rach_cfg.nof_preambles` is 0, so the random branch is never taken and every UE still transmits preamble 0 on the same RA-RNTI. What changed is that a UE losing contention now detects it and retries instead of reporting a successful attach, so all four eventually take distinct C-RNTIs after 1 to 4 attempts. The smokes build srsUE from the latest `zhouyou-gu/srsRAN_4G` master, which adds an optional `SRSUE_PRACH_PREAMBLE_INDEX` override. The override is not required for attach on master; it removes the contention entirely, so each UE attaches on its first attempt and the preamble a UE sends is reproducible. Unset keeps stock behaviour.
-- [Fix/Docker networks] `pick_free_subnet` in all three OCUDU smokes: OCUDU's compose hardcodes the `ran`/`metrics` pools, so on a host already running another 5G stack the whole run failed at network creation with `invalid pool request: Pool overlaps`. The gates now pick free /24s, export `OPEN5GS_IP`/`GNB_IP` and render an Open5GS env file with the matching address, since the core binds the literal address from that file. Exercised on the non-default `10.63.1.0/24`.
-- [Fix/IMEI] Per-UE IMEIs increment the last two digits zero-padded. Incrementing a single trailing digit produced a 16-digit IMEI from the second UE on, which reached RRC and then never registered -- indistinguishable from a contention failure.
-- [Validation/Multi-UE] Confirmed the launch stagger is still load-bearing after the preamble fix, for a different reason than before: at four UEs, staggered attaches 4/4, `OCUDU_MUE_UE_STAGGER_SECONDS=0` attaches only 3/4 with the last UE retrying random access and never completing. Also confirmed the raised gNB PRACH pool keys were unnecessary and reverted them; four UEs attach against the stock cell config.
-- [Revert] Removed every broker-side change trialled for this issue (cold-source silence, late-joiner cursor snap, cold-sink discard, bounded epoch, silence-debt) and the downlink-muting experiment with its control plane. All were harmful or no-ops -- the muting fixture attached 4/4 with the mute still applied, and the best broker variant cut PRACH detections from 200 to 1. `src/broker.cpp` is unchanged from `main`.
+- `srsue-rar-window.patch` keeps the RAR window open on an unparsable RAR or missing RAPID, fixing the 4-UE RA stall (sessions g12, g15–g17).
 
-## Rank-1 MISO/SIMO Implementation (branch `rank1-miso-simo`)
+### Project review — 2026-10-16
 
-- [R0] Added `examples/configs/topologies/ocudu_native/topology.ocudu.rank1-2x1.cuda.yaml`: a 2-port gNB radio node against a 1-port UE node, DL `dl_miso_2x1` as a 1x2 `fixed_mimo` row ([0.80+0.10j, 0.25-0.15j]) and UL `ul_simo_1x2` as a 2x1 column ([0.75-0.10j; 0.15+0.25j]). Validates, fails fast correctly on the CPU-only build, and passes through the CUDA broker against the 2-port transport peer (gNB side) plus the 1-port synthetic source/sink (UE side) with `tx_queue_overflows=0 / tx_sequence_gaps=0 / zmq_errors=0`.
-- [R1] Coherent-combining unit gate added to `test_processing.cpp` (mutation-probed: falsified assert fails, restored passes; ctest 8/8 on both trees): the SAME waveform into both TX lanes of a 2x1 row must produce 2x amplitude at phi=0, zero at phi=pi, and 1+j at phi=pi/2.
-- [R1] Live-broker analytic closure: branch isolation measured tx1-only sink power 0.0280165 against a 0.02802 prediction (0.05%), and the both-branches value 0.0935 is reproduced EXACTLY once the transport peer's marker structure (port1 = -conj(port0), so the two marker streams are deterministically correlated) is put into the prediction -- the coherent sum, the coefficients, and the correlation all close analytically on the CUDA path. The h=[1,-1] discriminator run measured 1.08326 against the 4*E[I^2]=1.083 prediction from the marker's ramp statistics.
-- [R2 DONE] **OCUDU gNB 2T2R <-> CUDA broker (2x1 DL MISO + 1x2 UL SIMO) <-> srsUE (nof_antennas=1) attaches live**: `run-ocudu-rank1-2x1.sh` run `20260817T074242Z` `result=pass` -- rrc/pdu/ping all 1, `tx_queue_overflows=0 / tx_sequence_gaps=0 / zmq_errors=0`, `rx_starvations=6`, gNB `Real-time failure in RF` 0. The 1x1 srsUE regression gate re-ran `result=pass` (`20260817T074422Z`, rx_starvations=5) from this tree the same hour.
-- [R2 fix 1/3] OCUDU's validator forbids `nof_antennas_dl > 1` with fallback DCI in SS#2 (`du_cell_config_validation.cpp:290`) -- the very override the legacy srsUE fixture carries. The 1x1 control with `ss2_type: ue_dedicated` + `dci_format_0_1_and_1_1: true` attached fully, proving srsUE's NR path DOES support DCI 0_1/1_1 (`dci_nr.c` carries both unpackers); the received wisdom that srsUE needs the common/fallback override is now scoped to 1x1 cells only.
-- [R2 fix 2/3] With 2 DL antennas OCUDU builds a 2-port NZP-CSI-RS (FD-CDM2) in the RRCSetup, and srsUE's PoC RRC dies applying it: `Unhandled configuration ... nof_ports=2 ... cdm=FD-CDM2` -> `Resource mapping is invalid or not implemented` -> `Failed to initiate connection setup procedure` -- after which no SR/PUCCH exists (gNB saw `sr=no metric=0/-nan`), no UL grant ever comes, and the connection loops through release/re-RA. Fix: `csi_rs_enabled: false` plus the paired `nof_cell_csi_res: 0` OCUDU requires. Link then runs on HARQ without CSI (KO retransmissions at sinr 7.5-8.7 dB are the expected no-CSI link adaptation, not a defect).
-- [R2 fix 3/3] `pcap.mac_enable: disable` -- OCUDU rejects MAC pcap with >1 DL antenna (already known from the parent tree's M6.3 scout, now load-bearing here).
-- [R2 harness] Added `examples/configs/ran/ocudu/native/gnb_zmq_b210_fdd_2t2r_rank1_srsue.yaml` (the proven cell, log paths as placeholders, the three adaptations locked as renderer invariants), `render-rank1-2x1-configs.py` (Open5GS/srsUE/subscriber render through the SAME legacy functions, so the UE side is byte-identical to the regression gate), `run-ocudu-rank1-2x1.sh` + inner (derived from the legacy 1x1 gate by counted substitutions; 20 s window), and `verify-rank1-2x1-artifacts.py` (schema `ocudu-native-rank1-2x1-source-evidence/v1`, explicit 2-port/1-port `radio_node_resolved` expectations). One inherited latent defect fixed in the derived verifier: the legacy verifier's self-test still asserted the coordinator-era `group_aborts` counter and would KeyError if ever run.
-- [R2 vector check] Live wire-capture (100 ms window during 50 Hz ICMP, skip 7 s) against the declared vectors: **UL 1x2 passes on both rows** -- `max|y - Hx|` = 4.594e-05 (row 0) and 2.02e-05 (row 1) against the 1e-04 tolerance, with row RMS 56.65 / 21.83 exactly matching |h| * 74.87 source RMS (relative error ~6e-7, fp32 floor). DL row passes at 3.726e-08. The two remaining checker FAILs are one structural fact, not defects: **gNB port 1 never radiates in this configuration** (SSB and common channels on port 0, CSI-RS off, srsRAN's rank-1 PDSCH precoding [1,0] as measured in the parent tree's M6.3), so the DL source-nonzero and cross-share checks cannot be satisfied live; the DL two-branch content proof stands on the R0/R1 synthetic gates. Capture recipe: broker `--wire-capture-dir/-samples 2304000/-skip 161280000`, wait for the broker's natural duration expiry (the capture is flushed at shutdown), then `verify-mimo-matrix-capture.py --capture-dir ... --topology ...` with no `--marker-node`.
-- [R2 infra] The two sibling trees share `~/ocudu-native-workspace`, and a CMake build directory pins its source path: every live gate in THIS tree now uses `builds/ocudu-gpu-channel-rank1-cuda-release` (run-ocudu-rank1-2x1.sh, run-ocudu-legacy-1x1.sh, run-ocudu-mimo-2port-no-core.sh, run-ocudu-oai-1x1.sh all redirected). Do not run live gates from both trees concurrently -- they share ports and the native workspace.
-- [R3 synthetic] The four-port vectors are clean end to end on the CUDA broker: two 2-port transport peers terminate the gNB side (four ports), the 1-port tools terminate the UE, and the wire capture verifies **UL 4x1 on all four rows** (max|y-Hx| <= 1.3e-07, row RMS exactly |h_r| * source RMS) and **DL 1x4** (row error 1.24e-07, off-diagonal share 1.18, all four sources carrying signal). Strict counters zero.
-- [R3 live, DL half DONE] **4x1 DL MISO attaches live**: OCUDU gNB with nof_antennas_dl 4 / nof_antennas_ul 2 <-> broker (1x4 DL row, 2x1 UL column) <-> srsUE completes attach+PDU+ping. Promoted as `examples/configs/ran/ocudu/native/gnb_zmq_b210_fdd_4t2r_rank1_srsue.yaml` + `examples/configs/topologies/ocudu_native/topology.ocudu.rank1-4x1dl.cuda.yaml`. A node may declare asymmetric port roles (tx_ports 4, rx_ports 2) and the validator accepts it; the first r3b attempt hung because the topology still declared 4 gNB rx_ports while the gNB only connected 2 -- a dead RX ring fills and stalls the producer, which is the expected lock-step propagation, not a bug.
-- [R3 live, UL half BLOCKED] With nof_antennas_ul 4 the UE reaches RRC but registration dies on UL quality: 29 OK / 133 KO PUSCH, the KOs mixing sinr~11dB failures with **intermittent epre=-inf occasions** (no signal in the gNB's window), rv=0 only, while DL stays near-perfect (ack 1041/8). Bisection isolates the UL 4-RX side alone: DL 4T + UL 2R passes end to end, DL 2T + UL 4R fails identically, and `rx_ring_batches: 8` changes nothing. The emulator's four UL rows are proven exact synthetically, so the suspect is the interaction between OCUDU's 4-port ZMQ receive path (single `radio` worker, sequential channel pops -- the M5.4 wall) and the broker's partial-window serves (the gnb0 producer emits ~2 windows per slot following srsUE's variable TX chunks: worker summary shows 44055 producer slots vs 22894 pulls). UL 3R was also tried and did not even reach RRC -- likely a non-standard antenna count pathology, recorded but not pursued.
-- [R3 root cause DONE] **The UL-4R flakiness is root-caused and fixed; the full 4T4R gate now passes.** The causal chain, every link measured: (1) CSI-RS is off (the srsUE 2-port CSI-RS workaround), so link adaptation runs on the gNB's own estimates; (2) on this noiseless digital channel the gNB's PUSCH SNR estimate saturates at ~11 dB (DMRS residuals counted as noise) while the actual residual distortion does not follow AWGN statistics; (3) UL link adaptation trusts the 11 dB and keeps scheduling 16QAM/64QAM (tcr up to 0.93), producing a STANDING ~20% PUSCH KO rate -- measured equally in passing runs (637 OK/156 KO) and failing runs (656/185); (4) a run fails exactly when a consecutive-KO burst lands on the registration-critical SRB1 traffic (RRCSetupComplete/NAS) and RLC gives up into a release/re-RA loop -- the bimodality is a probability, not a state; (5) more RX ports worsen the estimate/distortion mismatch, which is why 4R failed often, 2R occasionally, and 1x1 (CSI on) never. **Fix: `pusch.max_ue_mcs: 9`** -- full 4T4R then attaches 3/3 with ZERO PUSCH KO. The cap is baked into both gNB fixtures with the reasoning inline, guarded by a renderer invariant, and the R2 gate re-passed with it.
-- [R3 root cause, exonerations] Hypotheses eliminated on the way, each by direct measurement: broker/channel (synthetic AND live wire y=Hx exact in failing runs too); rx_ring size (8 batches changed nothing); srsUE config application (error profiles identical 2R vs 4R); UE resync discontinuities (none logged); gNB tx/rx stream-origin phase (~285-sample constant, IDENTICAL in passing and failing runs); and the headline red herring -- **`epre=-inf` occasions are the NORMAL DTX log of SR occasions where the UE sent nothing**: cross-checking UE PHY debug against the gNB showed sr=1 transmitted 308 times and detected 308 times (metric 787, 15.6 dB), ack PUCCH and all 841 granted PUSCH occasions in 1:1 correspondence. The instrument was measuring; the reader misread its vocabulary.
-- [R3 gate] `run-ocudu-rank1-4x1.sh` + inner + `render-rank1-4x1-configs.py` + `verify-rank1-4x1-artifacts.py` (counted-substitution derivation from the 2x1 gate; 4-port node_resolved expectation, schema `ocudu-native-rank1-4x1-source-evidence/v1`; self-tested). First formal run `20260817T090137Z`: **result=pass**, strict counters 0, rx_starvations=15 (soft). New fixtures: `gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml` + `topology.ocudu.rank1-4x1.cuda.yaml`; the interim 4T2R DL-only fixtures remain as the bisection record.
+- Fixed the scheduler dashboard's single-cell crash by rendering the configured cells throughout setup, metrics, charts and scene labels. The regression fails on the original dashboard and passes for both execution modes.
 
-- [Report] Added `docs/rank1-feasibility-report.en.html`, the English edition of the feasibility report (same structure/styling). GitHub sharing done: the pre-push scan confirmed `.config` (workstation credentials) is ignored and only the placeholder `.config.example` is tracked. The branch was grafted onto upstream `a801155` and pushed to the fork `MinwooEun/ocudu-gpu-channel`; the duplicated copy of the supervisor's report was dropped in favour of upstream's own `docs/mimo-integration-report.html`.
-- [Report] Added `docs/rank1-feasibility-report.html`: the same feasibility report as an HTML page styled after the supervisor's assessment report (same dark palette and section structure), with verdict table, lineage flow, stat tiles, evidence tables, and the constraints/limits sections. Self-contained, generated from the .md content.
-- [Report] Added `docs/rank1-feasibility-report.md`: the user-facing feasibility report -- the assessment report's four verdict questions re-answered with measured evidence, the pre-MIMO -> M0-M5 -> R0-R3 lineage, requirement-by-requirement mapping against the controlling brief, the live-gate and quantitative evidence (y=Hx, timing envelopes, oracle study), the four root-caused integration constraints with their fixes, honest residual limits, and an evidence index. Everything cited is reproducible from committed gates/fixtures.
-- [Oracle precoding] The report's "oracle-selected rank-1 precoding" study is done live. Method: the emulator declares the EFFECTIVE scalar c = h*w for the physical row h = [0.80+0.10j, 0.25-0.15j] under an experimenter-chosen (oracle) weight, with a fixed -30 dB AWGN floor on the DL so |c|^2 is a real SNR (on a noiseless channel, scale is not gain -- the floor is what makes weight quality observable). Four weights, each a full live run against srsUE: MRT conj(h)/||h|| (attach+PDU+ping, reference), port0-only [1,0] (measured -0.54 dB vs predicted -0.53), naive duplication [1,1]/sqrt2 (measured -1.24 dB vs predicted -1.24), and the anti-matched deep null (|c|^2 = 1e-4, predicted -38.7 dB: cell search fails outright, as predicted; the -29 dB wire measurement is the noise-subtraction floor). Absolute received power matched |h*w|^2*P_tx + noise at ratio 1.000 in all four. Deliverables: MRT fixture `topology.ocudu.rank1-2x1-oracle-mrt.cuda.yaml` (oracle-labelled header) and the generation recipe (four-case topology synthesis + live control + wire-power comparison) in this entry; the validator correctly rejects an exactly-zero effective matrix, which is why the null case uses c = 0.01. Claim boundary: weights are oracle-chosen with channel knowledge, not closed-loop PMI -- srsUE has no multi-port CSI feedback.
-- [R2/R3 gates, matrix-integrated] Both live gates now judge the MATRIX in the same run: the broker flushes a 500 ms wire capture (skip 6 s, covering registration + a 10 Hz x 60 ICMP train) at natural shutdown, and the outer gate recomputes y=Hx from the preserved topology before declaring pass. `verify-mimo-matrix-capture.py` gained `--allow-silent-source FROM->TO:TX` -- a declaration (recorded as `_declared_silent`, excluded from the cross-share check) for gNB DL ports > 0, which srsRAN never radiates in this configuration; it is an assertion of a measured fact, not a tolerance. First integrated runs: R2 passed with UL row errors <=2.2e-05; R3 passed with all four UL rows at 4.6e-05/2.2e-05/1.7e-05/2.8e-05 against 1e-04. The bulk capture is deleted after a passing judgement (the report keeps the numbers); failing runs keep it for diagnosis. Ping requirement raised to 60 packets, 0% loss.
-- [R2/R3 perf labels] Measured envelopes from the gate runs (Threadripper PRO 7965WX, one RTX 5090, 23.04 MS/s, batch 23040 = 1 ms slot, CUDA backend, fixed_mimo single-tap + tdl chain, 20 s runs, heartbeat snapshots n=18): 2x1 GPU h2d/kernel/d2h p50 = 7.7/11.3/7.9 us with node process p50/p99 = 80.2/131.9 us; 4x1 = 51.0/12.9/14.9 us with node process p50/p99 = 119.2/619.1 us. Everything inside the 1 ms slot budget.
-- [Hygiene] `gpu-test-sequence.sh` passes 9/9 from this tree (its rsync ships THIS tree's sources to the loopback runner; the parent re-syncs its own on its next run, so sequential use is safe).
-- [R3 next, RESOLVED same day by the root-cause section above] The original candidate ladder was: (a) force full-batch production on the gnb0 node (a broker-side experiment knob -- weigh against the B2.2 lesson that full-batch requirements can deadlock lock-step radios), (b) read OCUDU's radio_zmq_rx_stream multi-channel alignment for what happens when sibling channels' cumulative counts diverge transiently, (c) capture the four gNB rx_out streams live during a KO window and check inter-row alignment on the wire.
+- Restored report navigation and downloadable evidence logs; replaced the obsolete publication count with inventory and file-hash checks. All 287 hashes in the new artifact manifests match; CPU/CUDA parity wording now distinguishes numerical tolerance from bit-exact output.
 
-## Archived Ledgers
+- Validated CPU and CUDA CTest, 13/13 each, nine GPU stages, 221 Python tests and 99 shell scripts on RTX. Three environment-dependent Python skips remain; live-radio timing qualification was not repeated.
 
-- Branch ledger (parent-tree M0–M5 rebuild plus R0–R3 rank-1 detail): [`archive/progress/AGENT_PROGRESS-rank1-miso-simo-2026-08-17.md`](archive/progress/AGENT_PROGRESS-rank1-miso-simo-2026-08-17.md).
-- Upstream historical progress through 2026-08-16: [`archive/progress/AGENT_PROGRESS-2026-08-16.md`](archive/progress/AGENT_PROGRESS-2026-08-16.md).
+- Fixed tablet-width overflow in scheduler source labels. Chromium checks pass for single- and two-cell dashboards at 1440, 700 and 390 pixels; strict documentation and publication checks pass with the report logs included.
 
-## Review Follow-up (2026-08-19)
+### Scheduler brief-burst comparison — 2026-10-14
 
-An independent review of this branch ran on the project's RTX 5090 workstation and drove the following
-changes. Every item below was verified on that host.
+- Four matched sequential runs delivered every packet without full RLC queues; QoS lowered control/video delay by 24%, increasing download delay. [Evidence](docs/reports/experiments/scheduler-bursty-load-20261014/README.md) retains timing misses and worst delays; the dedicated container was stopped.
 
-- [Harness/Live] **The live rank-1 gates are now runnable from this repository.** They were ported to the
-  containerised harness in `scripts/remote/`: `ocudu-rank1-2x1-smoke.sh` and `ocudu-rank1-4x1-smoke.sh` run a
-  real OCUDU 2T2R/4T4R gNB, Open5GS and srsUE (`nof_antennas = 1`) through the CUDA broker and score
-  `y = Hx` on the captured wire in the same run. The `scripts/native/` originals remain as a record; they
-  cannot be provisioned from this repository because `bootstrap-workspace.sh` disables build mode by design
-  and the scripts hard-code `/home/ubuntu` and `/opt/conda` paths.
-- [Harness/Networking] The gates no longer assume the `10.53.1.0/24` and `172.19.1.0/24` Docker pools are
-  free. They select the first unclaimed /24 and render a matching Open5GS env file, because a workstation
-  co-hosting another 5G stack failed the whole run at network creation before any container started.
-- [Harness/Transport] Fixed two argument-transport defects in the remote harness: a port list containing
-  spaces was re-split by ssh into separate positionals, and a `FROM>TO:TXIDX` matrix specification was read
-  by the remote shell as a redirection, which truncated the specification and silently swallowed the gate's
-  stdout. Values that must survive the remote shell are now comma-separated or base64-encoded.
-- [Harness/Deps] `verify-mimo-matrix-capture.py` needs numpy and PyYAML, which are absent from a stock
-  Ubuntu system Python and were in no manifest. The gates now provision a private venv, and `probe.sh`
-  reports both the interpreter state and the Docker pool occupancy.
-- [Instrumentation/Latency] `event=cpu_stage_timings` publishes only the last completed slot and is sampled
-  once a second, so percentiles taken from it described ~18 of ~20000 slots. The broker now accumulates
-  every slot into a 5 us-bucket histogram and emits `event=process_latency_summary` at shutdown. Re-measured
-  over whole runs: 2x1 gnb0 p50 80 us / p99 205 us (n=57,753); 4x1 gnb0 p50 115 us / p99 285 us (n=54,439).
-  The published figures were wrong in both directions and have been corrected everywhere they appeared.
-- [Docs/Claims] The live downlink claim is qualified at the point of claim, not only in the limitations
-  section. Uplink is genuinely multi-branch; the downlink gate declares the non-radiating gNB transmit ports
-  silent, which collapses the live downlink judgement to a scalar check. The verdict tables, gate tables and
-  milestone roadmap now say so.
-- [Docs/Provenance] The evidence index cited five commits from the pre-graft private tree, none of which
-  exist on the published branch. They are remapped to the published hashes.
-- [Hygiene] Removed the workstation address and account from the archived progress files.
+### Scheduler contention on RTX — 2026-10-14
 
-### Verification performed on the RTX 5090
+- Raised video bursts to 40 Mb/s in four sequential runs: QoS lost 68%/44% fewer control/video packets, with about 12% lower delay. [Evidence](docs/reports/experiments/scheduler-priority-load-20261014/README.md) records matched resources, download tradeoff and remaining starvations; experiment container stopped.
 
-| Check | Result |
-|---|---|
-| `gpu-test-sequence.sh` | 9/9 pass |
-| ctest, CUDA and CPU trees | 8/8 each |
-| ctest under ASan + UBSan + LeakSanitizer | 8/8 clean |
-| ThreadSanitizer, ctest and a live relay | no race in project code (all reports inside uninstrumented libzmq) |
-| Live 1x1 attach gate | pass (RRC + PDU + ping, integrity counters 0) |
-| Live 2x1 gate | pass; UL rows 4.62e-05 / 2.12e-05, DL row 4.85e-08 |
-| Live 4x1 gate | pass; UL rows 4.61 / 2.16 / 1.59 / 2.68 e-05, DL row 5.31e-08 |
-| Synthetic y=Hx, 2x2 / 2x1 / 4x1, both backends | pass, all rows <= 1.44e-07 |
+### Scheduler benchmark on RTX — 2026-10-13
 
-The live rows reproduce the original native-harness figures digit for digit on different hardware, a
-different 5GC deployment and a different container stack, which is the strongest available evidence that
-the results are a property of the emulator rather than of one machine.
+- Repeated 70 Mb/s bulk-load tests sequentially: QoS control/video delay averaged 9%/12% lower; bulk delivery remained about 71% for both. Earlier settings and values matched; [evidence](docs/reports/experiments/scheduler-high-load-20261013/README.md) records OCUDU queue drops and remaining timing misses.
 
-## Blockers and Risks
+- Audited sequential RR/QoS runtimes: no channel overflow/gaps, but 15/9 starvations and OCUDU TX pauses up to 9.7 ms; QoS lost one control packet. Restored sources passed 13/13 RTX tests; [evidence](docs/reports/experiments/runtime-load-audit-20261013/README.md) records counter limitations.
 
-- Current qualification limits: continuous moving two-UE connectivity and zero-miss real-time operation remain failed. The user authorized the local main merge with these results retained. Earlier “keep on integration” or “main unchanged” statements below describe their dated checkpoints and no longer constrain checkout placement.
+- Traced two 120-second single-cell runs: pacing adjustments explain 123–132 ms of lag, predominantly following IQ input/output waits. Rare processing tails remain; [evidence](docs/reports/experiments/scheduler-pacing-trace-20261013/README.md) distinguishes measured stages from unresolved initiating causes.
 
-- [Current integration] The four approved delay-capacity, fallback, launcher and freshness defects are fixed and regression-tested. Main readiness remains blocked by deadline misses, starvation events and failed moving-SUTD user-plane connectivity. Geometry changes still reset; the inherited static multi-gNB default topology mismatch remains unqualified. See the final validation report for bounded passing results and failed strict gates.
-- No active blocker is recorded for the completed report and archive work.
-- [Scheduler benchmark] The stack runs at 0.39-0.65 of real time on the GB10 with two cells and four UEs, so wall-clock delays and capacities are scaled and not comparable across runs; the UL stays SINR-limited (PUSCH SNR −2..0 dB) outside the emulator; srsUE can abort in RLC AM NR under the backlogged 5QI 9 flow (1 of 8 runs).
-- Rank-1 multi-port implementation is done on this branch (R0–R3 below); the assessment report's
-  blueprint status applies to `main`, not to this branch. The downlink live gate still must verify that the selected OCUDU build supplies a usable fixed rank-1 multi-port PDSCH path without relying on unsupported srsUE PMI feedback.
-- Sionna channel-state export is now part of the approved report scope but implementation has not started. S0 is specified; the coefficient-grid/look-ahead defaults, general path-reduction thresholds, attached-run common-delay policy, ingress capacity, FDD scene/material-frequency policy, synthetic-array accuracy gate, and live-mobility input/retrace-transition policy remain explicit pre-S2/S4 decisions.
-- Seamless mobility across Sionna scene retraces is not currently supportable: a geometry swap changes delays/path identity and resets affected history. Static geometry plus Doppler is the first live attached-radio target; a fixed-delay-grid or dual-state transition must be designed before claiming continuity across retraces.
-- CMX500 integration is conditionally feasible but untested on the actual instrument. The installed RF unit, licenses, safe levels, reference/port routing and exact SA cell profile must be inventoried, and stock UHD srsUE must pass direct attach before adapter implementation is justified.
-- The current centered 8-tap fractional-delay implementation zero-fills up to three future samples at a processing boundary for taps below three integer samples. Integer-delay/identity work may proceed, but attached fractional-TDL claims are blocked until the common-guard or redesigned-streaming path passes one-shot-versus-partitioned continuity and RF EVM gates.
-- A networked `RU-lite` path is only an optional future architecture. Its wire protocol, remote srsUE RF adapter and hard packet-delay/slack gates are specified but unimplemented; the current ZMQ request/reply transport must not be relabelled as this interface.
-- The current `ChannelProcessor` API has no explicit finite-tail query/flush, off-air time-advance or X310-absolute update interface. These do not block the continuous, immutable-profile P2 proof, but burst operation and live attached-radio profile changes remain blocked until the interfaces and state-transition tests exist.
+- Fixed the broker summary's constant 5.005 ms maximum using existing exact timing data. The regression rejects the original implementation; RTX CTest passes 13/13, the source mirror is restored, and the dedicated container is stopped.
+
+- Extracted the optional srsUE receive-sleep switch and verified corrected runs at 998.8/999.1 slots/s, with 8.9/8.7 ms RR/QoS delay and complete packet delivery. Timing waits remain; tests and [evidence](docs/reports/experiments/scheduler-broker-paced-20261013/README.md) are retained.
+
+- Added opt-in single-cell execution, traffic filtering and analysis. RTX tests ran 28 cases with one skip; RR/QoS each completed 120 valid seconds, with delays 10.8/13.5 ms and IQ progress below nominal ([baseline](docs/reports/experiments/scheduler-single-cell-20261013/README.md)).
+
+- Audited saved RTX IQ counters: 20.76–21.04 MS/s versus 23.04 nominal confirms slowdown. Concurrent cells shared CPU sets; real-time priority requests failed; contention remains an unproven cause ([audit](docs/reports/experiments/scheduler-20261013/radio-speed-audit.md)).
+
+- Fixed the scheduler renderer's missing PRACH-root input for both independent cells. RTX CPU/CUDA tests passed 13/13; scheduler tests passed with one skip, and both live policy assignments completed with all four UEs attached.
+
+- Measured two 120-second swapped scheduler runs: mean per-second bulk-DL p99 was 34.286 ms for RR and 27.865 ms for QoS. Radio speed was 90–91% of real time; receive starvations remain ([evidence](docs/reports/experiments/scheduler-20261013/README.md)).
+
+### CPU sample workers — 2026-10-13
+
+- Added opt-in `runtime.cpu_threads: 24`; defaults remain serial. RTX tests pass 13/13 with bit-exact prior-revision fingerprints and broker loopback; matched TDL-A p99 improves 56.85→9.79 ms, versus CUDA 0.231 ms ([evidence](docs/reports/performance/2026-10-13-cpu-24/README.md)).
+
+### Vocabulary and slide review — 2026-10-13
+
+- Replaced page 4's unexplained producer caption and reconciled page 7's TX/RX labels, channel-response sentence and equation definitions. The 25-page PDF is synchronized; package checks passed and both changed pages were visually inspected.
+
+- Created `AGENT_VOCABULARY.md` with 82 entries, seven unmerged records and one harness preference. RTX checks passed for the exact template header, entry format, preference scope, whitespace and progress brevity; mission and control files remain unchanged.
+
+- Reviewed vocabulary against the broker, configuration and IQ code; clarified topology, sample timing, taps, IQ power, memory and superposition. Removed two generic definitions and narrowed unresolved records to six; template and dependency-order checks passed on RTX.
+
+### Project logo and docs preview — 2026-10-09
+
+- Published the radio icon as `docs/assets/branding/logo.svg` for the README title, docs sidebar and favicon (`09a1b9f`); retired the old favicon and routed `/favicon.svg` to the logo. Strict Sphinx build, site check and Pages deploy passed.
+- Added GitHub repository links to the docs sidebar and footer, and `scripts/docs/serve.sh` to build and serve the docs locally with Python 3.12 (`0faae43`). Fresh and repeat runs, strict build and Pages deploy passed.
+
+### Contributor credits — 2026-10-09
+
+- Added Quanlong Zhao to the README contributor summary and directory as a Research Assistant at SUTD, contributing hardware-in-the-loop testing. Markdown rendering and whitespace checks passed on RTX.
+
+### Publication — 2026-10-09
+
+- Published cleanup, launcher/dashboard fixes and validation records through `370e26e` to `origin/main`, preserving all twelve migration commits. RTX publication checks passed; no history rewrite or manual deployment.
+
+### Full validation and launcher corrections — 2026-10-09
+
+- Corrected static two-cell gNB dimensions and endpoint publication to match its scalar topology; preserved Sionna configuration bytes. The failing regression now passes, and both live UEs established sessions and passed traffic with zero ZMQ errors.
+
+- Corrected the synthetic two-cell launcher's topology and complete peer list. All five Sionna scene modes applied updates without rejection; four multi-node browser checks passed, with one SUTD timing miss retained.
+
+- Completed RTX CPU/CUDA, nine-stage GPU, 222 Python, frontend, Docker, package, publication and five live connectivity checks. All thirteen existing containers survived; live timing misses remain documented in the [validation report](docs/reports/validation/full-validation-20261009.md).
+
+- Clarified the dashboard's illustrative architecture, software-UE labels and qualification limits. Readiness no longer implies live-radio, matrix or strict timing verification.
+
+- Fixed mobile panel overflow and clipped tap columns with responsive grids and scrollable tables. Five viewport checks, installed assets, fifty dashboard tests and both frontend checks passed on RTX.
+
+### Text cleanup — 2026-10-09
+
+- Removed personal paths and shared-host details; replaced interaction narration with technical descriptions. Dated notes identify historical prose edits; existing commits and private originals remain intact.
+
+- Published three evidence derivatives with 26 normalized path fields and original/public hash provenance; all other values are unchanged. Added publication checks and regression coverage; RTX build, browser, integrity and focused tests passed (`validation/text-redaction-20261009/`).
+
+### Text disclosure review — 2026-10-09
+
+- Reviewed 638 source texts, 382 publication texts and 2,632 historical blobs on RTX. No confirmed credential leak; personal-path and agent-narration findings remain unresolved (`validation/text-review-20261009/`); source and evidence were not redacted.
+
+### Whole-project cleanup — 2026-10-09
+
+- Removed twelve remaining source stubs and repaired current documentation paths; generated website routes remain available. RTX strict build, 114 fragment routes, browser review and 71 evidence hashes passed.
+
+- Shared upload exclusions across eight scripts and corrected recursive Docker cache exclusions; updated the attachment driver checksum after verifying its single argument change. Transfer boundaries, Docker inputs and native fixture checks passed on RTX.
+
+- Removed generated local clutter, empty migration directories and 51 unused CSS selectors. Eight diagram views remain pixel-identical; research, writing, settings and historical evidence are preserved (`validation/cleanup-20261009/`).
+
+### Root milestone cleanup — 2026-10-09
+
+- Removed six root milestone stubs and updated current links and compatibility requirements. RTX strict build and publication checks passed; history and evidence are unchanged (`validation/docs-20261009/root-stub-cleanup/`).
+
+### Documentation migration — 2026-10-09
+
+- Completed documentation validation on RTX: strict build, legacy routes, evidence hashes, responsive preview, CPU/CUDA tests and synthetic walkthroughs passed. [Report](docs/reports/validation/documentation-migration-20261009.md) records skips and unchanged live limits; commits remain local.
+
+- Organized reports, evidence bundles, historical designs, milestone ledgers and Korean originals; retained published source pointers and updated figure destinations. Original evidence bytes are preserved; strict build, compatibility and operational walkthrough checks are next.
+
+- Split the technical reference into focused concepts, interfaces and guides; added the CUDA newcomer path, qualification table and concise README gateway. Preserved diagrams and added source-backed configuration, control and telemetry definitions; historical relocation and validation remain.
+
+- Added a pinned Sphinx/MyST/Furo build, separate PR validation and Pages deployment, repository-link handling, legacy routing and evidence checks. Content migration is next; full site validation follows the completed move.
+
+- Inventoried documentation, technical-reference sections, 82 legacy IDs and 22 diagrams; recorded evidence hashes, destinations and page ownership before migration. Publishing and content conversion are next.
+
+### Structure migration — 2026-10-09
+
+- Completed remote CPU/CUDA, GPU, Python/frontend, package, Docker, patch and path validation; deterministic IQ output matches the baseline byte for byte. Details: [migration report](docs/reports/validation/structure-migration-20261009.md).
+- Live rank-1 attachment, PDU, 250/250 pings and independent matrix capture passed using pinned prebuilt images; two receive starvations still fail strict real-time qualification. Recorded provisioning limits and restored the original container inventory.
+
+- Added application/integration indexes and documentation navigation for guides, reports, plans and milestone history, preserving published document locations. Recorded the approved responsibility boundaries in the harness and added patch-lock relocation regressions.
+
+- Grouped tests by component and moved the mutation-cost benchmark into `benchmarks/`; updated CMake and test path resolution. Full remote validation is next.
+
+- Consolidated external patches and revision locks under `integrations/`; moved USRP source and CMX workflows to their assigned components. Patch contents and source pins are unchanged; pre-migration OAI module manifests require rebuilding because they include patch paths.
+
+- Moved the bridge and dashboard into `apps/`, retained launch orchestration in `scripts/local/`, and added installable packages with independent dependency extras. Source entrypoints remain available; installed commands resolve input paths from the launch directory.
+
+- Renamed `examples/` to `use_cases/` and updated operational references, Docker paths and native fixture pins. The pinned driver differs only by the intended directory substitution; remote checks remain pending.
+
+- Recorded the approved destination map and command interfaces in `docs/development/project-structure.md`; preserved the earlier planning note. Migration and isolated RTX validation are in progress.
+
+### Structure planning — 2026-10-09
+
+- Reviewed source, Python components, workflows, configurations and documentation; proposed separating runtime packages, external integrations and operational scripts. Prepared a staged migration plan in chat; implementation has not started.
+
+### Pull-request integration — 2026-10-08
+
+- Published the integrated tree through `8ecbd5d`; GitHub confirms PRs #2–#6 merged, with contributor history preserved and no open PRs remaining.
+- Fixed rank-1 fixture checks broken by configuration relocation, retaining all four content pins; mutation checks reject changed files. Added coexistence coverage for CMX pacing/queues and CUDA/scaling options; CPU/CUDA checks passed.
+- Combined-tree validation passed CPU/CUDA CTest, nine GPU stages, Python/frontend and shell checks. Evidence: `~/ocudu-gpu-channel-workspace/validation/pr-merge-20261008/`; optional rendering/integration tests were skipped, and live hardware claims remain bounded to contributor reports.
+- Merged draft PR #5 locally: CMX500/X310 bridge, srsUE patches, optional broker pacing and per-device TX queues. Preserved CUDA/carrier settings and moved CMX configs into the common layout; hardware timing and IP-traffic limits remain documented.
+- Merged PR #6 locally: scheduler benchmark, robot demo and example reorganization. Combined conflicting branches without dropping X-track functionality; updated added configurations and references to the new layout while preserving the concise agent files.
+- Merged PR #4 locally: physical carrier checks, transmit scaling, CFO correction, TDD interference gates and threaded lower-PHY patches. Retained concise agent files and the contributor’s upstream-patch rule; detailed evidence remains in milestone documents.
+- Merged PR #3 locally: integrated-GPU zero-copy, CUDA initialization stream ordering, OAI MIMO gates and D10 vendor patches. Contributor live results remain platform- and revision-specific; combined-tree validation passed as recorded above.
+- Merged PR #2 locally with contributor history intact: selectable CUDA gNB profiles for RTX 5090, GB10 and Orin. Preserved the user-reset mission; contributor evidence is in `CUDA_MILESTONES.md`, `SPARK_MILESTONES.md` and `JETSON_MILESTONES.md`.
+
+### Rank-1 implementation and review — August 2026
+
+- Added two-/four-port topologies, synthetic branch-isolation/coherent-combining gates, live OCUDU/Open5GS/srsUE gates and independent wire `y = Hx` scoring. Preserved the 1×1 regression.
+- Adapted gNB fixtures for srsUE: dedicated DCI 0_1/1_1, CSI-RS disabled with zero CSI resources, MAC pcap disabled and `pusch.max_ue_mcs: 9`. The MCS cap removed the standing UL error rate; 4T4R then attached 3/3 with zero PUSCH KO.
+- Proved full synthetic DL/UL vectors and live multi-branch UL. Explicitly declared silent live DL branches. Oracle weight experiments matched predicted power; they do not demonstrate closed-loop PMI.
+- Ported native rank-1 gates to containerized remote scripts. Fixed subnet selection, SSH argument transport and missing numpy/PyYAML provisioning.
+- Replaced once-per-second latency snapshots with whole-run histograms, corrected published envelopes and remapped private evidence hashes to published commits. August review passed GPU 9/9, CPU/CUDA CTest 8/8 each, sanitizer checks and live 1×1/2×1/4×1 gates; strict starvation limits remain separate.
+- Generalized multi-UE smokes and added the four-UE topology, per-UE IMEIs, free-subnet selection and the user-fork PRACH preamble override. Staggered four-UE attach passed 4/4; simultaneous launch passed only 3/4. Reverted ineffective broker experiments.
+- Completed the MIMO/rank-1 assessment, Sionna export plan and CMX500/X310 feasibility/pipeline study. Hardware P0/P1 inventory and direct stock-UHD attachment remain prerequisites to adapter work.
+
+### Sionna integration — 2026-09-13–14
+
+- Merged contributor history normally, then fixed unnecessary matrix-history resets. Tests reproduced lost delayed echoes before the fix and checked all five antenna shapes.
+- Fixed four reviewed defects: CUDA delay capacity, silent host-staging matrix fallback, the supplied SUTD launcher's antenna topology, and stale delivery/HTTP readiness. Static mixed processing remains supported; unsupported dynamic routes reject updates before state mutation.
+- Added deterministic NVML fixtures and corrected remote sync exclusions. Long-delay regression failed against reviewed `88cbe6d` and passed against fixed source.
+- Completed uncontended 600-second reviewed/fixed timing windows. Both retained deadline misses; moving traffic failed despite initial PDU sessions. Stationary traffic passed with nonzero starvation. Full configurations and measurements are in the channel fix report.
+
+### Dashboard and UE recovery — 2026-09-14
+
+- Unified independent gNB feeds in `5c6cafd`: repeat `--gnb-metrics-source ID=URL`; `ran_gnbs` exposes per-gNB state and legacy `ran` remains the first feed.
+- Fixed quiet-socket reconnects in `d6637f7` using Ping after five seconds idle and matching Pong within ten seconds. Partial frames survive polling; cached UE rows remain historical until a new-session scheduler report.
+- Metrics validation covered 603 seconds and deliberate independent feed interruptions: 83/83 heartbeats per gNB, no unplanned reconnects, no browser reload/errors. Scheduler staleness remained visible; radio recovery was still failing at that checkpoint.
+- Diagnosed missing SA recovery, by-value NAS session reset, unsafe network Release handling and an SFN retry budget that accumulated across selections. Commits `4c8189b6c`, `5f0ac625b` and `c70ae415b` added deferred recovery, bounded retries/watchdogs, rejection/timer handling and fresh selection budgets.
+- `c70ae415b` passed eight controlled outages, including 120-second blackouts, with fresh PDU, ten replies within 60 seconds, unchanged UE processes/IPs and other-UE traffic. Earlier failed runs remain archived. The full NR-RRC PLMN/setup fixture failure occurred on both baseline and fixed source.
+- Follow-ups `94cd6e71d`, `4c9b0c55f` and `daa167ae3` added decoded-slot realignment, deferred PRACH, N310/N311/T310 handling and routing through the actual combined LTE/NR stack. The intermediate `4c9` image was never deployed.
+- Final moving validation demonstrated bounded recovery and cross-gNB fresh attachment, but intermittent UE1 traffic persisted. All ten CUDA links advanced; both feeds stayed connected with 23 stale scheduler samples each. Strict real-time qualification was not rerun or relaxed.
+- UE reports: `docs/sa-recovery-validation.md` / `sa-recovery-results.json` at `a2d92028d`, superseded by `docs/sa-sync-recovery-followup.md` / `sa-sync-recovery-results.json` at `cb58e6085` in the separate UE checkout. Full hashes and failed/passing evidence remain there and in the archive.
+
+### Main consolidation and publication — 2026-09-14
+
+- Merged integration `0e0a6c3` and retained launcher tip `5f55bb7` into this folder. Resolved the multi-gNB launcher conflict, restored legacy Sionna arguments and fixed SSH/empty-core-port transport; four regressions cover those paths.
+- Preserved pending edits in `.git/merge-backups/main-20260914T075710Z` and stash `5021c39660e39aab3b5dd9784a8c2f4e399300aa`. Reconciled older UI/hold behavior with integrated implementations.
+- Added the current integration guide and normalized README/reference credits: Zhouyou Gu and Jihong Park (SUTD), Minwoo Eun and Hyunsoo Lee (Yonsei University). README owns public contributor metadata; Git authorship remains intact.
+- Shortened README while preserving all 12 comparison rows, eight command blocks and credits. Nine-document checks passed 147 links/anchors and desktop/mobile previews; evidence is in `validation/readme-cleanup-20260914`.
+- Archived/hash-verified the obsolete worktree and six generated folders before removal. Backups: `.git/cleanup-backups/20260914T080717Z`; pointer `latest.txt`. Removed four local and three origin branches only after ancestor checks; tips are in `.git/branch-cleanup-20260914T081423Z.json`.
+- Removed obsolete development notes and the unused QuickJS archive; consolidated native operations in `scripts/native/README.md`, repaired nine archive links and retained historical qualifications. Pre-cleanup source is `5ffd73e`; README and executable behavior were unchanged.
+- Published integration, credits and cleanup with user-authorized normal pushes, ending at `3bae52c`. No tag or release was created.
+
+### Last recorded user demo — 2026-09-14
+
+- Ran the original moving SUTD two-gNB/four-port, two-UE/one-port scenario using CUDA and UE `daa167ae3`, with Sionna connected directly to broker port 5559.
+- Both UEs established PDU sessions at 10.45.1.2/.3 and initially passed 10/10 pings. Both were served by gNB0; gNB1 reported a fresh empty list. These startup checks did not supersede moving/deadline failures.
+- One dashboard was exposed at `http://127.0.0.1:19080` from 19:27 until a scheduled cleanup around 20:28 SGT. Thirteen unrelated containers were preserved. Current liveness is unknown.
+- Evidence: `~/ocudu-gpu-channel-workspace/validation/user-demo-20260914T112712Z`; pointer `validation/current-user-demo.txt`. The pending demo and cleanup-publication notes are preserved by this condensation.
+
+### Agent-file condensation — 2026-10-08
+
+- Shortened harness rules, removed repetitive examples and grouped related guidance. Retained operating constraints and recorded the preference for concise rules and outcomes.
+- Consolidated progress into current state, qualification limits, revision-specific validation and completed outcomes. Archived the entire prior ledger, including uncommitted notes, with only a historical banner and relative-link adjustments.
+- Documentation checks on RTX 5090 recovered the original progress exactly from the archive, resolved all 14 local Markdown links and found no edited-file whitespace or conflict-marker errors. No mission/control, source or runtime changes.
+- Added explicit progress-entry limits: one bullet, two sentences and 40 words per meaningful change, with a required final brevity check. The progress header links to the authoritative harness rules.
+- User amended the mission on 2026-10-08, resetting `AGENT_GOAL.md` following the supplied reference.
+- User amended `AGENT_GOAL.md` by removing the reset note on 2026-10-08.
+- Published agent-file updates as `1b46173` to `origin/main` on 2026-10-08 at the user's request. Fetch found no remote-only commits; whitespace checks passed, and source/runtime files were unchanged.
+- Removed the introductory paragraph at the user's request; the archive remains linked under Evidence and Archives. Whitespace checks passed, and the user authorized commit and push.
+
+## Evidence and Archives
+
+Remote evidence roots below are under `~/ocudu-gpu-channel-workspace/`:
+
+- `validation/full-20261009/`: source snapshots, full test matrix, before/after launcher regressions, live radio reports, scene/dashboard checks, packaging and publication artifacts, namespace/fixture provenance and container-preservation checks.
+
+- `validation/text-redaction-20261009/`: sanitized artifact, scan results, browser review, regression logs and original/derivative comparisons; private originals are also retained locally in `.git/text-redaction-backups/20261009/`.
+
+- `validation/text-review-20261009/`: value-redacted text audit, known-configuration matching, reachable-history scan and review findings.
+
+- `validation/cleanup-20261009/`: cleanup mirror, source/evidence integrity checks, Docker-context and transfer checks, fixture results and before/after diagram/browser screenshots.
+
+- `validation/docs-20261009/`: documentation artifact, compatibility checks, browser screenshots, CPU/CUDA and Python/frontend results, tutorial and Sionna/dashboard walkthroughs.
+
+- `validation/sionna-history-20260913/fix-validation/`: integration, channel and dashboard evidence.
+- `validation/ue-sa-recovery-20260914/`: UE builds, controlled outages, moving runs and final `sync-loss-live/` results.
+- `validation/main-merge-20260914/`, `validation/docs-contributors-20260914/`, `validation/readme-cleanup-20260914/` and `validation/release-cleanup-20260914/`: merge and documentation checks.
+
+Historical ledgers:
+
+- [Full record before this condensation](archive/progress/AGENT_PROGRESS-before-condense-2026-10-08.md).
+- [Upstream through 2026-08-16](archive/progress/AGENT_PROGRESS-2026-08-16.md).
+- [Rank-1 branch through 2026-08-17](archive/progress/AGENT_PROGRESS-rank1-miso-simo-2026-08-17.md).
+- [Sionna contributor at 066a702](archive/progress/AGENT_PROGRESS-ehs0-066a702.md).
 
 ## Next Resume Point
 
-- Consolidation into local main is complete. Continue in this folder for any new request. Do not push, publish, restart the live runtime or treat earlier test results as release-wide qualification without a new applicable instruction. Final merge evidence is in `docs/main-merge-validation.md`; no additional implementation is queued.
-
-### Earlier resume points (historical)
-
-- [Contributor documentation complete] Commit `0e0a6c3` updates README, technical reference, current integration guide and historical-report pointers. RTX 5090 documentation checks passed for seven files and 140 local links/anchors, with zero HTML parse errors; five browser previews cover desktop reference/guide/results and desktop/mobile credits. Source assertions and whitespace checks passed. Artifacts: remote `validation/docs-contributors-20260914/`, local ignored `build-review-docs-20260914/`. Contributor ancestry remains intact. No runtime, launcher, API or GPU test changes; remaining UE/moving/real-time limitations below are unchanged.
-
-- [Current UE follow-up complete] Review `/Users/charles_gu/Documents/GitHub/srsran-sa-recovery/docs/sa-sync-recovery-followup.md` and `sa-sync-recovery-results.json` (report commit `cb58e6085`). Tested source `daa167ae3`: 18/18 focused tests; UE0 controlled T310 loss/new PDU/10 replies in 3.974 seconds; three UE1 cross-gNB returning sessions passed traffic, one gNB0 returning session failed 1/10. Moving periodic results UE0 58/58 perfect batches, UE1 19/58; final moving UE1 check 0/10. A later 07:24:23 UTC inspection passed both 10/10 without restarts. Runtime supervisor 3174357, UE PIDs 3176751/3177563; consult current PID files in remote `validation/ue-sa-recovery-20260914/sync-loss-live/` before any operation. Proxy restored to muted []; one dashboard19080, expiry about16:10SGT. Build containers stopped; unrelated workloads untouched. Continuous moving connectivity and strict real-time qualification remain blocked; no queued geometry or radio redesign.
-
-- [Current integration] The approved minimum fixes and RTX 5090 validation are complete in `/Users/charles_gu/Documents/GitHub/ocudu-sionna-history-fix`. Review `docs/sionna-merge-fixes-validation.md`: stationary two-gNB/two-UE connectivity passes, moving connectivity and strict real-time gates fail. Keep changes on integration; no main publication or performance/geometry redesign has been performed. Older follow-ups below describe earlier workstreams.
-- The rank-1 critical path is complete on this branch: multi-port transport, deterministic 2×1 DL
-  row and 1×2 UL column, and the 4×1/1×4 extension all pass live against srsUE. Remaining rank-1
-  follow-ups are 8-port re-measurement and spatial-correlation/CDL live runs.
-- The approved scalar Sionna S0 static exporter/oracle and S1 record/replay format can proceed in parallel; merge the workstreams at buffered directional-vector CIR ingestion after the deterministic two-port channel exists, then gate live look-ahead mode.
-- Freeze the direction/carrier/port-manifest hash and the ideal-sinc-versus-bounded-filter validation metrics before implementing the S1 trace format, because both affect durable records and golden vectors.
-- For the CMX500 path, resume at P0/P1 in `docs/plans/cmx500-x310-srsue-feasibility.md`: inventory the exact instrument/ports/licenses and calculate safe attenuation, then prove a clean stock-UHD X310/srsUE attach on the conservative n3 SA profile before building `libsrsran_rf_ocudu.so`.
-- Revisit the `RU-lite` R0 record/replay gate only after the in-process identity path passes, or earlier if process/host separation becomes a hard requirement; do not start an O-RAN 7.2x lower-PHY implementation for this srsUE proof.
-
-### 2026-09-14 04:04 UTC — real OCUDU runtime recheck
-- User requested running/testing with actual OCUDU. Tested existing RTX 5090 moving SUTD session `20260914T034758Z`; dashboard code `5c6cafd`. Both four-port OCUDU gNBs, both srsUE containers, core, Sionna and CUDA broker remained running. Established broker connections to all ten transmitter antenna ports were observed.
-- Ran `docker exec sionnafix_srsue_N ip netns exec ue1 ping -c 10 -i 0.2 -W 1 10.45.1.1` for N=0,1 concurrently on the 5090 host: BOTH 0/10 replies. Both UE logs show initial RRC/PDU establishment followed by scheduling-request failure/release and repeated random-access attempts, without a second completed RRC/PDU session.
-- Across two API snapshots all ten CUDA links advanced processing slots (+4053 to +5250) and profile sequences (+150). Both gNB scheduler report counters advanced 98->100, but were stale at the second snapshot; gNB0 retained one zero-throughput row (PCI1/RNTI17921), gNB1 an empty list. Fresh feed receipt is not proof of a working UE session.
-- Runtime traffic validation FAIL; do not equate CUDA READY with end-to-end connectivity. No radio/reconnection changes or restart performed. Original moving scenario and single dashboard left running at http://127.0.0.1:19080 (HTTP200); existing supervisor hold expires approximately 12:49 Singapore time.
-- Remote evidence: `validation/sionna-history-20260913/fix-validation/runtime-check-{ue0.log,ue1.log,status.json,status-second.json,summary.txt}` under remote workspace. No code changes, no local backend tests, no GPU performance rerun.
-
-### 2026-09-14 — metrics timeout instability investigation
-- User reports repeated disconnected/timed-out banner. Live API monitoring confirms both feeds reconnect repeatedly: at 6.6 s both disconnected with last receipt age 5.45 s, recovered by 8.7 s; at 17.4 s both disconnected at age 5.953 s, recovered by 19.5 s. Scheduler report counts advanced 223->224->225->226 with gaps around 10 seconds early in observation.
-- Code confirms WebSocketClient defaults to 5-second socket timeout, and gnb_metrics_loop treats socket read timeout as an OSError, closes the client and reconnects. This converts a quiet interval into a disconnected banner. Receipt freshness and transport liveness are conflated by this behavior; need idle-safe reading/liveness handling while retaining independent 5-second scheduler freshness. Underlying cause of delayed gNB reports not yet established. No code/runtime changes made during this investigation.
-
-### 2026-09-14 — metrics recovery implementation in progress
-- Implementing approved heartbeat/session freshness fix on integration/sionna-history-fix after 5c6cafd; original dirty agent files preserved. Source changes limited to Web backend, RAN rendering and regression tests.
-- On RTX 5090 before fix: quiet established socket raises TimeoutError handled as disconnect; disconnect/reconnect followed by ACK makes cached UE rows fresh. Both reproduced directly against reviewed source.
-- Added established-session Ping after 5 s idle / matching Pong within 10 s, interruptible in-parser polling preserving partial frames, and per-feed ue_list_current_connection status. RAN rendering retains historical rows until a scheduler report from the new connection.
-- Initial 7 recovery tests + 43 dashboard tests and RAN renderer regression pass remotely. Baseline 300 s observer running, test-owned transparent metrics proxy PID2382747 prepared on loopback18011/18012; existing Web/radio unchanged so far. Remote artifacts use recovery-* in validation/sionna-history-20260913/fix-validation.
-
-- Fix committed as d6637f7; 86/86 Python tests and both frontend regressions pass on RTX 5090. Deployed source hashes match the commit; contributor ancestry checked.
-- Five-minute baseline (299.368 s sampled span) observed 13 disconnected episodes per gNB and maximum scheduler receipt gaps 10.633/10.639 s. Live gNB capability probe returned seven matching Pongs for seven Pings.
-- Replaced only old Web owner2294444/Web2294446 with owner2396929/Web2396932 at 04:26:50 UTC, using test proxies18011/18012. Radio container IDs/start times unchanged. Ten-minute live/browser recorder PID2397450; Chrome and proxy are test-owned.
-- At 60 s interrupted gNB0 metrics; at 120 s gNB1. Each recovered independently. API captured connected + ue_list_current_connection=false before next scheduler report; then true after report. Other feed remained connected. Browser session marker persisted, no JS exceptions; scene controls and actual re-rendered antenna selection checked. Automatic UE reassociation still unobserved: both UEs retain one initial RRC/PDU then release and eight RA attempts.
-
-### 2026-09-14 04:38 UTC — metrics recovery validation complete
-- Fix d6637f7 retained on integration/sionna-history-fix, contributor066a702 ancestor preserved. 86 Python tests + both frontend regressions passed on RTX 5090; no radio/GPU/backend or launcher edits.
-- Completed real OCUDU moving runtime observation:603.092 s including final pings,488 browser/API snapshots spanning598.901 s. Each gNB answered83/83 heartbeats. Exactly one deliberate metrics closure/reconnection per gNB, zero unplanned reconnects. Both cached-row generation transitions observed; no browser reload or JavaScript exceptions. Both feeds165 scheduler reports; stale intervals remain truthfully labelled.
-- All ten channel links advanced6730 profile sequences and198957–322524 processing slots; nominal sample slots advanced166192–166193. No new performance qualification claimed.
-- UE reassociation FAIL: both start/end pings0/10 each; UE0/UE1 eachstill one initial RRC/PDU, one release, eight RA attempts, no later successful session. Real returning-UE rendering remains unverified; controlled identity/empty-list return tests pass. No UE or gNB restart used.
-- Final direct singleWeb owner2444934/Web2444937 at127.0.0.1:19080, using real18001/18002 feeds. Both connected and fresh atfinalcheck. Temporary proxies stopped, testChrome terminated; radiosupervisor2251879/broker2253065/bridge2253117 and allfive originalcontainers remain unchanged. Existinginspectionwindow endsabout12:49Singapore.
-- Report:docs/metrics-recovery-validation.md. Localignored evidence:build-review-20260914/metrics-recovery-evidence.tar.gz plus recovery-browser-final.png/disconnect.png. Remote recovery-* artifacts under validation/sionna-history-20260913/fix-validation. Original dirty edits preserved.
-
-### 2026-09-14 — UE recovery source diagnosis / interpretation correction
-- User asked how to fix failed reassociation. Read-only inspection of running srsUE7bbd443 confirms SR failure prints “releasing RRC connection” but calls empty release_pucch_srs(), then starts RA. RA attempt exhaustion calls rrc_nr::ra_problem(); SA branch is TODO. This is a concrete missing recovery path. in_sync/out_of_sync and RLC failure callbacks are also empty. rrc_release() clears lower layers but does not itself set RRC IDLE or restart NAS; setup_request_proc rejects requests unless IDLE.
-- CORRECTION: earlier “RRC released” interpretation was stronger than evidence. Artifact release counters count the console string, not a verified RRC-state transition. Validation report corrected with source chain. Need deferred, coordinated RRC/MAC/NAS recovery investigation; no UE/radio modifications made and no process restart used. Initial channel loss/timing cause remains unproven.
-
-### 2026-09-14 — srsRAN_4G upstream currency verified
-- Running UE commit is7bbd44316940f875fb351aa7d031672f8c37d904 from zhouyou-gu/srsRAN_4G. Live git ls-remote shows the fork tip is identical; official srsran/srsRAN_4G master is6bcbd9e5bf8686aa7085202cd847c5ddd64a9c16.
-- GitHub compare API confirms fork ahead_by1,behind_by0,merge_base6bcbd9e5: the runtime includes current official master plus one fixed-PRACH-preamble patch. It is not an outdated upstream build; contributor launcher release_23_11 difference remains a separate default-config comparison.
-
-### 2026-09-14 — bounded UE recovery planning
-- Additional source finding: nas_5g::reset_pdu_sessions() iterates by value, so it clears copies and leaves stored established-session flags unchanged. nas_5g::start_service_request() and timer_expired() are TODOs. A minimum observed-RA-failure fix must coordinate deferred RRC teardown/IDLE with NAS fresh registration and session-state reset, not only fill ra_problem() or call switch_on().
-- Planning a separate srsRAN_4G fork patch based on7bbd443, with bounded fresh-attach recovery and independent RTX5090 outage/restore tests; no UE source/runtime mutation authorized by this planning turn or performed. Existing dashboard and channel-engine changes remain separate.
-
-### 2026-09-14 — UE recovery implementation started
-- User authorized implementation and explicitly requires their srsRAN_4G fork as default UE source. Isolated local checkout /Users/charles_gu/Documents/GitHub/srsran-sa-recovery, branch fix/sa-ra-recovery-5090 at7bbd443. Fork history retained, no existing repo modified.
-- RTX5090 build container srsue-recovery-build2340b42b88f0 created from existing fork image with network disabled; cached build125MB. Remote artifacts root validation/ue-sa-recovery-20260914. All compiles/tests to run there; no CPU/backend tests onMac. Existing radio test's previous inspection window ends04:49UTC normally.
-
-### 2026-09-14 — UE recovery implementation and focused validation
-- User fork remains the default UE source in all three remote smoke scripts: zhouyou-gu/srsRAN_4G, master unless explicitly pinned. New isolated branch fix/sa-ra-recovery-5090 retains baseline7bbd443 and PRACH patch; implementation committed4c8189b6ce0912b33a585658dff4b9770bcc6682. No upstream substitution or publication.
-- Added deferred SA PHY quiescence, MAC/RRC/session teardown, fresh NAS registration with2/4/8/10-second capped local retries, registration/PDU watchdogs, cancellation/generation guards and session/transaction bookkeeping fixes. Explicit network rejections block automatic retry except congestion carrying a valid T3346 wait; retained RRC T302 wait. No seamless handover claim.
-- RTX5090 baseline regressions failed as expected: stored session remains established after reset; RA exhaustion does not reset MAC/notify NAS. Fixed focused CTest15/15 passes. Full existing ue_rrc_nr_test fails the same PLMN/setup assertion on unmodified7bbd443 and fixed source; logged as pre-existing, not a new regression. Build transfer initially copied Apple metadata into source globs; removed only test-container metadata and rebuilt with COPYFILE_DISABLE=1/--no-mac-metadata.
-- Exact-commit UE image preparation underway in test-owned srsue-recovery-build. Original master image unchanged. Prior moving inspection runtime expired normally; unrelated13 containers remain running. Next: real stationary diagnostic outage/restore cycles, then original moving SUTD, fixed subscriber IPs and ten consecutive recovery pings; no UE restarts to manufacture recovery.
-
-### 2026-09-14 — live UE recovery validation underway
-- Exact UE image `4c8189b6c` is installed; source and binary hashes were verified on the RTX 5090. The real two-gNB/two-UE stationary diagnostic started at 05:07:32 UTC: supervisor 2555185, broker 2556404, Sionna 2556456, single Web 2556457 at http://127.0.0.1:19080. Both UEs initially attached (PCI 1 / 10.45.1.2 and PCI 2 / 10.45.1.3) and passed 10/10 pings. Initial container IDs, start times and PIDs are recorded. No UE process was restarted during the recovery tests.
-- The first full-channel attenuation trial produced actual UE0 RA exhaustion and recovery: channel restored at 05:09:38 UTC, reset at 05:09:42, fresh PDU at 05:09:52.563 with the same IP and 10/10 replies. Later attenuation-only trials did not reliably cause loss/new attachment: a 45-second full-channel trial resumed the existing session, and the uplink -100 dB trial still carried traffic. These are retained as diagnostics, not successful fresh-attachment tests.
-- Test-owned control proxy 5558 forwards to broker 5559. The current stimulus uses two equal-gain, opposite-phase taps at delay 0 on the selected UE's uplinks, keeping every real antenna port connected. Measured 0/10 replies confirms the blackout. This deliberate layout change resets relevant channel history/warmup; no geometry-continuity claim is made. Restored batches forward original Sionna profiles. The proxy was replaced between trials after briefly pausing only Sionna; radio processes stayed unchanged.
-- Automated `validate_outages.py` is running eight cycles: three uplink outage/restore cycles per UE, then a 120-second outage per UE. It requires an actual RRC reset, new PDU session, unchanged IP/process IDs and ten replies within 60 seconds. The other UE's traffic is checked independently. First cycle passed: UE0 recovered in 39.617 seconds, IP/process unchanged, other UE passed. Remaining cycles are pending. Remote artifacts are under `validation/ue-sa-recovery-20260914`: `outage-results.json`, `outage-validation.log`, `stationary-observation.jsonl` and PID files.
-- Test Chrome 146 now uses software WebGL flags; the initial `--disable-gpu` probe produced a context failure and is retained in `full-channel-diagnostic`. The current browser reports zero JavaScript exceptions and no reload. Scene readiness, ray/label toggles, antenna filtering, tap canvases, RTX 5090 resource/warmup cards and both gNB groups were verified. Browser PID is in `chrome.pid`; the redundant test browser was stopped. The local tunnel still works.
-- Draft report `/Users/charles_gu/Documents/GitHub/srsran-sa-recovery/docs/sa-recovery-validation.md` is uncommitted and needs final evidence. UE source remains `4c8189b6c`. Next: finish controlled cycles, stop only the stationary test runtime, run original moving SUTD for ten minutes with the same UE image and actual radios, distinguish reassociation from initial attachment, then leave one dashboard for inspection. No GPU performance rerun or tracked-launcher changes.
-
-### 2026-09-14 — network RRC Release defect found and fixed
-- First exact-image run `4c8189b6c` passed five controlled fresh-attachment cycles: UE0 three times, UE1 twice; restored traffic in 39.16–41.75 seconds, unchanged UE container/process IDs and fixed IPs, other UE's traffic intact. UE1's third outage instead received network RRC Release; the old release handler reset MAC synchronously without PHY quiescence or NAS recovery. No new PDU followed and the correct namespace final ping was 0/10. Long-outage cases were not reached. Evidence retained in remote `4c8189b6c-live/`; these failures are not erased by the new run.
-- Added release regression and observed failure on `4c8189b6c` before changing production code. Follow-up `5f0ac625bae7d688533ece9b61d6d586e51c3443` routes SA RRC Release through deferred recovery; NSA keeps existing behavior. Explicit switch-off blocks subsequent automatic registration and stops pending retry/watchdog timers. Added switch-off and release tests. Focused CTest 16/16 passes on RTX 5090.
-- New exact image `ocudu-gpu-channel/srsue-zmq:5f0ac625bae7d688533ece9b61d6d586e51c3443`, image `sha256:9d04985cc2560bdf021b3d273edcc53e8512b0869c74c4fb62103dcaffcde2df`, installed UE SHA256 `d5e485525a6789717ee36a603cfd0b7bfa23f2aad05e815b06563e4b3ae89183`. Source history remains based on user's fork; original master image unchanged. UE checkout has only the draft report untracked.
-- Stopped only the first test runtime through its owned hold process/cleanup. Started a separate stationary validation with new UE image; supervisor PID2686067, results `stationary-release-results`, same radio settings and single Web port19080. Next: new initial attachment/process baseline, eight controlled cycles, then original moving scenario ten minutes. The restart changes the tested software and is not counted as recovery.
-
-### 2026-09-14 — repeated SFN synchronization defect found and fixed
-- `5f0ac625b` stationary run `20260914T053308Z` passed all six short outages: 38.63, 42.47, 38.55 seconds for UE0; 40.13, 39.33, 40.86 seconds for UE1. Every cycle had a fresh PDU, ten consecutive pings, unchanged IP/processes, and other-UE traffic pass. UE0 cycle2 exercised an actual network RRC Release and recovered, validating the earlier release fix live.
-- UE0's 120-second blackout failed the 60-second recovery gate; follow-up ping0/10. Logs showed strong detected PCI1 but SFN selection failed at trial100, then101,102 on subsequent attempts. `sync_sa::sfn_sync_nof_trials` was initialized only once and accumulated across selections. UE1's long case was not reached. Raw evidence is retained under remote `5f0ac625b-live/` and `long-ue0-*`; no UE restart was counted as recovery.
-- Added a deterministic regression entering the real cell-selection procedure after an exhausted attempt, driving its FSM without RF. It failed on5f0ac625b (`trials_on_entry == 0`) before the production fix. Follow-up commit `c70ae415bd77e4cfdac85acd0ff5a40585746695` resets the existing100-trial counter before each SFN synchronization. Three successive exhausted-selection entries now get fresh budgets. Focused CTest17/17 passes on5090, including release/switch-off, NAS and MAC/RRC regressions. Trial limit and acceptance deadlines unchanged.
-- Exact c70ae415b UE image is being built from user's fork in test-owned build container; master untouched. The5f stationary runtime is being stopped via its owned hold/cleanup to change software for a new validation run. Next: all eight controlled cycles on c70ae415b, then original moving SUTD600s. `start_original_moving.sh` (remote artifact only) checks eight successful cycles and unchanged processes/IPs before archiving/starting the original moving config. UE code remains on fix/sa-ra-recovery-5090; channel integration and contributor history unchanged.
-
-### 2026-09-14 — c70ae415b validation running
-- Exact image `sha256:b5a17714976d7e1aa953a20f57eb84665256359f72629e5d3e5856d51a4117f0`; installed UE SHA256 `4feef08950d82ce4dd9285b711afc7b548bc1ee3b0b6cfd1b423dd102a57bc18`. Sourcec70ae415b on user fork branch; original master image unchanged. Current stationary supervisor2779928, results `stationary-sync-results`. Both UEs initially attached with fixed IPs and10/10 pings.
-- Controlled eight-cycle observer PID2784790, `outage-validation.pid/log`, `outage-results.json`, `stationary-observation.jsonl`. A test-owned transition watcher PID2786780 (`continue-to-moving.pid/log`) waits for completion, requires all eight cases recovered/other-UE traffic/unchanged IP and processes, then archives radio lifecycle logs and starts original moving SUTD via `start_original_moving.sh`. After runtime reaches its hold phase it records moving container baseline and starts `observe_moving.py` for600s. If controlled acceptance fails, watcher exits without starting moving. PID files/logs are ground truth.
-- Moving runtime and observer will have `moving-supervisor.pid`, `moving-observer.pid`, `moving-runtime.log`, `moving-observer.log`; original config path is `$u/project/examples/configs/sionna/scenarios/sutd/multi-gnb-sutd.json`, exactc70 image. Stationary and moving starts are distinct runs; no restart is counted as recovery. All scripts are remote validation artifacts; tracked launchers unchanged. Chrome with WebGL remains on one dashboard page and is not reloaded by either observer. Next: monitor controlled results, then600s moving and final traffic/log/browser checks; complete/update the draft report in UE repo.
-
-### 2026-09-14 — all controlled cases pass; original moving runtime under observation
-- c70ae415b stationary run20260914T055043Z passes8/8 controlled cases. UE0 three short recoveries40.61,40.36,39.36s; UE1 short40.05,39.73,43.69s; two-minute blackouts recover UE0 in24.85s and UE1 in21.12s. Every case: new PDU +10consecutive replies +same IP/container/start/PID +other-UE traffic pass. Final artifacts copied to `c70ae415b-live/` and remain at root filenames. `stationary-observation-summary.json`:647samples/868.2s, one browser marker, zero JS exceptions. Both metrics connections stayed connected; each had34stale samples, max scheduler age5.55s, sampled report-timestamp gap6.62s. Do not claim uninterrupted scheduler freshness or real-time operation.
-- Automatic test transition started original moving SUTD runtime supervisor2864304 at06:06:05UTC, broker2865380, Sionna2865432, samec70image. Moving observer2868488 started06:06:36UTC,600s window expected to finish about06:16:36UTC plus final pings. Current files `moving-observation.jsonl`, `moving-observer.log`, `moving-traffic-checks.json`, PID files; rawresults `moving-results`. Observer captures start/end broker offsets/status for transport summary. No UE process restart within this run.
-- Initial moving pings both10/10. At roughly5min, midpoint probe UE0 10/10 replies, UE1 0/10 replies: UE1 actual traffic loss. Logs then show UE1 SRfailure→RAexhaustion→deferred recovery06:12:29. Latest~397s observation: UE0 RRC2/PDU2 with10/10 new-session replies (observer event moving-ue0-pdu-2 at06:13:08); UE1 RRC2/PDU1, still awaiting a new PDU. Mark UE1 pending, not recovered merely because RRC returned. Continue to600s and finalpings; inspect lifecycle logs and correlate each observed return.
-- Browser scene rendered and positions move; zoomed test Chrome using wheel interactions for visual inspection (no source changes). Screenshots `moving-scene-first.png`, `moving-scene-zoomed.png`, `moving-scene-later.png`; later captures visibly changed UE markers/rays. Initial whole-campus view made markers tiny; zoom is test-browser only. All ten channels reportCUDA; nvidia-smi broker516MiB/Sionna1826MiB. No GPUperformance retest.
-- Draft UE report now includes three fix commits, failed prior runs,17/17focusedtests and full8-case table. It remains uncommitted pending moving results. Final work: complete moving observer, summarize exactwindow/transport/metrics/browser, final same-process check and runtime logs, relevant screenshot/controlcheck, update/commit report onUEforkbranch, update agentprogress, leaveone dashboard127.0.0.1:19080. User fork remainsdefaultsource; original master image and contributor history preserved. Moving runtime hold ends about07:07UTC; do not stop it before inspection window unless needed. Stop unused test build containers and arrange only owned proxy/Chrome cleanup when runtime expires.
-
-### 2026-09-14 — bounded UE recovery implementation and validation delivered
-- UE fork branch `fix/sa-ra-recovery-5090` in `/Users/charles_gu/Documents/GitHub/srsran-sa-recovery` is clean. Implementation commits:4c8189b6c (deferred SA recovery/NAS session reset),5f0ac625b (network Release and explicit switch-off),c70ae415b (fresh SFN trial budget per selection). Exact tested executable source c70ae415bd77e4cfdac85acd0ff5a40585746695; report/results commit a2d92028dc359960c7727f4afee64a4dc0bf1b23. Local commits, no remote publication. User baseline7bbd443 and channel contributor066a702 remain ancestors. Channel integration branch remains b07df66; unrelated source edits preserved.
-- All builds/tests for this UE patch ran on the RTX5090 host. Focused CTest17/17 passed; baseline failure demonstrations captured for session reset, RA exhaustion, network Release and exhausted SFN budget. Pre-existing fullNR-RRC PLMN/setup fixture failure still occurs on baseline and fixed source. Controlled c70 runtime20260914T055043Z passed8/8 outages, including120s perUE; each had fresh PDU +10consecutive replies within60 wall seconds +unchanged IP/processes +other-UE traffic pass. Earlier4c and5f failed runs retained, not overwritten.
-- Original moving SUTD runtime20260914T060606Z: exact601.12-second window06:06:36.305–06:16:37.679UTC,457browser/API samples, onepage marker, zeroJSexceptions, bothUE positions changed every sample. Initialpings10/10both; midpointUE0 10/10,UE1 0/10 replies; finalUE0 10/10,UE1 0/10 replies. Automatic fresh-session recovery demonstrated for both: UE0 two newPDUs both10/10; UE1 three newPDUs with3/10 then10/10 then10/10. LaterUE1 traffic failed again. Stable moving connectivity remains FAILED; no UE/gNB/core process restarted withinwindow.
-- All observed moving sessions matched container-specific RRC/PDU logs to fresh gNB0/PCI1 scheduler rows by assignedRNTI. gNB1 ran with all four antenna endpoints and reported fresh emptyUElists throughout. Cross-gNB reassociation remains UNVERIFIED. Both metrics feeds stayedconnected; max scheduler ages6.459/6.446s and45stale samples each underunchanged5s rule. Dashboard correctly shows stale/empty state; CUDAready alone is not UE traffic qualification.
-- All10CUDA links advanced. Exactbrokerwindow has6020heartbeats,0error/fatal/control-error records and0node-stall events. Nominalprocessing deadline misses remain: gNB0640,gnb1624,UE02858,UE1771 over~126428slots/receiver. Strict real-time gate remainsFAILED. These areexistingtelemetryobservations, not a repeatedGPUperformancesuite or schedulertuning. Channelgeometry resets/fullRLF/idle-resume remain separate limits.
-- Final report `/Users/charles_gu/Documents/GitHub/srsran-sa-recovery/docs/sa-recovery-validation.md` and machine-readable `sa-recovery-results.json` committed and copied to remoteartifactroot. Rawlogs, exactversions/configs, allfailed/passedcases, screenshots andcorrelations under `~/ocudu-gpu-channel-workspace/validation/ue-sa-recovery-20260914`. Finalbrowsercontrols pass againstrealruntime; zoomedscreenshots visiblyshowmovingnodes/rays. Existing localtunnelverified.
-- Liveinspection: one dashboard http://127.0.0.1:19080; supervisor2864304,broker2865380,Sionna2865432; originalmovingroute unchanged, exactc70UEimage. Holdsleep2868269 started06:06:34UTC for3600s, so runtimeexpires around15:06Singaporetime2026-09-14. Radio state canchangeasroutecontinues. Test-owned buildcontainers srsue-recovery-build and srsue-recovery-baseline stopped, caches/imagesretained. Cleanupwatcher2944149 (`cleanup-after-runtime.pid/log`) waitsforownedruntimeexit then stops only matching ownedoutage-proxy/Chrome PIDs usingstart-time andcommandchecks. Unrelated13containers remainrunning. No main merge or remote publication was performed.
-
-### 2026-09-14 — live UE1 complaint and synchronization follow-up
-- At06:46UTC, real moving OCUDU runtime on c70ae415b returned UE0 10/10 and UE1 0/10. Both metrics feeds and all10 CUDA links were live; control proxy muted list was empty. No UE restart was used for diagnosis. Later records show UE1 selecting PCI2 and establishing a PDU session, but traffic remains intermittent; zero traced paths on parts of the original route are also observed.
-- A generated-PBCH regression on5090 reproduced a separate timing defect on c70ae415b: after20 lost slots, decoded next slot91 but PHY worker next slot71. Committed94cd6e71d1689358e70a12c82d526f0cf04b6244 in user's srsRAN fork: use decoded slot timing after recovery, clear obsolete grants after draining workers, and prepare PRACH only after synchronized reception. Repeated20/100/10300-slot outages, both PCIs, SFN wraparound, and deferred PRACH checks pass; focused CTest17/17 passes.
-- Exact image sha256:d0aae838f35b5b5671d18f7d312626349c256314fba2b65b8fb850e0f7c4dc37; installed UE SHA25633a68d79a1f6d8493314452c40ce6c59869ef7396d967aff8f464ad7eb8bf0fe. Original master image unchanged. Remote artifacts: validation/ue-sa-recovery-20260914/followup-20260914T0646Z. Baseline route observer3051493 runs460seconds; test-owned transition3078115 waits for completion, then starts94cd6e71d original moving runtime and600second browser/PDU observer under timing-live/. Consult timing-live/start.log, supervisor.pid and observer.pid before continuing. No live pass claimed yet. No channel, Sionna, OCUDU, dashboard or tracked launcher source changes.
-
-### 2026-09-14 — sustained synchronization loss and actual SA dispatcher
-- Timing-only94cd6e71d real moving run20260914T065730Z completed600.17seconds,459browser/API samples, sameUEprocesses and onebrowsermarker. Both UE SFN-mismatch counts were zero despite703/1253realignments. Extended620s periodic traffic: UE0 56/58batches10/10 (other8,9); UE1 14/58batches10/10 (43zero,one5). Movement still not qualified. Evidence timing-live/validation-summary.json. Fresh attachment observed onPCI1; sustained loss still leaves gaps because the NR synchronization notification path was unfinished.
-- Added configuredN310/N311/T310 handling that triggers existing deferred fresh attachment on sustained loss and cancels on transient recovery; source4c9b0c55f. Its RRC unit failed before fixing (T310 neverstarts) and18selectedtests pass. This uses the existing SSB synchronizer indications, not a complete BLER-based NR RLM or seamless handover implementation; retain that limitation.
-- Predeployment source review found actualsrsUEusesue_stack_lte even inSA; notifications neededmode-aware routing toNRRRC. Expandedthetestthroughactualcombinedstack; it failed on4c9b0c55f, thenpassedwithsource daa167ae3443b046ce560df646c7dc5f17e5c1dd. All18focusedtests passon5090. 4c9imagewasNOTlaunched. Daaexactimagebuild/deployment started via execsession96299; next moving600sobservers/collector under remote sync-loss-live/. start_sync_loss_moving.sh waitsfortiming-livefinalsummary, stops onlythatownedruntime andstartsdaarun. Read itsstart.log/runtime.log/PIDfiles; validateactualT310loss→freshRRC/PDU→10pings, bothgNBfeeds, all10CUDA links, andunchangedUEprocesseswithinnewrun beforeclaimingpass.
-
-### 2026-09-14 — combined fixes in live validation
-- Exact tested source `daa167ae3443b046ce560df646c7dc5f17e5c1dd`, image `sha256:921ab4091d1ce9b964c48d97e4d6fc64ba3be26eea696cc833ecc3ec87662689`, executable SHA256 `eba570b596d251bc8b7acba6126640d40bb53251ce9f88fe6c59deddba45d3e7`. Focused 18/18 tests pass, including the actual combined LTE/NR runtime dispatcher. The intermediate4c9 image was never deployed.
-- Current original moving runtime: supervisor3174357, UE0 PID3176751 started07:10:35UTC, UE1 PID3177563 started07:10:45UTC, observer3178504. One dashboard19080; inspection hold ends approximately16:10SGT. Remote directory `validation/ue-sa-recovery-20260914/sync-loss-live/` contains all PID files, browser/API/PDU and periodic traffic observers, collector, and logs. All ten CUDA links and both real gNB feeds live; both initial traffic checks10/10; browser controls pass without page reload.
-- Actual UE1 T310 expiry07:11:35.787UTC triggered deferred recovery. It selectedPCI2/gNB1 at07:12:09.597, completed new PDU07:12:10.391 and passed10/10 without process restart. A subsequent new session also passed; later session4 traffic check failed. Do not claim uninterrupted moving connectivity. Full600s observation/620s periodic capture still needs final collection.
-- Test-owned `check-ue0-loss.py` waits for `sync-loss-live/validation-summary.json`, then performs a20second both-direction UE0 signal-loss injection through the existing control proxy, restores it in finally, and requires T310 expiry/newPDU/10pings within60seconds and unchanged UE process identities. Consult `ue0-loss.pid`, `ue0-loss.log`, `ue0-loss-result.json`; verify root `outage-state.json` returns muted[]. This test does not restart UEs or alter the moving scenario. Pending report is local untracked `docs/sa-sync-recovery-followup.md`; finalize results, add machine-readable summaries, commit docs, and update both progress logs before finishing.
-
-### 2026-09-14 — final synchronization recovery results
-
-- [UE implementation] User-fork commits `94cd6e71d` (decoded slot realignment and deferred PRACH preparation), `4c9b0c55f` (N310/N311/T310 sustained-loss trigger), and `daa167ae3` (actual combined-stack SA dispatch) are retained separately. Baseline `7bbd443` remains an ancestor. All 18 focused tests passed on RTX 5090; baseline failures for each defect are saved. The intermediate 4c9 image was not deployed. Exact final image and binary hashes are in the report.
-- [Real moving runtime] The original two-gNB/four-port, two-UE/one-port SUTD scenario on CUDA ran for 600.049 seconds, with 458 browser/API samples and unchanged UE processes. UE0 periodic traffic: 58/58 perfect batches. UE1: 19/58, including 36 zero-reply batches. UE1 made four new sessions: three gNB1/PCI2 sessions passed 10/10; the gNB0/PCI1 session at 07:16:42.821 UTC failed with 1/10. Final moving traffic: UE0 10/10, UE1 0/10. Both SFN mismatch counts were zero. Moving connectivity remains failed; route coverage gaps are observed but are not proven to explain every failure.
-- [Controlled recovery] After the moving collectors finished, a 20-second test-owned UE0 signal loss in both directions caused 0/10 traffic and T310 expiry. Restoration at 07:21:43.316 UTC led to RRC Connected at 07:21:44.269, new PDU at 07:21:45.005, and 10/10 replies in 3.974 seconds, within 60 seconds; both UE identities unchanged. Subsequent gNB0/PCI1 scheduler data included the new `0x460c` RNTI. The proxy is restored to `{"muted": [], "direction": "both"}`. At 07:24:23 UTC both UEs passed 10/10 in a separate inspection; this does not erase moving failures.
-- [Browser/runtime] Both gNB feeds remained connected across 458 samples; each had 23 truthfully stale scheduler samples (maximum ages 5.572/5.570 seconds). All ten CUDA links advanced 7448 sequences and 214949–305208 slots. No observer exceptions; one browser marker/no reload. Scene, rays/labels, antenna filter, tap canvases, RAN groups, resource cards and warmup checks passed. Strict real-time qualification was not rerun or relaxed.
-- [Delivery] Report commit `cb58e6085` in the UE fork adds `docs/sa-sync-recovery-followup.md` and machine-readable results, and marks the earlier report as historical. Integration branch stays `b07df66`, contributor tip `066a702` remains an ancestor, default UE repository remains the user's fork, and local edits are preserved. No main merge or push. Build containers are stopped. Current runtime and one dashboard on port 19080 remain available until approximately 16:10 SGT; all raw evidence is under remote `validation/ue-sa-recovery-20260914`. Full BLER-based RLM, seamless handover/re-establishment, continuous moving traffic and prior strict real-time failure remain outside this bounded pass.
-
-### 2026-09-14 — contributor credits and implementation documentation
-
-- [Credits] README contributor table is authoritative, with equal entry structure and comparable detail: Zhouyou Gu (`@zhouyou-gu`) as project lead, Minwoo Eun (`@MinwooEun`) for rank-1 MISO/SIMO, and Hyunsoo Lee (`@ehs0`) for Sionna integration. Introductory and technical-reference credits use the confirmed names; original Git authors and copyright notices are unchanged.
-- [Current implementation] Added `docs/sionna-integration.md` with retained-commit provenance, matrix history/reset semantics, 1023/1031-sample delay capacity, CUDA fallback restrictions, one multi-gNB dashboard, existing API/subscription fields, exact user-fork UE source and portable recovery results. README/reference now describe nine GPU stages, numerical tolerances and failed moving/strict real-time qualifications. Corrected actual control message fields (batch commands use `id`; correlation updates are direct). Historical reports retain their original observations with current-guide pointers.
-- [Validation] On RTX 5090, isolated Markdown 3.7/html5lib 1.1 checks passed for seven documents and 140 local links/anchors, with zero baseline or changed HTML parse errors. External URLs were inventoried separately, not counted as checked local links. Browser previews on the remote Chrome covered README credits at 1440/390 pixels, the technical reference, integration guide and UE result section. Screenshots were visually reviewed; mobile preview tables scroll horizontally. No radio or GPU performance tests were repeated. Documentation preview tab/server were test-owned and cleaned up; the running radio stack/dashboard were untouched.
-- [Delivery] Commit `0e0a6c3f840cd69b01b551ccd4573168ef0646ec` on `integration/sionna-history-fix` changes seven documentation files only. Contributor tip `066a702` and Minwoo's `e31fe51` remain ancestors. Existing harness/progress edits and original-checkout source edits are preserved. No mailmap, history rewrite, push or merge into main. Remote evidence is in `validation/docs-contributors-20260914/`; local ignored preview artifacts are in `build-review-docs-20260914/`.
-
-### 2026-09-14 — release checkout cleanup
-
-- Removed `hyunsoo_code_explain.md`, `HANDOVER.md`, `MIMO_MILESTONES.md`, `RANK1_MILESTONES.md`, and unused `quickjs-1.19.4.tar.gz`. Native launch, shutdown, lock troubleshooting and artifact guidance is consolidated in `scripts/native/README.md`; current Sionna behavior links there. Historical constraints and August measurement qualifications are retained in `docs/rank1-feasibility-report.md`, with full original notes pinned to pre-cleanup `5ffd73ea4afa2295b9a588b0b03a411329e81d9b`.
-- Updated historical note references and source/config comments; repaired nine existing archive-relative documentation links. All C++ compilation units/apps are registered in CMake, no exact duplicate tracked files were found, and no executable dead code was proven. Retained diagnostics, native/OAI paths, synthetic tools, CPU reference, tests, scene assets, vendor files, historical reports/plans and licenses. QuickJS archive has no install/build/test consumer; frontend regressions pass without it. No executable statements changed.
-- Validation on RTX 5090 in `validation/release-cleanup-20260914/source`: `python3 -m unittest discover -s tests -p 'test_*.py'` passes 90/90; `python3 scripts/native/render-sionna-rank1-configs.py --self-test` passes; all tracked shell scripts pass `bash -n`. Markdown/HTML checks using existing Markdown dependencies pass 61 local links/anchors in changed documents. Logs: `python-tests.log`, `renderer-test.log`, `links.json` in the parent validation directory. No GPU performance or radio tests rerun.
-- Static verification: README byte-identical (commands, comparison and credits preserved); changed Python ASTs identical and C++/YAML changes comments only; frontend, scenes and tests unchanged; `git diff --check` passes. Contributor tips `066a702` and `e31fe51` remain ancestors. Live runtime and ignored local folders untouched. Cleanup committed on local main without push/tag; earlier uncommitted runtime notes remain outside the cleanup commit.
-
-### 2026-09-30 — current container runtime preparation
-
-- Built ARM64 pinned CPU gNB, user-fork srsUE, Open5GS and MongoDB under `/home/dev/ocudu-spark`, plus separate repository-locked RACH contention patched srsUE. Existing gate source files are unchanged. Native build evidence: `results/s3-stack-20260930T113417Z`; local UE manifest: `builds/srsran4g-zmq-local/BUILD-MANIFEST.txt`.
-- Python environments and package locks are under `/home/dev/venvs/{robot,sionna}` and `/home/dev/ocudu-setup`. Sionna CUDA initialization, 3-second standalone robot fight, namespace/TUN probe and existing gate CTest 12/12 passed. Additional runtime dependencies libLLVM18 and python3-yaml installed.
-- Original mode-750 home blocks inner user-namespace root traversal. Broad chmod was rejected by automatic review and not applied. `run-isolated.sh` instead creates a disposable mount namespace exposing only repository, native workspace, venvs and setup directory under a synthetic home. Actual home permissions remain unchanged.
-- First full radio run `20260930T114249Z` failed UE attachment because both UEs remained in first-time FFTW planning; gdb confirmed `fftwf_measure_execution_time`. Standalone warmup then completed (`UE_PHY_WARMUP_READY=True`) and wrote `/root/.srsran_fftwisdom`.
-- Warm-cache radio run `20260930T114817Z` passed. Both UEs established RRC and PDU sessions and passed gateway ping. Four CUDA Sionna links consumed external arena positions; the broker reported zero sequence gaps, queue overflows and ZMQ errors. Sixteen complete fights ended by ring-out (ue0 nine wins, ue1 seven); fight 17 was the expected partial fight terminated at the 180-second gate boundary. Runtime processes were cleaned up. This run had strict realtime disabled and does not qualify strict deadlines.
-- Follow-up continuity audit of run `20260930T114817Z`: initial attach gate status is passed, but sustained dual-UE connectivity is not. UE0 logged zero `SYNC: detected out-of-sync` events and no RRC release. UE1 logged 230 out-of-sync detections from 11:51:09.543 to 11:51:10.762 UTC, three `Scheduling request failed: releasing RRC connection` events, and repeated PRACH transmissions without a second `Random Access Complete`, `RRC Connected`, or PDU-session success. Fight 15 shows UE1 gaps/stale traffic and fight 16 lacks its final brain result. Treat the run as proof of initial dual attach only; it fails continuous dual-UE stability.
-- Added the user-requested Korean result summary at `/home/dev/channel_emulator/docs/one-cell-two-ue-stability.md`. It separates initial attach success from failed sustained dual-UE stability and records the command, environment, exact UE evidence, robot-traffic impact, gate limitations and artifact paths.
+No further review fixes are queued. Strict zero-starvation qualification remains failed; the existing scheduler reports retain the unresolved IQ handoff pauses and separately confirmed full-RLC-queue packet drops.

@@ -52,7 +52,7 @@ sionna_web_port="${OCUDU_MGNB_WEB_PORT:-8080}"
 # canyon this milestone was validated on; any scenario naming gnb0/gnb1/ue0/ue1
 # with the serving and intercell models works, which is how the OpenStreetMap
 # SUTD campus scene is selected.
-sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-examples/configs/sionna/scenarios/simple_street/multi-gnb.json}"
+sionna_scenario="${OCUDU_MGNB_SIONNA_SCENARIO:-use_cases/configs/sionna/scenarios/simple_street/multi-gnb.json}"
 # Host port for the 5GC, empty = do not publish it. Nothing in this gate talks
 # to the 5GC from outside the compose network; the base compose publishes 9999
 # only so a human can poke it, and that mapping is enough to abort the whole
@@ -98,7 +98,7 @@ if [[ "${execution_mode}" == "remote" ]]; then
   esac
   echo "syncing working tree to ${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}"
   rsync -az --delete \
-    --exclude '.git' --exclude 'build*' --exclude '.config' \
+    --exclude-from="${script_dir}/rsync-excludes.txt" \
     -e "ssh -i ${REMOTE_SSH_KEY} -o BatchMode=yes -o ConnectTimeout=8" \
     "${repo_root}/" "${REMOTE_USER}@${REMOTE_HOST}:${remote_dest}/"
 else
@@ -298,7 +298,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
   fi
   if [[ ! -x "${sionna_python}" ]]; then
     echo "missing Sionna Python: ${sionna_python}" >&2
-    echo "create ${workspace}/venvs/sionna and install scripts/sionna_rt/requirements.txt" >&2
+    echo "create ${workspace}/venvs/sionna and install apps/sionna_bridge/requirements.txt" >&2
     exit 2
   fi
   if [[ -z "${DRJIT_LIBOPTIX_PATH:-}" ]]; then
@@ -371,12 +371,22 @@ compose_override="${config_dir}/docker-compose.ocudu-gpu-channel.yml"
 ocudu_dockerfile="${config_dir}/Dockerfile.ocudu-zmq"
 srsue_dockerfile="${config_dir}/Dockerfile.srsue"
 
+# Match the default broker topology for each channel mode. Static cells have
+# one port at 3000/3002; Sionna cells have four ports at 3000-3007/3010-3017.
+gnb_port_count=1
+gnb1_first_port=3002
+gnb_base_config="use_cases/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml"
+if [[ "${channel_mode}" == "sionna" ]]; then
+  gnb_port_count=4
+  gnb1_first_port=3010
+  gnb_base_config="use_cases/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml"
+fi
+
 # One gNB config per cell from the shared ZMQ base: rewrite the ZMQ ports and
 # add a distinct PCI, gnb_id and node name so the two cells are independent.
 #
-# The base is the 4T4R rank-1 fixture, so each cell carries FOUR antennas in
-# both directions and each srsUE keeps one: per UE the downlink is a 1x4 row
-# and the uplink a 4x1 column, still rank-1 MISO/SIMO. Everything that fixture
+# Sionna uses the 4T4R rank-1 fixture and each srsUE keeps one antenna: per UE
+# the downlink is a 1x4 row and the uplink a 4x1 column. Everything that fixture
 # is careful about carries over unchanged and is load-bearing -- ue_dedicated
 # with DCI 0_1/1_1, CSI-RS off, and above all the pusch.max_ue_mcs cap, without
 # which UL 4R registration is a coin flip (root-caused 2026-08-17).
@@ -388,7 +398,7 @@ srsue_dockerfile="${config_dir}/Dockerfile.srsue"
 gen_gnb_config() {
   # $1 dst  $2 first_port  $3 pci  $4 gnb_id  $5 ran_node_name
   #
-  # A cell takes eight consecutive ports from $2: tx on the even offsets and
+  # A cell takes paired ports from $2: tx on the even offsets and
   # rx on the odd ones, port by port, which is the pairing both the fixture's
   # device_args and the broker topology's gnbN_pM devices use. The two cells
   # take disjoint blocks so a stale socket cannot cross between them.
@@ -396,10 +406,10 @@ gen_gnb_config() {
   # inactivity_timer goes inside the fixture's existing cu_cp block, not after
   # it: a second top-level `cu_cp:` mapping is a duplicate key, not an override.
   local base="$2" args="" port
-  for port in 0 1 2 3; do
+  for ((port=0; port<gnb_port_count; port++)); do
     args+="tx_port${port}=tcp://*:$((base + port * 2)),"
   done
-  for port in 0 1 2 3; do
+  for ((port=0; port<gnb_port_count; port++)); do
     args+="rx_port${port}=tcp://host.docker.internal:$((base + port * 2 + 1)),"
   done
   args+="base_srate=23.04e6"
@@ -412,10 +422,20 @@ gen_gnb_config() {
     /^cu_cp:/ { if (inactivity != "") print "  inactivity_timer: " inactivity }
     /^cell_cfg:/ { print "  pci: " pci }
     END { print ""; print "gnb_id: " gid; print "ran_node_name: " nm }
-  ' "${project_root}/examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_4t4r_rank1_srsue.yaml" >"$1"
+  ' "${project_root}/${gnb_base_config}" >"$1"
 }
 gen_gnb_config "${gnb0_config}" 3000 1 411 gnb0
-gen_gnb_config "${gnb1_config}" 3010 2 412 gnb1
+gen_gnb_config "${gnb1_config}" "${gnb1_first_port}" 2 412 gnb1
+
+gen_gnb_ports() {
+  local base="$1" port value
+  for ((port=0; port<gnb_port_count; port++)); do
+    value=$((base + port * 2))
+    printf '      - "%s:%s"\n' "${value}" "${value}"
+  done
+}
+gnb0_ports="$(gen_gnb_ports 3000)"
+gnb1_ports="$(gen_gnb_ports "${gnb1_first_port}")"
 
 awk '
   { print }
@@ -483,14 +503,11 @@ services:
     ports: !override
 ${fivegc_ports}
   gnb:
-    # One published port per transmit antenna: these are the four the cell
+    # One published port per transmit antenna: these are the ports the cell
     # binds, and the broker connects in to each. The receive ports are dialled
     # out to host.docker.internal and need no mapping.
     ports:
-      - "3000:3000"
-      - "3002:3002"
-      - "3004:3004"
-      - "3006:3006"
+${gnb0_ports}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -522,10 +539,7 @@ ${fivegc_ports}
       metrics:
         ipv4_address: ${metrics_prefix}.4
     ports:
-      - "3010:3010"
-      - "3012:3012"
-      - "3014:3014"
-      - "3016:3016"
+${gnb1_ports}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -712,9 +726,9 @@ echo "open5gs: ${h:-?}"
 # decides which cell is stronger.
 if [[ "${topology_name}" == "__default__" ]]; then
   if [[ "${channel_mode}" == "sionna" ]]; then
-    topology_name="examples/configs/topologies/sionna/topology.sionna-multi-gnb.cuda.yaml"
+    topology_name="use_cases/configs/topologies/sionna/topology.sionna-multi-gnb.cuda.yaml"
   else
-    topology_name="examples/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml"
+    topology_name="use_cases/configs/topologies/ocudu_docker/topology.multi-gnb.cuda.yaml"
   fi
 fi
 case "${topology_name}" in
@@ -784,7 +798,7 @@ if [[ "${channel_mode}" == "sionna" ]]; then
     write_summary "control_server_not_ready" 1
   fi
 
-  "${project_root}/scripts/sionna_rt/run_web_ui.sh" \
+  "${project_root}/scripts/local/run_web_ui.sh" \
     --python "${sionna_python}" \
     --scenario "${sionna_scenario}" \
     --control-endpoint tcp://127.0.0.1:5559 \
