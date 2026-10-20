@@ -1,6 +1,6 @@
 # srsUE 구성에서 DL MISO 이득이 측정되지 않은 이유
 
-관련 문서: [`rank1-feasibility-report.md`](rank1-feasibility-report.md) · [`why-radionode-and-srsue-rank1-ko.md`](why-radionode-and-srsue-rank1-ko.md) · [`examples/scheduler_benchmark/README.md`](../examples/scheduler_benchmark/README.md) "gNB antennas"
+관련 문서: [`rank1-feasibility-report.md`](rank1-feasibility-report.md) · [`why-radionode-and-srsue-rank1-ko.md`](why-radionode-and-srsue-rank1-ko.md) · [`examples/ran_benchmark/README.md`](../examples/ran_benchmark/README.md) "gNB antennas"
 
 ## 결론
 

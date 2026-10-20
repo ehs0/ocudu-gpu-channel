@@ -6,9 +6,9 @@ plus `configs/`, the input configurations the demos and gates read.
 | Demo | Gate (run from the repo root) |
 |---|---|
 | [robot_fight/](robot_fight/README.md) — sumo-robot arena over two cells, two brokers sharing one GPU | `bash examples/robot_fight/run-ocudu-robot-fight.sh` |
-| [scheduler_benchmark/](scheduler_benchmark/README.md) — OCUDU MAC schedulers and link adaptation (fixed MCS, AMC, AMC + OLLA) under one seeded Sionna channel | `bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh` |
+| [ran_benchmark/](ran_benchmark/README.md) — OCUDU MAC schedulers and link adaptation (fixed MCS, AMC, AMC + OLLA) under one seeded Sionna channel | `bash examples/ran_benchmark/run-ocudu-scheduler-benchmark.sh` |
 
-**RAN benchmarks.** `scheduler_benchmark/` is the first RAN benchmark: it runs
+**RAN benchmarks.** `ran_benchmark/` is the first RAN benchmark: it runs
 live OCUDU gNB and srsUE stacks so that the alternatives under test see the same
 channel and traffic. Benchmarks for other RAN functions will be added here as
 their own folders.

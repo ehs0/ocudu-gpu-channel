@@ -3,12 +3,12 @@
 # the web UI uses (validation, stop + clear of the previous session, frozen
 # bundle, cold policy runs, fairness audit), without the web server.
 #
-#   bash examples/scheduler_benchmark/run-single-cell-scheduler-benchmark.sh \
+#   bash examples/ran_benchmark/run-single-cell-scheduler-benchmark.sh \
 #     '{"ue_count": 4, "mobility": "static", "placement": "uniform", "traffic_profile": "mixed",
 #       "tests": [{"scheduler": "rr"}, {"scheduler": "qos"}], "seed": 1, "measure_seconds": 120, "warmup_seconds": 10}'
 #
 # Runs as root (namespaces, Open5GS TUN); needs the broker built once:
-#   python3 examples/scheduler_benchmark/single_cell_runner.py preflight --ctest
+#   python3 examples/ran_benchmark/single_cell_runner.py preflight --ctest
 # Environment: OCUDU_NATIVE_ROOT, OCUDU_NATIVE_SIONNA_PYTHON (scripts/native/env.sh);
 # SB_ALLOW_UNVALIDATED=1 permits scene/UE-count combinations without evidence
 # in scene_validation.json; SB_ARCHIVE=1 keeps replaced sessions under archive/.

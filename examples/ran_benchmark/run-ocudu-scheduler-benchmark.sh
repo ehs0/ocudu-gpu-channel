@@ -21,7 +21,7 @@
 #
 # Results: results/{logs,reports}/ocudu-scheduler-benchmark/<ts>, configs under
 # configs/ocudu-scheduler-benchmark-native/<ts>. The report is
-# reports/.../benchmark-report.json; the web UI is examples/scheduler_benchmark/server.py.
+# reports/.../benchmark-report.json; the web UI is examples/ran_benchmark/server.py.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -106,7 +106,7 @@ for command_name in ip mount umount nsenter ps taskset; do
 done
 [[ -x /usr/bin/python3 ]] || usage_error "missing /usr/bin/python3"
 
-# Must agree with examples/scheduler_benchmark/definitions.py CELLS and the
+# Must agree with examples/ran_benchmark/definitions.py CELLS and the
 # UE records of render-multi-ue-configs.py.
 cells=(a b)
 gnb_ids=(gnb0 gnb1)
@@ -123,7 +123,7 @@ gnb_cpu_sets=("${cpus_gnb_a}" "${cpus_gnb_b}")
 broker_cpu_sets=("${cpus_broker_a}" "${cpus_broker_b}")
 IFS='|' read -r -a ue_cpu_sets <<<"${cpus_ues}|"
 metrics_ports=(8001 8002)
-bench_dir="${repo_root}/examples/scheduler_benchmark"
+bench_dir="${repo_root}/examples/ran_benchmark"
 run_dir="${netns_dir%/netns}"
 hold_file="${run_dir}/measure.start"
 traffic_stop_file="${run_dir}/traffic.stop"

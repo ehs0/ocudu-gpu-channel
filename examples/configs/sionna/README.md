@@ -34,7 +34,7 @@ scenario's `scene` name against `scenes/` (or a Sionna built-in), so
 | File | Nodes | Links | Used by |
 | --- | --- | --- | --- |
 | `robot-ring.json` | 1 gNB + 2 robots | 4 | base ring; tests, `scenes/robot_ring/coverage_grid.py` |
-| `robot-ring-walk.json` | 1 gNB + 2 robots | 4 | default for `examples/scheduler_benchmark` |
+| `robot-ring-walk.json` | 1 gNB + 2 robots | 4 | default for `examples/ran_benchmark` |
 | `robot-ring-fight.json` | 2 gNB + 2 robots | 4 | default for `examples/robot_fight` |
 | `robot-ring-crosstalk.json` | 1 gNB + 2 robots | 6 | tests only |
 | `robot-ring-fight-shadow.json`, `-shadow-deep.json` | 2 gNB + 2 robots | 4 | not referenced (kept as fight variants) |

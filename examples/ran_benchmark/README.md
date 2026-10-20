@@ -1,8 +1,39 @@
-# scheduler_benchmark — OCUDU MAC schedulers under one channel
+# ran_benchmark — OCUDU MAC schedulers and link adaptation under one channel
 
-This is the first of the project's RAN benchmarks (see
-[RAN benchmark](../../README.md#ran-benchmark)); benchmarks for other RAN
-functions will be added alongside it under `examples/`.
+This is the project's RAN benchmark (see
+[RAN benchmark](../../README.md#ran-benchmark)): OCUDU MAC scheduler policies
+and link-adaptation modes compared on live OCUDU gNB and srsUE stacks under
+one seeded Sionna channel. The folder was `examples/scheduler_benchmark/`
+until 2026-10-20; session data stay under
+`<native-root>/results/single-cell-scheduler-benchmark/`.
+
+## Known limitations of the srsUE-based setup
+
+Both come from srsUE (srsRAN 4G 23.04 fork), not from OCUDU or the emulator,
+and bound what any result here can show:
+
+- **CQI-based link adaptation cannot be evaluated.** srsUE never reports a
+  measured CQI: its CQI mapping `csi_snri_db_to_cqi`
+  (`lib/src/phy/phch/csi.c`) returns 15 unconditionally (upstream too), its
+  RRC does not apply the CSI-RS resource configuration, CSI-IM is not
+  measured, and its SNR estimate measures the channel's frequency
+  selectivity rather than noise. OCUDU therefore sees CQI 15 from every UE
+  on every channel at 1 antenna, and no CSI at all (CQI fixed at the initial
+  3) at 2 antennas. DL `amc` is a constant MCS, DL `amc_olla` / `harq_olla`
+  adapt only through the HARQ feedback, and channel-aware schedulers
+  (QoS-PF, Max C/I) cannot tell UEs' DL channels apart. Only UL link
+  adaptation is channel-driven (the gNB measures PUSCH SINR). Fixing this
+  needs a srsUE patch (CQI table, CSI-RS/CSI-IM measurement, a real noise
+  estimate) under `scripts/native/patches/`.
+- **The 2-antenna (MISO) cell connects but acts as SISO on the DL.** With
+  `gnb_antennas: 2` the gNB runs `nof_antennas_dl/ul: 2` and every UE attaches,
+  but srsUE cannot apply a 2-port CSI-RS, so CSI-RS is off, there is no PMI
+  or rank feedback, and OCUDU maps SSB, PDCCH and PDSCH onto port 0 only:
+  the second DL port is silent and the UE receives the port-0 branch, with
+  no transmit diversity or array gain. The DL is effectively 1x1 (and at
+  the fixed initial CQI it is worse than the 1-antenna cell, § "gNB
+  antennas"). The UL (1x2 SIMO, receive diversity at the gNB) is real.
+  `docs/srsue-dl-miso-gap-ko.md` has the details.
 
 Two modes. The **single-cell mode** (§ "Single-cell mode" below) runs one
 gNB with N UEs and executes the policies one after another on a frozen
@@ -10,7 +41,7 @@ channel and traffic trace, with a web UI that starts, stops and replaces
 sessions. The **two-cell mode** (this section) is the original side-by-side
 gate and is unchanged.
 
-Native gate: `bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh`
+Native gate: `bash examples/ran_benchmark/run-ocudu-scheduler-benchmark.sh`
 (from the repo root). It sources `scripts/native/env.sh` and reuses the
 native renderers there; results land under `$OCUDU_NATIVE_ROOT`.
 
@@ -30,7 +61,7 @@ bound at gNB start-up and the remote-control commands cannot change it, which
 is why the two policies run in parallel rather than in alternating periods.
 
 **Reproducibility.** `OCUDU_NATIVE_SB_SEED` fixes the UE random-waypoint
-routes (`examples/scheduler_benchmark/make_scenario.py`, kept in line of sight
+routes (`examples/ran_benchmark/make_scenario.py`, kept in line of sight
 of the gNB against the scene's obstacle boxes), the PathSolver seed and every
 packet schedule. The bridge runs `--timeline grid`: update k is solved at
 scenario time k / update_hz, never at "elapsed wall time", and scenario time
@@ -43,7 +74,7 @@ were identical at every grid point, and 89-98% of the batches were
 bit-identical (SHA-256 per batch, `--profile-digest`); at the rest the GPU's
 floating-point summation order differed, by at most 0.0038 dB in tap gain
 and 0.0005 rad in phase.
-`examples/scheduler_benchmark/campaign.py` recomputes this for any set of
+`examples/ran_benchmark/campaign.py` recomputes this for any set of
 runs. The radio stack itself (thread timing, HARQ, when a channel update
 lands relative to the IQ stream) is not deterministic; that is what the
 per-second pairing and the A/A control below measure.
@@ -52,9 +83,9 @@ per-second pairing and the A/A control below measure.
 gNBs; the gate then checks each gNB's non-default configuration dump
 (`log.config_level: info`) for the requested policy and refuses to continue
 on a mismatch (`policy-check.json`). Four srsUEs attach; then at one instant
-the seeded UDP traffic (`examples/scheduler_benchmark/traffic.py`) starts and
+the seeded UDP traffic (`examples/ran_benchmark/traffic.py`) starts and
 the bridge's grid point 0 is released. After `OCUDU_NATIVE_SB_MEASURE_SECONDS`
-and a drain, `examples/scheduler_benchmark/analyze.py` writes
+and a drain, `examples/ran_benchmark/analyze.py` writes
 `results/reports/ocudu-scheduler-benchmark/<ts>/benchmark-report.json`.
 
 | Variable | Default | Meaning |
@@ -65,7 +96,7 @@ and a drain, `examples/scheduler_benchmark/analyze.py` writes
 | `OCUDU_NATIVE_SB_TRAFFIC_OVERRIDES` | unset | `ue0.dl_bulk.rate_mbps=25,ue1.five_qi.value=9`, … |
 | `OCUDU_NATIVE_SB_MEASURE_SECONDS` | `120` | Scenario seconds measured; the report pairs them second by second. |
 | `OCUDU_NATIVE_SB_CPUS_*` | profile | On `spark-gb10`: both gNBs share 5-12, the four UEs share 15-19, brokers 13 / 14, everything else 0-4. A gNB must see at least five CPUs: OCUDU sizes its main worker pool as min(needed, CPUs − 3), and with one worker it stalls at MAC cell activation. |
-| `OCUDU_NATIVE_SB_WEB_UI` / `_WEB_PORT` | `1` / `8090` | The benchmark UI (`examples/scheduler_benchmark/server.py --follow-latest`). |
+| `OCUDU_NATIVE_SB_WEB_UI` / `_WEB_PORT` | `1` / `8090` | The benchmark UI (`examples/ran_benchmark/server.py --follow-latest`). |
 
 **Metrics.** Every metric is computed per valid second (all four UEs in
 service: present in their gNB's scheduler report with DL HARQ not failing
@@ -103,7 +134,7 @@ those seconds invalid, and the gate fails on the crash (`per_ue.*.crashed`,
 In this container: `sudo env SB_SEED=1 SB_MEASURE=120 bash
 /home/dev/ocudu-setup/run-isolated-scheduler-benchmark.sh`, or
 `SB_CAMPAIGN="1:rr:qos 1:qos:rr 1:rr:rr"` for a swap pair plus an A/A run;
-`examples/scheduler_benchmark/campaign.py <report dirs>` turns those into
+`examples/ran_benchmark/campaign.py <report dirs>` turns those into
 cell-bias-free policy effects.
 
 ## Single-cell mode
@@ -294,10 +325,10 @@ STRICT PASS sessions g14, g22 and g23 keep every second valid.
 ```bash
 # once: build the broker into builds/ocudu-gpu-channel-single-cell (+ ctest)
 sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh /usr/bin/python3 \
-  examples/scheduler_benchmark/single_cell_runner.py preflight --ctest
+  examples/ran_benchmark/single_cell_runner.py preflight --ctest
 # the dashboard on http://127.0.0.1:8092 (container wrapper: isolated mounts, root)
 sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh /home/dev/venvs/sionna/bin/python \
-  examples/scheduler_benchmark/server.py --control --port 8092 [--archive] [--allow-unvalidated]
+  examples/ran_benchmark/server.py --control --port 8092 [--archive] [--allow-unvalidated]
 ```
 
 The page compares **Test 1** and **Test 2**. The shared settings (UE count,
@@ -417,7 +448,7 @@ NZP-CSI-RS on the 2-antenna cell (an OCUDU change: the port count is
 
 ```bash
 sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh bash \
-  examples/scheduler_benchmark/run-single-cell-scheduler-benchmark.sh \
+  examples/ran_benchmark/run-single-cell-scheduler-benchmark.sh \
   '{"ue_count": 4, "mobility": "pedestrian", "placement": "hotspot", "traffic_profile": "mixed",
     "tests": [{"scheduler": "rr"}, {"scheduler": "qos"}],
     "seed": 1, "measure_seconds": 120, "warmup_seconds": 10, "repeat_count": 2, "comparison_order": "abba"}'

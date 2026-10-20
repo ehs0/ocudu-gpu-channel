@@ -3,7 +3,7 @@
 
 Two modes.
 
-Legacy (default): serves examples/scheduler_benchmark/legacy.html and a
+Legacy (default): serves examples/ran_benchmark/legacy.html and a
 read-only JSON API over the two-cell benchmark runs under
 <runs-root>/results/logs/ocudu-scheduler-benchmark:
 
@@ -19,7 +19,7 @@ read-only JSON API over the two-cell benchmark runs under
 In legacy mode it only reads files and /proc; it never signals or
 reconfigures a process.
 
-Control (--control): serves examples/scheduler_benchmark/index.html, the
+Control (--control): serves examples/ran_benchmark/index.html, the
 single-cell benchmark dashboard, and delegates every state change to
 controller.py (one active session):
 
@@ -88,9 +88,9 @@ PROCESS_PATTERNS = (
     ("ue7", re.compile(r"srsue\b.*srsue-ue7\.conf")),
     ("broker", re.compile(r"ocudu-gpu-channel\b.*/topology\.yaml")),
     ("sionna", re.compile(r"run_bridge\.py\b.*--timeline grid")),
-    ("trace build", re.compile(r"scheduler_benchmark/channel_trace\.py\b")),
-    ("replay", re.compile(r"scheduler_benchmark/replay_bridge\.py\b")),
-    ("traffic", re.compile(r"scheduler_benchmark/(?:radio_)?traffic\.py\b")),
+    ("trace build", re.compile(r"ran_benchmark/channel_trace\.py\b")),
+    ("replay", re.compile(r"ran_benchmark/replay_bridge\.py\b")),
+    ("traffic", re.compile(r"ran_benchmark/(?:radio_)?traffic\.py\b")),
 )
 PROCESS_CELL = {"gnb0": "a", "broker a": "a", "ue0": "a", "ue1": "a",
                 "gnb1": "b", "broker b": "b", "ue2": "b", "ue3": "b"}

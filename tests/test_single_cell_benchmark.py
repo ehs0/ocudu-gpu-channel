@@ -25,7 +25,7 @@ import unittest
 from http.server import ThreadingHTTPServer
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
-BENCH = PROJECT_ROOT / "examples" / "scheduler_benchmark"
+BENCH = PROJECT_ROOT / "examples" / "ran_benchmark"
 sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "sionna_rt"))
 sys.path.insert(0, str(BENCH))
 

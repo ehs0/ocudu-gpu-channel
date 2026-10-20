@@ -55,7 +55,7 @@ done
 awk -v uid="${outer_uid}" '$1 == 0 && $2 == uid && $3 == 1 { found = 1 } END { exit !found }' \
   /proc/self/uid_map || usage_error "user namespace does not contain the exact root mapping"
 
-bench_dir="${repo_root}/examples/scheduler_benchmark"
+bench_dir="${repo_root}/examples/ran_benchmark"
 # Every process of this run inherits its run root: the controller identifies
 # (and, after a failed stop, kills) a session's processes by it.
 export SINGLE_CELL_RUN_ROOT="${run_root}"

@@ -321,4 +321,4 @@ The two-cell demo gates live with their demos and reuse this directory's
 `env.sh`, `oai-gate-defaults.sh`, workspace lock and renderers:
 
 - robot fight (R5): [`examples/robot_fight/`](../../examples/robot_fight/README.md#native-gate-run-ocudu-robot-fightsh)
-- scheduler benchmark: [`examples/scheduler_benchmark/`](../../examples/scheduler_benchmark/README.md)
+- scheduler benchmark: [`examples/ran_benchmark/`](../../examples/ran_benchmark/README.md)

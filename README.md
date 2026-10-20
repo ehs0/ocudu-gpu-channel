@@ -63,8 +63,8 @@ between the radio endpoints.
 - **Sionna RT bridge and Web UI** — live matrix updates, moving scene and ray
   views, channel/resource plots, and independent scheduler metrics for each gNB.
 - **RAN benchmark** — live OCUDU/srsUE benchmarks under a shared, reproducible
-  channel; currently the MAC scheduler benchmark, with more RAN functions to
-  follow ([details](#ran-benchmark)).
+  channel; currently MAC schedulers and link adaptation, with more RAN
+  functions to follow ([details](#ran-benchmark)).
 - Example topologies in [`examples/`](examples/): single-edge MVP, 3-node
   interference + crosstalk graph, 2-cell / 4-node multi-gNB, multi-UE OCUDU
   Docker, 16-edge stress, and TR 38.901 §7.7.2 TDL-A through TDL-E profiles.
@@ -226,7 +226,7 @@ from the function under test rather than from the radio conditions.
 Currently available:
 
 - **MAC scheduler benchmark** —
-  [`examples/scheduler_benchmark/`](examples/scheduler_benchmark/README.md)
+  [`examples/ran_benchmark/`](examples/ran_benchmark/README.md)
   compares OCUDU's round-robin (`rr`) and QoS-aware PF (`qos`) schedulers.
   A two-cell mode runs both policies side by side on one fanned-out channel;
   a single-cell mode runs them one after another on a frozen channel and
@@ -235,15 +235,20 @@ Currently available:
   MAC-layer PRB use, spectral efficiency and starvation.
 - **Link adaptation** — in the same single-cell mode each test also picks
   OCUDU's link adaptation: fixed MCS (DL and UL index), CQI/SINR-based AMC
-  without OLLA, or AMC + OLLA (OCUDU's default), compared with MCS, BLER and
-  the throughput they buy.
+  without OLLA, AMC + OLLA (OCUDU's default) or HARQ-driven OLLA, compared
+  with MCS, BLER and the throughput they buy.
+
+With srsUE as the UE, CQI-based DL link adaptation cannot be evaluated
+(srsUE reports CQI 15 whatever the channel) and the 2-antenna MISO cell
+connects but behaves as SISO on the DL; see the benchmark README's
+"Known limitations".
 
 ```sh
-bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh
+bash examples/ran_benchmark/run-ocudu-scheduler-benchmark.sh
 ```
 
-The scheduler benchmark is the first RAN benchmark. Benchmarks for other RAN
-functions will be added under `examples/` as they are built.
+Benchmarks for other RAN functions will be added to `examples/ran_benchmark/`
+as they are built.
 
 ## Remote RTX workstation
 
