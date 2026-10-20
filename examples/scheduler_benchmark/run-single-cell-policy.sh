@@ -12,6 +12,7 @@
 # Usage (all paths absolute):
 #   run-single-cell-policy.sh --run-root DIR --scenario FILE --channel-bundle DIR
 #     --traffic-bundle DIR --policy rr|qos|maxci --ue-count N --profile NAME --seed S
+#     [--link-adaptation fixed|amc|amc_olla|harq_olla] [--fixed-dl-mcs M --fixed-ul-mcs M]
 #     [--awgn-snr-db DB|off] [--tx-power-ul P] [--tx-power-dl P] [--gnb-rx-gain DB]
 #     [--attach-timeout S] [--drain-seconds S] [--warmup-seconds S] [--channel-build DIR]
 # Environment: OCUDU_NATIVE_ROOT, OCUDU_NATIVE_SIONNA_PYTHON (scripts/native/env.sh).
@@ -30,6 +31,7 @@ inner="${script_dir}/run-single-cell-policy-inner.sh"
 usage_error() { printf 'error: %s\n' "$1" >&2; exit 2; }
 
 run_root="" scenario="" channel_bundle="" traffic_bundle="" policy="" ue_count="" profile="" seed=""
+link_adaptation="amc_olla" fixed_dl_mcs="" fixed_ul_mcs=""
 awgn="40" tx_power_ul="" tx_power_dl="" gnb_rx_gain="" attach_timeout="240" drain_seconds="6" warmup_seconds="0"
 channel_build="${OCUDU_NATIVE_CHANNEL_BUILD:-${native_root}/builds/ocudu-gpu-channel-single-cell}"
 while [[ "$#" -gt 0 ]]; do
@@ -39,6 +41,9 @@ while [[ "$#" -gt 0 ]]; do
     --channel-bundle) channel_bundle="${2:-}"; shift 2 ;;
     --traffic-bundle) traffic_bundle="${2:-}"; shift 2 ;;
     --policy) policy="${2:-}"; shift 2 ;;
+    --link-adaptation) link_adaptation="${2:-}"; shift 2 ;;
+    --fixed-dl-mcs) fixed_dl_mcs="${2:-}"; shift 2 ;;
+    --fixed-ul-mcs) fixed_ul_mcs="${2:-}"; shift 2 ;;
     --ue-count) ue_count="${2:-}"; shift 2 ;;
     --profile) profile="${2:-}"; shift 2 ;;
     --seed) seed="${2:-}"; shift 2 ;;
@@ -60,6 +65,16 @@ for path in "${scenario}" "${channel_bundle}" "${traffic_bundle}"; do
   [[ "${path}" == /* && -e "${path}" ]] || usage_error "missing input: ${path}"
 done
 [[ "${policy}" =~ ^(rr|qos|maxci)$ ]] || usage_error "--policy must be rr, qos or maxci"
+[[ "${link_adaptation}" =~ ^(fixed|amc|amc_olla|harq_olla)$ ]] || usage_error "--link-adaptation must be fixed, amc, amc_olla or harq_olla"
+if [[ "${link_adaptation}" == "fixed" ]]; then
+  for mcs in "${fixed_dl_mcs}" "${fixed_ul_mcs}"; do
+    [[ "${mcs}" =~ ^([0-9]|1[0-9]|2[0-8])$ ]] || usage_error "--link-adaptation fixed needs --fixed-dl-mcs and --fixed-ul-mcs 0..28"
+  done
+else
+  [[ -z "${fixed_dl_mcs}${fixed_ul_mcs}" ]] || usage_error "--fixed-dl-mcs / --fixed-ul-mcs apply only to --link-adaptation fixed"
+fi
+declare -a la_args=(--link-adaptation "${link_adaptation}")
+[[ "${link_adaptation}" != "fixed" ]] || la_args+=(--fixed-dl-mcs "${fixed_dl_mcs}" --fixed-ul-mcs "${fixed_ul_mcs}")
 [[ "${ue_count}" =~ ^([1-9]|1[0-6])$ ]] || usage_error "--ue-count must be 1..16"
 [[ "${profile}" =~ ^[a-z_]+$ ]] || usage_error "invalid --profile"
 [[ "${seed}" =~ ^(0|[1-9][0-9]{0,8})$ ]] || usage_error "--seed must be a non-negative integer"
@@ -100,7 +115,7 @@ mkdir -p "${config_dir}" "${log_dir}" "${report_dir}" "${data_dir}" "${run_dir}/
 
 declare -a render_args=(--repo-root "${repo_root}" --native-root "${native_root}" --output-dir "${config_dir}"
   --log-dir "${log_dir}" --scenario-config "${scenario}" --policy "${policy}" --ue-count "${ue_count}"
-  --traffic-profile "${profile}" --seed "${seed}")
+  --traffic-profile "${profile}" --seed "${seed}" "${la_args[@]}")
 if [[ "${awgn}" != "off" ]]; then
   render_args+=(--awgn-snr-db "${awgn}")
   [[ -z "${tx_power_ul}" ]] || render_args+=(--tx-power-ul "${tx_power_ul}")
@@ -139,11 +154,12 @@ cpus_ues="${SINGLE_CELL_CPUS_UES:-${cpus_ues}}" cpus_aux="${SINGLE_CELL_CPUS_AUX
 /usr/bin/python3 - "${report_dir}/run-parameters.json" "${policy}" "${ue_count}" "${profile}" "${seed}" "${awgn}" \
   "${tx_power_ul}" "${tx_power_dl}" "${gnb_rx_gain}" "${scenario}" "${channel_bundle}" "${traffic_bundle}" \
   "${OCUDU_NATIVE_PLATFORM_PROFILE:-none}" "${cpus_gnb}" "${cpus_broker}" "${cpus_ues}" "${cpus_aux}" \
-  "${channel_build}" <<'PY'
+  "${channel_build}" "${config_dir}/benchmark.json" <<'PY'
 import json, sys
 (out, policy, ue_count, profile, seed, awgn, tx_ul, tx_dl, rx_gain, scenario, channel, traffic, platform,
- gnb, broker, ues, aux, build) = sys.argv[1:]
-json.dump({"policy": policy, "ue_count": int(ue_count), "traffic_profile": profile, "seed": int(seed),
+ gnb, broker, ues, aux, build, rendered) = sys.argv[1:]
+json.dump({"policy": policy, "link_adaptation": json.load(open(rendered))["link_adaptation"],
+           "ue_count": int(ue_count), "traffic_profile": profile, "seed": int(seed),
            "awgn_snr_db": None if awgn == "off" else float(awgn), "tx_power_ul": float(tx_ul) if tx_ul else None,
            "tx_power_dl": float(tx_dl) if tx_dl else None, "gnb_rx_gain_db": float(rx_gain) if rx_gain else None,
            "scenario": scenario, "channel_bundle": channel, "traffic_bundle": traffic, "platform_profile": platform,
@@ -158,6 +174,7 @@ unshare --user --map-root-user --net --mount --fork --kill-child=TERM --propagat
   "${inner}" --repo-root "${repo_root}" --native-root "${native_root}" --run-root "${run_root}" \
   --parent-netns "$(readlink /proc/self/ns/net)" --parent-mntns "$(readlink /proc/self/ns/mnt)" --outer-uid "$(id -u)" \
   --gnb-binary "${gnb_binary}" --broker "${broker}" --ue-count "${ue_count}" --policy "${policy}" \
+  "${la_args[@]}" \
   --channel-bundle "${channel_bundle}" --traffic-bundle "${traffic_bundle}" --sionna-python "${sionna_python}" \
   --attach-timeout "${attach_timeout}" --drain-seconds "${drain_seconds}" \
   --cpus-gnb "${cpus_gnb}" --cpus-broker "${cpus_broker}" --cpus-ues "${cpus_ues}" --cpus-aux "${cpus_aux}"
@@ -168,6 +185,6 @@ set -e
   --channel-bundle "${channel_bundle}" --traffic-bundle "${traffic_bundle}" --warmup-seconds "${warmup_seconds}" \
   --out "${report_dir}/run-report.json" >"${log_dir}/analyze.log" 2>&1 || \
   echo "event=analyze_failed log=${log_dir}/analyze.log" >&2
-printf 'event=single_cell_policy_run policy=%s ues=%s status=%s run_root="%s"\n' \
-  "${policy}" "${ue_count}" "${inner_status}" "${run_root}"
+printf 'event=single_cell_policy_run policy=%s link_adaptation=%s ues=%s status=%s run_root="%s"\n' \
+  "${policy}" "${link_adaptation}" "${ue_count}" "${inner_status}" "${run_root}"
 exit "${inner_status}"

@@ -13,6 +13,7 @@ set -uo pipefail
 
 repo_root="" native_root="" run_root="" parent_netns="" parent_mntns="" outer_uid=""
 gnb="" broker="" ue_count="" policy="" channel_bundle="" traffic_bundle="" sionna_python=""
+link_adaptation="amc_olla" fixed_dl_mcs="" fixed_ul_mcs=""
 attach_timeout="240" drain_seconds="6" gnb_start_timeout="20"
 cpus_gnb="" cpus_broker="" cpus_ues="" cpus_aux=""
 
@@ -30,6 +31,9 @@ while [[ "$#" -gt 0 ]]; do
     --broker) broker="${2:-}"; shift 2 ;;
     --ue-count) ue_count="${2:-}"; shift 2 ;;
     --policy) policy="${2:-}"; shift 2 ;;
+    --link-adaptation) link_adaptation="${2:-}"; shift 2 ;;
+    --fixed-dl-mcs) fixed_dl_mcs="${2:-}"; shift 2 ;;
+    --fixed-ul-mcs) fixed_ul_mcs="${2:-}"; shift 2 ;;
     --channel-bundle) channel_bundle="${2:-}"; shift 2 ;;
     --traffic-bundle) traffic_bundle="${2:-}"; shift 2 ;;
     --sionna-python) sionna_python="${2:-}"; shift 2 ;;
@@ -238,16 +242,17 @@ replay_pid="${started_pid}"
 wait_log "${log_dir}/replay-bridge.log" '"event":"replay_attach_committed"' "${replay_pid}" 60 || {
   tail -5 "${log_dir}/replay-bridge.log" >&2; usage_error "replay bridge did not commit the attach channel"; }
 
-# --- gNB with its policy, and the proof that it loaded it --------------------
+# --- gNB with its policy and link adaptation, and the proof that it loaded them --
 mapfile -t gnb_pin < <(pin "${cpus_gnb}")
 start_group gnb "${log_dir}/gnb0-console.log" env "CUDA_VISIBLE_DEVICES=${OCUDU_NATIVE_GPU_DEVICE:-0}" \
   "${gnb_pin[@]}" "${gnb}" -c "${config_dir}/gnb0.yaml"
 gnb_pid="${started_pid}"
 wait_log "${log_dir}/gnb0-console.log" '==== gNB started ===' "${gnb_pid}" "${gnb_start_timeout}" || usage_error "gnb0 did not start"
-/usr/bin/python3 - "${log_dir}" "${policy}" "${bench_dir}" >"${log_dir}/policy-check.json" <<'PY' \
-  || { cat "${log_dir}/policy-check.json" >&2; usage_error "the gNB did not load the requested scheduler policy"; }
+/usr/bin/python3 - "${log_dir}" "${policy}" "${bench_dir}" "${link_adaptation}" "${fixed_dl_mcs}" "${fixed_ul_mcs}" \
+  >"${log_dir}/policy-check.json" <<'PY' \
+  || { cat "${log_dir}/policy-check.json" >&2; usage_error "the gNB did not load the requested policy and link adaptation"; }
 import json, pathlib, re, sys, time
-log_dir, policy, bench_dir = sys.argv[1:]
+log_dir, policy, bench_dir, la_mode, fixed_dl, fixed_ul = sys.argv[1:]
 sys.path.insert(0, bench_dir)
 import definitions as d
 deadline = time.monotonic() + 15
@@ -262,11 +267,22 @@ block = re.search(r"\n( *)policy:\n((?:\1  .*\n)+)", dump)
 body = block.group(2) if block else ""
 found = d.schedulers_in_config_dump(body)
 ok = found == [policy]
-print(json.dumps({"ok": ok, "gnbs": {"gnb0": {"requested": policy, "found_in_config_dump": found, "ok": ok,
-                                               "policy_block": body}}}, indent=2))
-raise SystemExit(0 if ok else 1)
+# The link adaptation: the pdsch / pusch blocks under cell_cfg (definitions.link_adaptation_in_config_dump).
+la = {"link_adaptation": la_mode}
+if la_mode == "fixed":
+    la.update(fixed_dl_mcs=int(fixed_dl), fixed_ul_mcs=int(fixed_ul))
+cell = dump[dump.find("\ncell_cfg:\n"):] if "\ncell_cfg:\n" in dump else ""
+blocks = {name: (m.group(1) if (m := re.search(rf"\n  {name}:\n((?:    .*\n)+)", cell)) else "")
+          for name in ("pdsch", "pusch")}
+found_la = d.link_adaptation_in_config_dump(blocks["pdsch"], blocks["pusch"])
+la_ok = found_la == la
+print(json.dumps({"ok": ok and la_ok, "gnbs": {"gnb0": {
+    "requested": policy, "found_in_config_dump": found, "ok": ok, "policy_block": body,
+    "link_adaptation": {"requested": la, "found_in_config_dump": found_la, "ok": la_ok,
+                        "pdsch_block": blocks["pdsch"], "pusch_block": blocks["pusch"]}}}}, indent=2))
+raise SystemExit(0 if ok and la_ok else 1)
 PY
-printf 'event=scheduler_policy_verified gnb0=%s\n' "${policy}"
+printf 'event=scheduler_policy_verified gnb0=%s link_adaptation=%s\n' "${policy}" "${link_adaptation}"
 
 metrics_socket="${sock_dir}/gnb-metrics.sock"
 start_group gnb-metrics-relay "${log_dir}/gnb-metrics-relay.log" "${aux_pin[@]}" /usr/bin/python3 \

@@ -231,6 +231,9 @@ import { OrbitControls } from '/vendor/OrbitControls.js';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fin = (v) => typeof v === 'number' && Number.isFinite(v);
+// JSON with object keys sorted: the server returns recorded tests key-sorted.
+const canon = (v) => JSON.stringify(v, (_, x) => x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x);
 const fmt = (v, d = 2) => fin(v) ? v.toFixed(d) : '–';
 const pct = (v, d = 1) => fin(v) ? (100 * v).toFixed(d) + '%' : '–';
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -315,26 +318,44 @@ function fillOptions() {
 // Two tests, each = the shared settings above + its own fields. The fields
 // come from the server (options.tests.fields), so a new comparison dimension
 // shows up here as one more selector per panel.
-const FIELD_LABELS = { scheduler: 'MAC scheduler' };
+const FIELD_LABELS = { scheduler: 'MAC scheduler', link_adaptation: 'Link adaptation' };
 const policyOf = (id) => state.options?.policies.find((p) => p.id === id);
 const policyShort = (id) => policyOf(id)?.short || id;
+const laOf = (id) => state.options?.link_adaptations?.find((l) => l.id === id);
+// 'AMC+OLLA', 'Fixed MCS 16/20' (DL/UL); sessions recorded before the field ran OCUDU's default.
+const laShort = (t) => !t?.link_adaptation ? '' : t.link_adaptation === 'fixed'
+  ? `${laOf('fixed')?.short || 'Fixed MCS'} ${t.fixed_dl_mcs}/${t.fixed_ul_mcs}` : (laOf(t.link_adaptation)?.short || t.link_adaptation);
+const testShort = (t) => [policyShort(t.scheduler), laShort(t)].filter(Boolean).join(' · ');
+const choiceLabel = (field, c) => field === 'scheduler' ? `${policyShort(c)} — ${policyOf(c)?.label || c}`
+  : field === 'link_adaptation' ? (laOf(c)?.label || c) : c;
 const antennaShort = (n) => state.options?.gnb_antenna_configs?.find((a) => a.id === n)?.short || `${n} ant`;
+// A parameter applies (its input is shown and sent) while every field in its `when` has that value.
+const applies = (info, test) => Object.entries(info.when || {}).every(([f, v]) => test[f] === v);
 function testSelection() {
-  return state.options.tests.arms.map((arm) => Object.fromEntries(Object.keys(state.options.tests.fields).map(
-    (field) => [field, $(`${arm.id}-${field}`)?.value])));
+  const t = state.options.tests;
+  return t.arms.map((arm) => {
+    const test = Object.fromEntries(Object.keys(t.fields).map((field) => [field, $(`${arm.id}-${field}`)?.value]));
+    for (const [name, info] of Object.entries(t.parameters || {})) {
+      if (applies(info, test)) test[name] = Number($(`${arm.id}-${name}`)?.value);
+    }
+    return test;
+  });
 }
 function buildTestPanels() {
   const o = state.options;
   $('tests').innerHTML = o.tests.arms.map((arm, i) => {
     const chosen = o.defaults.tests[i] || {};
     const fields = Object.entries(o.tests.fields).map(([field, choices]) => `<div class="field"><span class="label">${esc(FIELD_LABELS[field] || field)}</span>
-      <select id="${arm.id}-${field}">${choices.map((c) => `<option value="${esc(c)}" ${c === chosen[field] ? 'selected' : ''}>${esc(field === 'scheduler' ? `${policyShort(c)} — ${policyOf(c)?.label || c}` : c)}</option>`).join('')}</select></div>`).join('');
+      <select id="${arm.id}-${field}">${choices.map((c) => `<option value="${esc(c)}" ${c === chosen[field] ? 'selected' : ''}>${esc(choiceLabel(field, c))}</option>`).join('')}</select></div>`).join('');
+    const params = Object.entries(o.tests.parameters || {}).map(([name, p]) => `<div class="field" id="${arm.id}-${name}-field"><span class="label">${esc(p.label)} (${p.min}–${p.max})</span>
+      <input id="${arm.id}-${name}" type="number" min="${p.min}" max="${p.max}" step="1" value="${chosen[name] ?? p.default}"></div>`).join('');
     return `<section class="panel test-panel"><h2>${esc(arm.label)}<span class="muted" style="font-size:.85rem" id="${arm.id}-runs"></span></h2>
-      ${fields}<div id="${arm.id}-about"></div><div id="${arm.id}-result"></div></section>`;
+      ${fields}<div class="test-params">${params}</div><div id="${arm.id}-about"></div><div id="${arm.id}-result"></div></section>`;
   }).join('');
-  $('tests').querySelectorAll('select').forEach((el) => el.addEventListener('change', () => { renderTestPanels(); markPending(); }));
+  $('tests').querySelectorAll('select, input').forEach((el) => el.addEventListener('change', () => { renderTestPanels(); markPending(); }));
   renderTestPanels();
 }
+const aboutHtml = (x) => x ? `<div class="muted" style="font-size:.8125rem">${esc(x.summary)}</div><ul>${x.properties.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>` : '';
 // Dynamic parts only: the selectors stay as the user left them.
 function renderTestPanels() {
   const o = state.options; if (!o || !$('tests').querySelector('select')) return;
@@ -342,8 +363,10 @@ function renderTestPanels() {
   const cmp = state.results?.reports?.['benchmark-report']?.comparison?.tests || {};
   const runs = state.results?.runs || [];
   o.tests.arms.forEach((arm, i) => {
-    const p = policyOf(t[i].scheduler);
-    $(`${arm.id}-about`).innerHTML = p ? `<div class="muted" style="font-size:.8125rem">${esc(p.summary)}</div><ul>${p.properties.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>` : '';
+    for (const [name, info] of Object.entries(o.tests.parameters || {})) $(`${arm.id}-${name}-field`).hidden = !applies(info, t[i]);
+    const la = laOf(t[i].link_adaptation);
+    $(`${arm.id}-about`).innerHTML = aboutHtml(policyOf(t[i].scheduler))
+      + (la ? `<div class="label" style="margin-top:8px">${esc(la.label)}</div>${aboutHtml(la)}` : '');
     $(`${arm.id}-runs`).textContent = runs.filter((r) => r.arm === arm.id).map((r) => `run ${r.run_id.slice(0, 2)} ${r.live ? 'live' : (r.gate?.status || '')}`).join(' · ');
     const summary = cmp[arm.id];
     $(`${arm.id}-result`).innerHTML = summary ? `<div class="kv result"><div><span class="label">Cell DL</span><b>${fmt(summary.aggregate_dl_mbps)} Mb/s</b></div><div><span class="label">Jain (DL)</span><b>${fmt(summary.jain_dl, 3)}</b></div><div><span class="label">DL PRB util</span><b>${pct(summary.dl_prb_util)}</b></div><div><span class="label">Ran as</span><b>${esc(summary.label)}</b></div></div>` : '';
@@ -352,7 +375,7 @@ function renderTestPanels() {
 }
 function aaNote() {
   const t = testSelection();
-  $('aaNote').textContent = JSON.stringify(t[0]) === JSON.stringify(t[1])
+  $('aaNote').textContent = canon(t[0]) === canon(t[1])
     ? 'Both tests are configured identically: this session will be an A/A control (it measures run-to-run variation).' : '';
 }
 
@@ -379,8 +402,11 @@ function markPending() {
   const cfg = state.status?.config;
   if (!cfg) { $('pending').textContent = ''; return; }
   const sel = selection();
-  // Sessions recorded before the antenna setting ran a 1-antenna gNB.
-  const differs = Object.keys(sel).some((k) => JSON.stringify(sel[k]) !== JSON.stringify(k === 'gnb_antennas' ? (cfg[k] ?? 1) : cfg[k]));
+  // Sessions recorded before the antenna setting ran a 1-antenna gNB, and
+  // before the link-adaptation field OCUDU's default (options.tests.field_defaults).
+  const recorded = (k) => k === 'gnb_antennas' ? (cfg[k] ?? 1)
+    : k === 'tests' ? (cfg.tests || []).map((t) => ({ ...state.options.tests.field_defaults, ...t })) : cfg[k];
+  const differs = Object.keys(sel).some((k) => canon(sel[k]) !== canon(recorded(k)));
   $('pending').textContent = differs ? 'Changes pending — start a new benchmark to apply.' : '';
 }
 async function startBenchmark() {
@@ -441,7 +467,7 @@ function renderStatus() {
   $('progressBar').style.width = `${Math.round(100 * progress)}%`;
   const c = s?.config;
   $('sessionKv').innerHTML = c ? [
-    ['Scene', c.scene_id], ['gNB', antennaShort(c.gnb_antennas ?? 1)], ['UEs', c.ue_count], ['Traffic', c.traffic_profile], ['Tests', (c.tests || []).map((t, i) => `T${i + 1} ${policyShort(t.scheduler)}`).join(' vs ')],
+    ['Scene', c.scene_id], ['gNB', antennaShort(c.gnb_antennas ?? 1)], ['UEs', c.ue_count], ['Traffic', c.traffic_profile], ['Tests', (c.tests || []).map((t, i) => `T${i + 1} ${testShort(t)}`).join(' vs ')],
     ['Seed', c.seed], ['Measure', `${c.measure_seconds} s + ${c.warmup_seconds} s warm-up`], ['UE type', c.mobility], ['Placement', c.placement], ['Order', `${c.comparison_order} × ${c.repeat_count}`],
   ].map(([k, v]) => `<div><span class="label">${k}</span><b>${esc(v)}</b></div>`).join('') : '';
   markPending();
@@ -598,7 +624,7 @@ function renderComparison() {
     const best = higher ? Math.max(...vals) : Math.min(...vals), worst = higher ? Math.min(...vals) : Math.max(...vals);
     return shown.map((v) => v === best ? 'better' : v === worst ? 'worse' : '');
   };
-  // [label, value, decimals, higher is better, tooltip]; a string entry starts a group.
+  // [label, value, decimals, higher is better (null: an input, not ranked), tooltip]; a string entry starts a group.
   const rows = [
     'Throughput',
     ['Cell DL (Mb/s)', (p) => p.aggregate_dl_mbps, 2, true, 'DL UDP payload received by all UEs'],
@@ -621,13 +647,20 @@ function renderComparison() {
     'Resource efficiency',
     ['DL PRB utilization', (p) => p.dl_prb_util, 3, true, 'Fraction of DL PRBs allocated (UE and common)'],
     ['DL spectral efficiency (b/s/Hz)', (p) => p.dl_spectral_efficiency_bps_hz, 3, true, 'MAC DL new-transmission bits per second per Hz of the PRBs used'],
-    ['Mean DL MCS', (p) => p.dl_mcs_mean, 1, true, 'Mean of the UEs\' mean DL MCS'],
     ['DL goodput / MAC', (p) => p.dl_goodput_ratio, 3, true, 'Application DL throughput over MAC DL new-transmission throughput (header overhead, RLC loss, queue drops)'],
+    'Link adaptation',
+    ['Mean DL MCS', (p) => p.dl_mcs_mean, 1, null, 'Mean of the UEs\' mean DL MCS (gNB metrics): the link adaptation\'s choice, not ranked, since a higher MCS only pays at an acceptable BLER'],
+    ['Mean UL MCS', (p) => p.ul_mcs_mean, 1, null, 'Mean of the UEs\' mean UL MCS (gNB metrics): the link adaptation\'s choice, not ranked'],
+    ['Worst-UE DL BLER', (p) => p.worst_ue_dl_bler, 3, false, 'Highest DL HARQ block error rate of any UE; OLLA steers each UE to 1%'],
+    ['Worst-UE UL BLER', (p) => p.worst_ue_ul_bler, 3, false, 'Highest UL HARQ block error rate of any UE; OLLA steers each UE to 1%'],
+    ['Mean reported CQI', (p) => p.cqi_mean, 1, null, 'Wideband CQI the UEs reported: the input of DL AMC, not a KPI (srsUE reports 15 whatever the channel; the 2-antenna cell has no CSI and keeps CQI 3)'],
+    ['Mean PUSCH SINR (dB)', (p) => p.pusch_snr_db_mean, 1, null, 'The gNB\'s PUSCH SINR estimate: the input of UL AMC, not a KPI'],
     'Reliability',
     ['DL BLER', (p) => p.dl_bler, 3, false, 'Mean of the UEs\' DL HARQ block error rate (gNB view)'],
     ['UL BLER', (p) => p.ul_bler, 3, false, 'Mean of the UEs\' UL HARQ block error rate'],
     ['Packet drop rate', (p) => p.drop_rate, 3, false, 'Offered packets never received, pooled over all flows'],
     ['PDB violation rate', (p) => p.pdb_violation_rate, 3, false, 'Offered packets late beyond their 5QI packet delay budget or lost, pooled'],
+    ['Valid radio seconds', (p) => p.valid_seconds_fraction, 3, true, 'Fraction of measured seconds with every UE in service. The other KPIs exclude the rest, e.g. seconds in which every DL HARQ of a UE failed at an MCS the channel could not carry'],
     'Scheduler and emulation',
     ['Decision time (µs)', (p) => p.decision_us_mean, 1, false, 'Mean scheduler decision time per slot'],
     ['Radio speed (× real time)', (p) => p.real_time_ratio, 2, true, 'Emulated radio time per wall-clock second; not a policy KPI'],
@@ -637,8 +670,8 @@ function renderComparison() {
   for (const row of rows) {
     if (typeof row === 'string') { html += `<tr class="group"><th colspan="${pols.length + 1}">${row}</th></tr>`; continue; }
     const [label, f, d, higher, tip] = row;
-    const mx = maxBy(f), t = tones(f, d, higher);
-    html += `<tr><td title="${esc(tip)}">${label} <span class="muted">${higher ? '↑' : '↓'}</span></td>${pols.map((p, i) => cell(f(cmp.tests[p]), mx, d, t[i])).join('')}</tr>`;
+    const mx = maxBy(f), t = higher === null ? pols.map(() => '') : tones(f, d, higher);
+    html += `<tr><td title="${esc(tip)}">${label} <span class="muted">${higher === null ? '' : higher ? '↑' : '↓'}</span></td>${pols.map((p, i) => cell(f(cmp.tests[p]), mx, d, t[i])).join('')}</tr>`;
   }
   html += '</table>';
   // Per-UE values: one UE at a time, chosen with its button.
@@ -649,7 +682,9 @@ function renderComparison() {
     const u0 = cmp.tests[pols[0]].per_ue[ue];
     const sub = [['DL Mb/s', (p) => p.per_ue[ue].dl_mbps, 2], ['DL PRB share', (p) => p.per_ue[ue].dl_prb_share, 3],
                  ['DL delay p95 ms', (p) => p.per_ue[ue].dl_delay_radio_p95_ms, 0], ['DL delay p99 ms', (p) => p.per_ue[ue].dl_delay_radio_p99_ms, 0],
-                 ['PDB violation', (p) => p.per_ue[ue].pdb_violation_rate, 3], ['DL MCS', (p) => p.per_ue[ue].dl_mcs, 1]];
+                 ['PDB violation', (p) => p.per_ue[ue].pdb_violation_rate, 3], ['DL MCS', (p) => p.per_ue[ue].dl_mcs, 1],
+                 ['UL MCS', (p) => p.per_ue[ue].ul_mcs, 1], ['DL BLER', (p) => p.per_ue[ue].dl_bler, 3],
+                 ['UL BLER', (p) => p.per_ue[ue].ul_bler, 3], ['CQI', (p) => p.per_ue[ue].cqi, 1]];
     html += `<table class="cmp-table">${head}<tr><th colspan="${pols.length + 1}">${ueSwatch(ue)} ${esc(ue)} · ${esc(u0.role)} · 5QI ${esc(u0.five_qi)}</th></tr>`;
     for (const [label, f, d] of sub) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
     html += '</table>';

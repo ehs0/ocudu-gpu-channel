@@ -47,7 +47,8 @@ STOP_TIMEOUT_S = 150.0
 CLEANUP_GRACE_S = 45.0
 TERMINAL_STATES = ("COMPLETED", "UNQUALIFIED", "FAILED", "STOPPED")
 DEFAULTS = {
-    "scene_id": "sutd_1gnb", "ue_count": 4, "gnb_antennas": 2, "tests": [{"scheduler": "rr"}, {"scheduler": "qos"}],
+    "scene_id": "sutd_1gnb", "ue_count": 4, "gnb_antennas": 2,
+    "tests": [{"scheduler": "rr", "link_adaptation": "amc_olla"}, {"scheduler": "qos", "link_adaptation": "amc_olla"}],
     "traffic_profile": "mixed",
     "seed": 20261016, "measure_seconds": 120, "warmup_seconds": 10, "channel_update_hz": 10, "repeat_count": 1,
     "comparison_order": "abba", "strict_replay": True, "mobility": "static", "placement": "uniform",
@@ -166,10 +167,18 @@ class Controller:
             "policies": [{"id": key, "label": info["title"], "short": info["short"], "summary": info["summary"],
                           "properties": info["properties"], "source": info["source"]}
                          for key, info in bench.SCHEDULERS.items()],
+            "link_adaptations": [{"id": key, "label": info["title"], "short": info["short"], "summary": info["summary"],
+                                  "properties": info["properties"], "source": info["source"]}
+                                 for key, info in bench.LINK_ADAPTATION.items()],
             # Two tests, each the shared settings plus these fields (the UI draws
-            # one selector per field in each test's panel).
+            # one selector per field in each test's panel, and one number input
+            # per parameter, shown while its `when` condition holds).
             "tests": {"arms": [{"id": arm, "label": bench.TEST_ARM_LABELS[arm]} for arm in bench.TEST_ARMS],
-                      "fields": {name: list(choices) for name, choices in bench.TEST_FIELDS.items()}},
+                      "fields": {name: list(choices) for name, choices in bench.TEST_FIELDS.items()},
+                      "field_defaults": bench.TEST_FIELD_DEFAULTS,
+                      "parameters": {name: {"label": info["label"], "when": info["when"], "min": info["range"][0],
+                                            "max": info["range"][1], "default": info["default"]}
+                                     for name, info in bench.TEST_PARAMETERS.items()}},
             "gnb_antenna_configs": [{"id": count, "label": info["label"], "short": info["short"]}
                                     for count, info in bench.GNB_ANTENNA_CONFIGS.items()],
             "traffic_profiles": [{"id": key, "label": info["title"], "role_rule": info["role_rule"]}
@@ -225,17 +234,17 @@ class Controller:
         if not isinstance(tests, list) or len(tests) != len(bench.TEST_ARMS):
             errors["tests"] = f"exactly {len(bench.TEST_ARMS)} tests ({', '.join(bench.TEST_ARM_LABELS.values())})"
         else:
+            normalized = []
             for arm, test in zip(bench.TEST_ARMS, tests):
                 label = bench.TEST_ARM_LABELS[arm]
                 if not isinstance(test, dict):
                     errors["tests"] = f"{label} must be an object"
                     continue
-                unknown_fields = set(test) - set(bench.TEST_FIELDS)
-                if unknown_fields:
-                    errors["tests"] = f"{label}: unknown fields {', '.join(sorted(unknown_fields))}"
-                for name, choices in bench.TEST_FIELDS.items():
-                    if test.get(name) not in choices:
-                        errors["tests"] = f"{label}: {name} must be one of {', '.join(choices)}"
+                try:
+                    normalized.append(bench.normalize_test(test))
+                except ValueError as error:
+                    errors["tests"] = f"{label}: {error}"
+            cfg["tests"] = normalized
         if cfg["traffic_profile"] not in bench.SINGLE_CELL_PROFILES:
             errors["traffic_profile"] = f"one of {', '.join(bench.SINGLE_CELL_PROFILES)}"
         for name in ("seed", "measure_seconds", "warmup_seconds", "repeat_count", "channel_update_hz"):
@@ -498,8 +507,9 @@ class Results:
     def _slim(report: dict[str, Any] | None) -> dict[str, Any] | None:
         if report is None:
             return None
-        keep = ("policy", "ue_count", "live", "measure_seconds", "warmup_seconds", "radio_seconds_total",
-                "segments_complete", "segments_valid", "metrics", "runtime", "epoch", "resource_grid")
+        keep = ("policy", "link_adaptation", "ue_count", "live", "measure_seconds", "warmup_seconds",
+                "radio_seconds_total", "segments_complete", "segments_valid", "metrics", "runtime", "epoch",
+                "resource_grid")
         out = {k: report.get(k) for k in keep}
         out["segments"] = [{"k": s["k"], "valid": s["valid"], "reasons": s["reasons"][:2], "dl_mbps": s["dl_mbps"],
                             "jain_dl": s["jain_dl"], "dl_prb_util": s["dl_prb_util"],

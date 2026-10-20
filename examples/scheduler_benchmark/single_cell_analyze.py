@@ -16,7 +16,7 @@ Reads (incrementally, so the controller can poll a live run):
   run/measure-epoch.json          S0, samples per update, updates
   logs/gnb0-internal.log          SCHED `Slot decisions` (PRBs, TBS, decision time)
   logs/gnb-metrics.jsonl          per-UE CQI/MCS/BLER (service validity)
-  logs/srsue-<ue>.log/.csv        C-RNTI, camped PCI, DL SNR
+  logs/srsue-<ue>.log/.csv        C-RNTI, camped PCI, DL BLER (service validity)
   logs/tx-*.bin, rx-*.bin         offered and delivered packets
 Metrics: METRIC_DEFINITIONS (analyze.py) plus the radio-time notes below.
 """
@@ -59,6 +59,15 @@ TAG = re.compile(r"^(?:k=(\d+)|attach);sha=([0-9a-f]{16})$")
 # (runtime_control.h matrix_profile_digest). Evidence is keyed by the link.
 LANE_SUFFIX = re.compile(r"^(.+)#r\d+t\d+$")
 VALID_SEGMENT_FRACTION = 0.9
+# A UE is out of service in a second when srsUE decoded none of its PDSCH
+# transport blocks (its own CRC count, `dl_bler` in percent), as the gNB-side
+# rule is "every DL HARQ failed". srsUE's `dl_snr` is not used: its DMRS noise
+# estimate is EPRE - |mean pilot|^2 over the grant (lib/src/phy/ch_estimation/
+# dmrs_sch.c), which measures the channel's frequency selectivity, so a UE in a
+# notch reads about -5 dB while it decodes QPSK at 1 % BLER. A UE that decodes
+# some blocks counts as in service: a poor link adaptation shows in the KPIs
+# instead of being excluded from them.
+UE_OUT_OF_SERVICE_DL_BLER = 100.0
 
 RADIO_TIME_DEFINITIONS = {
     "radio_time": "Segment k = radio second k after measurement sample S0: samples [S0 + k*fs, S0 + (k+1)*fs) of "
@@ -475,8 +484,10 @@ class SingleCellRun:
                 side = self.ue_side[ue].get(k) or self.ue_side[ue].get(k - 1) or self.ue_side[ue].get(k + 1)
                 if side is None:
                     reasons.append(f"{ue}: no UE metrics row")
-                elif int(side["pci"]) != self.benchmark["gnb"]["pci"] or side["dl_snr"] <= 0:
-                    reasons.append(f"{ue}: out of service (pci={int(side['pci'])}, snr={side['dl_snr']:.0f})")
+                elif int(side["pci"]) != self.benchmark["gnb"]["pci"]:
+                    reasons.append(f"{ue}: out of service (camped on pci={int(side['pci'])})")
+                elif side["dl_bler"] >= UE_OUT_OF_SERVICE_DL_BLER:
+                    reasons.append(f"{ue}: nothing decoded (srsUE DL BLER {side['dl_bler']:.0f}%)")
         seg = self.sched.seg.get(k)
         if seg is None or seg["first_slot"] is None:
             reasons.append("no scheduler activity")
@@ -528,6 +539,7 @@ class SingleCellRun:
             "generated_unix_ms": int(time.time() * 1000),
             "live": live,
             "policy": self.benchmark["policy"],
+            "link_adaptation": self.benchmark.get("link_adaptation"),
             "ue_count": len(self.ue_ids),
             "seed": self.benchmark["seed"],
             "radio_seconds_total": self.measure_seconds,

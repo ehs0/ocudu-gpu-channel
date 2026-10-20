@@ -113,6 +113,8 @@ One OCUDU gNB (1 or 2 antennas, § "gNB antennas" below), one broker, N srsUEs (
 of the whole stack (core, broker, gNB, UEs). The policy is bound at gNB
 start-up, so a cold restart is the only way to change it; running the
 policies on one cell removes the two-cell mode's cell bias by construction.
+Each test also picks the cell's link adaptation (§ "Link adaptation"), which
+is bound at start-up the same way.
 
 ### Identical external conditions
 
@@ -144,6 +146,102 @@ from the gNB's config dump by policy name and parameter values
 (`definitions.schedulers_in_config_dump`), since QoS-PF and Max C/I share
 `qos_sched`.
 
+### Link adaptation
+
+Each test also chooses one of OCUDU's link-adaptation modes
+(`definitions.LINK_ADAPTATION`). All three are OCUDU configuration, no
+rebuild: `lib/scheduler/ue_context/ue_link_adaptation_controller.cpp` returns
+a fixed MCS when the UE MCS range has one value, otherwise maps the reported
+wideband CQI (DL) or its PUSCH SINR estimate (UL) to an MCS
+(`lib/scheduler/support/mcs_calculator.cpp`), plus the OLLA offset when OLLA
+exists, and an OLLA step of 0 creates no OLLA.
+
+| Mode | `cell_cfg.pdsch` | `cell_cfg.pusch` | MCS |
+| --- | --- | --- | --- |
+| `fixed` | `min_ue_mcs = max_ue_mcs = fixed_dl_mcs`, `olla_cqi_inc_step: 0` | `min_ue_mcs = max_ue_mcs = fixed_ul_mcs`, `olla_snr_inc_step: 0` | the configured index (0-28, qam64 tables), whatever the channel |
+| `amc` | `min_ue_mcs: 0`, `max_ue_mcs: 28`, `olla_cqi_inc_step: 0` | same, `olla_snr_inc_step: 0` | DL from CQI, UL from PUSCH SINR, open loop |
+| `amc_olla` | OCUDU's defaults written out: MCS 0-28, `olla_cqi_inc_step: 0.001`, `olla_target_bler: 0.01`, `olla_max_cqi_offset: 4.0` | MCS 0-28, `olla_snr_inc_step: 0.001`, `olla_target_bler: 0.01`, `olla_max_snr_offset: 5.0` | as `amc`, corrected by OLLA toward 1 % HARQ BLER |
+| `harq_olla` | as `amc_olla` but `olla_max_cqi_offset: 14.0` | as `amc_olla` | DL: the OLLA offset spans CQI 15 → 1, so with srsUE's constant CQI the MCS follows the HARQ feedback alone |
+
+A test is `{"scheduler": ..., "link_adaptation": ...}`, and a fixed test also
+carries `fixed_dl_mcs` and `fixed_ul_mcs` (default 16; only a fixed test may
+carry them). A request that leaves `link_adaptation` out gets `amc_olla`, which
+is what every session before this field ran. The gate proves the mode the gNB
+loaded from its config dump (`definitions.link_adaptation_in_config_dump` on
+the `pdsch` / `pusch` blocks under `cell_cfg`; a key the dump leaves out takes
+OCUDU's default), next to the policy, in `logs/policy-check.json`, and stops the
+run on a mismatch. Two tests with the same scheduler and different link
+adaptations compare the link adaptation alone; RAR, SIB1 and the SRB0
+fallback PDSCH (Msg4) keep their own MCS in every mode, so attach is the same.
+
+What the comparison can and cannot show with srsUE:
+
+- **UL is real.** The gNB measures each UE's PUSCH SINR, so UL AMC follows
+  the channel and UL OLLA corrects it.
+- **DL CQI is a constant.** srsUE's CQI function returns 15
+  (`lib/src/phy/phch/csi.c` `csi_snri_db_to_cqi`, upstream as well), and the
+  2-antenna cell has no CSI-RS, so its CQI stays at `initial_cqi` 3. DL `amc`
+  is therefore a constant MCS (28 at 1 antenna, the CQI-3 MCS at 2), and DL
+  `amc_olla` adapts only through the HARQ feedback: from CQI 15 it can go down
+  4 CQI steps (to about MCS 20), from CQI 3 to MCS 0. `harq_olla` removes that
+  floor (CQI 15 → 1). A DL comparison measures these behaviours, not CQI-driven
+  AMC.
+- **Fixed MCS also blinds the channel-aware schedulers.** QoS-PF and Max C/I
+  rank UEs by the rate of the link-adaptation MCS
+  (`scheduler_time_qos.cpp`), which is equal for every UE under `fixed`.
+- **Outages are excluded, and counted.** A radio second in which a UE
+  decoded nothing or left the cell is invalid and left out of every KPI (as
+  for the schedulers; § "Fairness audit" defines it); an MCS the channel
+  cannot carry at all produces such seconds, and so does the radio link
+  failure that follows. A UE that still decodes some blocks counts, with its
+  BLER and throughput. The comparison reports the valid fraction per test
+  ("Valid radio seconds"), and below 90 % the session is UNQUALIFIED (RUN
+  VALID).
+
+Measured (sutd_1gnb, 2 static hotspot UEs, seed 1, 1 antenna, `mixed`, 20 s
+after 5 s warm-up, QoS-PF in every test; both STRICT FAIR COMPARISON: PASS,
+every UE in service every second, the gate found the requested mode in each
+run's config dump):
+
+| Session | Test | DL / UL MCS | DL / UL BLER | Cell DL (Mb/s) |
+| --- | --- | --- | --- | --- |
+| 20261020T081049Z-g34 | Fixed MCS 16/20 | 16.0 / 20.0 | 0 / 0 | 27.06 |
+| | AMC | 28.0 / 28.0 | 0 / 0 | 48.62 |
+| 20261020T081343Z-g35 | AMC + OLLA | 27.9 / 28.0 | 0 / 0 | 48.59 |
+| | AMC | 28.0 / 28.0 | 0 / 0 | 48.63 |
+
+These are smoke runs on a benign channel (PUSCH SINR ~42 dB, no HARQ
+failures), so OLLA had nothing to correct; AMC and AMC + OLLA differ only in
+fading channels, e.g. the deep-notch placements under "Measured results".
+
+The deep-notch placement (session 20261020T102621Z-g37: sutd_1gnb, 4 static
+uniform UEs, seed 20261016, 1 antenna, `mixed`, 30 s after 10 s warm-up,
+QoS-PF in both tests; TRACE, RADIO ALIGNMENT and TRAFFIC VERIFIED). ue1's
+emulated DL SNR is 25 dB on average and 7.9 dB at its notch (PRB 37-39), yet
+srsUE fails 16QAM and 64QAM there while QPSK decodes. Values over every
+measured second, valid or not:
+
+| Test | ue1 DL MCS | ue1 DL BLER | ue1 DL (Mb/s) | Cell DL (Mb/s) | Radio speed |
+| --- | --- | --- | --- | --- | --- |
+| HARQ-OLLA | 7-9 (QPSK), reached within ~10 s | 0.014 | 5.42 | 36.47 | 0.40× |
+| AMC + OLLA | 20 (its CQI 11 floor) | 0.871 | 0.43 | 22.67 | 0.059× |
+
+Plain `amc` loses ue1 at MCS 28 to a radio link failure after 100
+consecutive KOs (session g36, 0 of 120 seconds valid). Under AMC + OLLA the
+HARQ retransmissions of ue1 also take PRBs from the others (ue0, ue2: 8.42
+against 12.54 Mb/s), and its srsUE decodes failing blocks at the maximum
+LDPC iterations (190 % CPU against ~10 % for the other UEs), which holds the
+lock-step radio at 0.059×. srsUE keeps reporting a DL SNR of about −5 dB for
+ue1 in both tests, an estimate of the channel's frequency selectivity rather
+than of its noise (`dmrs_sch.c` takes n0 = EPRE − |mean pilot|²). The former
+validity rule took that as out of service (4 and 2 of 30 seconds valid,
+UNQUALIFIED); with the current one (srsUE decoded nothing, § "Fairness
+audit") the same logs give 30/30 and 29/30 valid seconds and STRICT FAIR
+COMPARISON: PASS (re-analysed; the first reports are kept as
+`run-report.dl-snr-rule.json` and `reports/dl-snr-rule/`). Cell KPIs,
+HARQ-OLLA against AMC + OLLA: DL 36.47 / 22.89 Mb/s, Jain 0.876 / 0.749,
+worst-UE DL BLER 0.011 / 0.877, DL spectral efficiency 2.32 / 1.72 b/s/Hz.
+
 ### Comparison metrics
 
 `validation.cell_kpis` turns each run's metrics into cell-level KPIs, averaged
@@ -156,8 +254,9 @@ UI colours the better test green and the worse red per row.
 | Fairness | Jain over UE DL throughput and over PRB shares, worst-UE DL throughput (higher); worst-UE p99 wait for a DL allocation while data is queued, starvation events (lower) |
 | QoS differentiation | 5QI 7 UEs: worst p99 DL delay, PDB violation rate (lower); 5QI 9 UEs: total DL throughput (higher). `mixed` profile only. |
 | Latency | DL delay mean pooled over received packets, worst-UE p95 and p99 (lower) |
-| Resource efficiency | DL PRB utilisation, DL spectral efficiency = MAC DL bits / (used PRBs x 180 kHz), mean DL MCS, application / MAC DL goodput ratio (higher) |
-| Reliability | DL and UL HARQ BLER (UE mean), packet drop rate and PDB violation rate pooled over offered packets (lower) |
+| Resource efficiency | DL PRB utilisation, DL spectral efficiency = MAC DL bits / (used PRBs x 180 kHz), application / MAC DL goodput ratio (higher) |
+| Link adaptation | worst-UE DL and UL HARQ BLER (lower); mean DL and UL MCS, mean reported CQI, mean PUSCH SINR (shown, not ranked: the choice and its inputs) |
+| Reliability | DL and UL HARQ BLER (UE mean), packet drop rate and PDB violation rate pooled over offered packets (lower); valid radio seconds (higher) |
 | Scheduler and emulation | decision time per slot (lower), radio speed (not a policy KPI) |
 
 ### Fairness audit
@@ -177,6 +276,19 @@ only (bundle re-hash, each run's broker log, gate summary):
 shifted or foreign update, a changed traffic set or excessive lag fails its
 gate (`tests/test_single_cell_benchmark.py::FairnessAudit`).
 
+A radio second is valid when every UE is in service
+(`single_cell_analyze.segment_validity`): present in the gNB's metrics report
+(this second or a neighbour), not every DL HARQ failed, camped on the cell's
+PCI, and srsUE decoded at least one of its PDSCH blocks (its own `dl_bler`
+below 100 %). srsUE's `dl_snr` is not used: its DMRS noise estimate
+(`lib/src/phy/ch_estimation/dmrs_sch.c`, n0 = EPRE − |mean pilot|²) measures
+the channel's frequency selectivity, so a UE in a notch reads about −5 dB
+while it decodes QPSK at 1 % BLER. A UE that decodes some blocks at a high
+BLER is in service, so a poor link adaptation shows in the KPIs rather than
+being excluded from them. Sessions analysed before 2026-10-20 also counted
+srsUE `dl_snr ≤ 0` as out of service; re-evaluated with the current rule, the
+STRICT PASS sessions g14, g22 and g23 keep every second valid.
+
 ### Web UI
 
 ```bash
@@ -191,12 +303,15 @@ sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh /home/dev/venvs/sion
 The page compares **Test 1** and **Test 2**. The shared settings (UE count,
 scene, gNB antennas, UE type, placement, traffic profile, seed, durations, run order and
 runs per test) apply to both; each test panel then picks its own MAC
-scheduler. A test is the shared configuration plus its own fields
-(`definitions.TEST_FIELDS`, today only `scheduler`), so another comparison
-dimension is added by naming its field there and applying it where the
-policy run is built (`single_cell_runner.Session.run_test`); the panels draw
-one selector per field from `/api/benchmark/options`. Choosing the same
-scheduler on both sides is allowed and is reported as an A/A control. Runs
+scheduler and link adaptation (with the DL and UL MCS inputs while "Fixed
+MCS" is chosen). A test is the shared configuration plus its own fields
+(`definitions.TEST_FIELDS`: `scheduler`, `link_adaptation`) and the
+parameters that apply to them (`definitions.TEST_PARAMETERS`), so another
+comparison dimension is added by naming its field there and applying it where
+the policy run is built (`single_cell_runner.Session.run_test`); the panels
+draw one selector per field and one number input per parameter from
+`/api/benchmark/options`. Choosing the same scheduler and link adaptation on
+both sides is allowed and is reported as an A/A control. Runs
 are named `NN-test1` / `NN-test2`, the order ABBA by default (Test 1, Test 2,
 Test 2, Test 1), and the comparison is Test 1 − Test 2 per radio second.
 Press **Start New Benchmark** to apply the settings. Selector changes
@@ -308,9 +423,15 @@ sudo bash /home/dev/ocudu-setup/run-isolated-single-cell.sh bash \
     "seed": 1, "measure_seconds": 120, "warmup_seconds": 10, "repeat_count": 2, "comparison_order": "abba"}'
 ```
 
+The link adaptation goes into the tests, e.g. one scheduler under a fixed MCS
+and under AMC + OLLA: `"tests": [{"scheduler": "qos", "link_adaptation":
+"fixed", "fixed_dl_mcs": 16, "fixed_ul_mcs": 20}, {"scheduler": "qos",
+"link_adaptation": "amc_olla"}]`.
+
 Exit status 0 means `STRICT FAIR COMPARISON: PASS`. One policy run alone:
 `run-single-cell-policy.sh --run-root DIR --scenario ... --channel-bundle ...
---traffic-bundle ... --policy rr --ue-count 4 --profile mixed --seed 1`.
+--traffic-bundle ... --policy rr --ue-count 4 --profile mixed --seed 1
+[--link-adaptation fixed --fixed-dl-mcs 16 --fixed-ul-mcs 20]`.
 
 ### Session layout
 
@@ -318,7 +439,7 @@ Exit status 0 means `STRICT FAIR COMPARISON: PASS`. One policy run alone:
 <native-root>/results/single-cell-scheduler-benchmark/
   active/  session.json status.json events.jsonl bundle-frozen.json
            bundle/{scenario.json,noise.json,channel/,traffic/}   read-only after freezing
-           policy_runs/NN-<policy>/{configs,logs,report}/       one cold run each
+           policy_runs/NN-<test>/{configs,logs,report}/         one cold run each (test1, test2)
            reports/{fairness-audit,benchmark-report,validation}.json, per-ue-kpis.csv
            runtime/  runner and per-run console logs
   archive/<session_id>/   only with --archive; never shown as current data

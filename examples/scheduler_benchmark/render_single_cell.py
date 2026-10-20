@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Render one single-cell policy run: one gNB, one broker topology, N UEs.
 
-Exactly one scheduler policy per gNB config. Everything else -- gNB identity
-and addresses, the UE identities (definitions.single_cell_ue), the receiver
-noise floor, the subscriber 5QIs -- depends only on the UE count and the
-traffic profile, so the configs of two policy runs of one session differ in
-the policy block alone (the gate diffs them; see single_cell_runner.py).
+Exactly one scheduler policy and one link adaptation (fixed MCS, CQI/SINR
+AMC, AMC + OLLA; definitions.LINK_ADAPTATION) per gNB config. Everything else
+-- gNB identity and addresses, the UE identities (definitions.single_cell_ue),
+the receiver noise floor, the subscriber 5QIs -- depends only on the UE count
+and the traffic profile, so the configs of two policy runs of one session
+differ in the policy block and the pdsch / pusch link-adaptation keys alone.
 
 Reused unchanged: the gNB rendering of render-multi-gnb-configs.py (cell a's
 identity), the Open5GS and srsUE rendering of render-multi-ue-configs.py, the
@@ -65,6 +66,39 @@ def insert_scheduler_policy(gnb_text: str, scheduler: str) -> str:
         fail("gNB fixture already has a cell_cfg.scheduler block")
     return legacy.replace_exact(gnb_text, "cell_cfg:\n", "cell_cfg:\n" + bench.SCHEDULERS[scheduler]["yaml"], 1,
                                 "gNB scheduler policy")
+
+
+def insert_link_adaptation(gnb_text: str, test: dict) -> str:
+    """Append the test's link-adaptation keys (definitions.link_adaptation_yaml)
+    to cell_cfg.pdsch and cell_cfg.pusch."""
+
+    try:
+        lines = bench.link_adaptation_yaml(test)
+    except ValueError as error:
+        fail(str(error))
+    for section, text in lines.items():
+        for key in text.split():
+            if key.endswith(":") and f"    {key}" in gnb_text:
+                fail(f"gNB fixture already sets {key[:-1]}")
+    for section, text in lines.items():
+        anchor = f"  {section}:\n    mcs_table: qam64\n"
+        gnb_text = legacy.replace_exact(gnb_text, anchor, anchor + text, 1, f"gNB {section} link adaptation")
+    return gnb_text
+
+
+def link_adaptation_test(args: argparse.Namespace) -> dict:
+    """The run's link-adaptation fields ({"link_adaptation", ["fixed_dl_mcs", "fixed_ul_mcs"]}), checked."""
+
+    test = {"scheduler": args.policy, "link_adaptation": args.link_adaptation}
+    for key in ("fixed_dl_mcs", "fixed_ul_mcs"):
+        if getattr(args, key) is not None:
+            test[key] = getattr(args, key)
+    try:
+        test = bench.normalize_test(test)
+    except ValueError as error:
+        fail(str(error))
+    del test["scheduler"]
+    return test
 
 
 def add_config_dump(gnb_text: str) -> str:
@@ -207,6 +241,8 @@ def render(args: argparse.Namespace) -> dict:
     gnb_text = multi_gnb.render_gnb(gnb_source, GNB_CELL, log_dir)
     gnb_text = render_gnb_antennas(gnb_text, antennas)
     gnb_text = insert_scheduler_policy(gnb_text, args.policy)
+    link_adaptation = link_adaptation_test(args)
+    gnb_text = insert_link_adaptation(gnb_text, link_adaptation)
     gnb_text = add_config_dump(gnb_text)
     gnb_text += rank1.render_gnb_metrics(bench.SINGLE_CELL_GNB["metrics_port"])
     srsue_source = legacy.read_regular(repo_root / "examples/configs/ran/srsue/srsue_zmq_multi_ue.conf.in",
@@ -231,6 +267,9 @@ def render(args: argparse.Namespace) -> dict:
         "kind": "ocudu-single-cell-scheduler-benchmark",
         "policy": args.policy,
         "scheduler_info": bench.SCHEDULERS[args.policy],
+        "link_adaptation": link_adaptation,
+        "link_adaptation_info": {**bench.LINK_ADAPTATION[link_adaptation["link_adaptation"]],
+                                 "parameters": bench.link_adaptation_parameters(link_adaptation)},
         "ue_count": args.ue_count,
         "seed": args.seed,
         "traffic_profile": profile,
@@ -258,6 +297,10 @@ def main() -> int:
     parser.add_argument("--log-dir", type=Path, required=True)
     parser.add_argument("--scenario-config", type=Path, required=True)
     parser.add_argument("--policy", choices=sorted(bench.SCHEDULERS), required=True)
+    parser.add_argument("--link-adaptation", choices=sorted(bench.LINK_ADAPTATION),
+                        default=bench.TEST_FIELD_DEFAULTS["link_adaptation"])
+    parser.add_argument("--fixed-dl-mcs", type=int, default=None, help="with --link-adaptation fixed")
+    parser.add_argument("--fixed-ul-mcs", type=int, default=None, help="with --link-adaptation fixed")
     parser.add_argument("--ue-count", type=int, required=True)
     parser.add_argument("--traffic-profile", required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -277,7 +320,8 @@ def main() -> int:
                          sort_keys=True))
         return 0
     metadata = render(args)
-    print(f"event=single_cell_configs_rendered policy={args.policy} ues={args.ue_count} "
+    print(f"event=single_cell_configs_rendered policy={args.policy} "
+          f"link_adaptation=\"{bench.link_adaptation_label(metadata['link_adaptation'])}\" ues={args.ue_count} "
           f"profile={metadata['traffic_profile']['name']} seed={args.seed} output_dir=\"{args.output_dir}\"")
     return 0
 

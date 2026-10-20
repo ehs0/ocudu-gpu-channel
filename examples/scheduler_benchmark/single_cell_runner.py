@@ -3,8 +3,8 @@
 
 A session is one validated configuration: shared settings (scene, gNB antennas, UE count,
 UE type and placement, traffic profile, seed, durations) and two tests,
-each the shared settings plus its own fields (definitions.TEST_FIELDS; today
-the MAC scheduler). The runner:
+each the shared settings plus its own fields (definitions.TEST_FIELDS: the
+MAC scheduler and the link adaptation). The runner:
 
   1. PREPARING   generates the scenario, the receiver-noise description, the
                  channel trace (Sionna, solved once) and the traffic trace, and
@@ -181,6 +181,7 @@ class Session:
         cfg = self.config
         test = self.test_of(arm)
         policy = test["scheduler"]
+        link_adaptation = test.get("link_adaptation", bench.TEST_FIELD_DEFAULTS["link_adaptation"])
         run_id = f"{index + 1:02d}-{arm}"
         run_root = self.root / "policy_runs" / run_id
         label = bench.test_label(arm, test)
@@ -189,10 +190,13 @@ class Session:
                         sub_phase="starting")
         command = ["bash", str(POLICY_SCRIPT), "--run-root", str(run_root), "--scenario", str(self.bundle / "scenario.json"),
                    "--channel-bundle", str(self.bundle / "channel"), "--traffic-bundle", str(self.bundle / "traffic"),
-                   "--policy", policy, "--ue-count", str(cfg["ue_count"]), "--profile", cfg["traffic_profile"],
+                   "--policy", policy, "--link-adaptation", link_adaptation,
+                   "--ue-count", str(cfg["ue_count"]), "--profile", cfg["traffic_profile"],
                    "--seed", str(cfg["seed"]), "--attach-timeout", str(cfg["attach_timeout_s"]),
                    "--awgn-snr-db", "off" if cfg.get("awgn_snr_db") is None else repr(float(cfg["awgn_snr_db"])),
                    "--warmup-seconds", str(cfg["warmup_seconds"])]
+        if link_adaptation == "fixed":
+            command += ["--fixed-dl-mcs", str(test["fixed_dl_mcs"]), "--fixed-ul-mcs", str(test["fixed_ul_mcs"])]
         if cfg.get("tx_power_ul") is not None:
             command += ["--tx-power-ul", repr(float(cfg["tx_power_ul"]))]
         if cfg.get("tx_power_dl") is not None:

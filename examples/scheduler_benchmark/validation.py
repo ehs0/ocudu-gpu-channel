@@ -24,7 +24,7 @@ and gate summary -- never assumed. Four gates:
 STRICT FAIR COMPARISON: PASS only when all four pass; otherwise UNQUALIFIED
 with the failing reasons. Outcomes (throughput, HARQ, delays) are allowed to
 differ between runs -- also between repeats of one test, and between two tests
-that chose the same scheduler (both are A/A controls).
+configured identically (scheduler and link adaptation; both are A/A controls).
 """
 
 from __future__ import annotations
@@ -312,6 +312,13 @@ def cell_kpis(m: dict[str, Any]) -> dict[str, Any]:
         "dl_spectral_efficiency_bps_hz": (mac_dl * 1e6 / (used_prb * PRB_BANDWIDTH_HZ)
                                           if mac_dl is not None and used_prb else None),
         "dl_mcs_mean": pooled([(get(u, "link", "dl_mcs"), 1) for u in ues]),
+        # link adaptation: what the gNB chose (MCS) and what it chose from
+        # (reported CQI, its own PUSCH SINR estimate), UE means
+        "ul_mcs_mean": pooled([(get(u, "link", "ul_mcs"), 1) for u in ues]),
+        "cqi_mean": pooled([(get(u, "link", "cqi"), 1) for u in ues]),
+        "pusch_snr_db_mean": pooled([(get(u, "link", "pusch_snr_db"), 1) for u in ues]),
+        "worst_ue_dl_bler": worst([get(u, "link", "dl_bler") for u in ues]),
+        "worst_ue_ul_bler": worst([get(u, "link", "ul_bler") for u in ues]),
         # reliability
         "dl_bler": pooled([(get(u, "link", "dl_bler"), 1) for u in ues]),
         "ul_bler": pooled([(get(u, "link", "ul_bler"), 1) for u in ues]),
@@ -363,9 +370,17 @@ def compare(runs: list[dict[str, Any]]) -> dict[str, Any]:
                 "pdb_violation_rate": mean([m["per_ue"][ue]["pdb_violation_rate"] for m in ms]),
                 "drop_rate": mean([m["per_ue"][ue]["drop_rate"] for m in ms]),
                 "dl_mcs": mean([m["per_ue"][ue]["link"]["dl_mcs"] for m in ms]),
+                "ul_mcs": mean([m["per_ue"][ue]["link"].get("ul_mcs") for m in ms]),
                 "cqi": mean([m["per_ue"][ue]["link"]["cqi"] for m in ms]),
+                "dl_bler": mean([m["per_ue"][ue]["link"].get("dl_bler") for m in ms]),
+                "ul_bler": mean([m["per_ue"][ue]["link"].get("ul_bler") for m in ms]),
             } for ue in ue_ids},
             "real_time_ratio": mean([(r.get("runtime") or {}).get("real_time_ratio") for r in reports]),
+            # Seconds a UE was out of service (e.g. every DL HARQ failed at an
+            # MCS the channel could not carry) are excluded from every other
+            # KPI; this is how much of the measurement that left.
+            "valid_seconds_fraction": mean([r["segments_valid"] / r["segments_complete"] for r in reports
+                                            if r.get("segments_complete")]),
         }
         kpis = [cell_kpis(m) for m in ms]
         summaries[arm].update({key: mean([k[key] for k in kpis]) for key in kpis[0]})
@@ -423,16 +438,20 @@ def write_reports(out_dir: pathlib.Path, session: dict[str, Any], runs: list[dic
         writer = csv.writer(handle)
         writer.writerow(["run_id", "test", "scheduler", "ue", "role", "five_qi", "dl_mbps", "ul_mbps", "dl_prb_share",
                          "dl_delay_radio_p95_ms", "dl_delay_radio_p99_ms", "pdb_violation_rate", "drop_rate",
-                         "dl_mcs", "cqi", "segments_valid"])
+                         "dl_mcs", "cqi", "segments_valid", "link_adaptation", "fixed_dl_mcs", "fixed_ul_mcs",
+                         "ul_mcs", "dl_bler", "ul_bler", "pusch_snr_db"])
         for run in runs:
             m = (run.get("report") or {}).get("metrics")
             if not m:
                 continue
+            test = run.get("test") or {}
             for ue, u in m["per_ue"].items():
-                writer.writerow([run["run_id"], run["arm"], (run.get("test") or {}).get("scheduler"), ue, u["role"], u["five_qi"], u["throughput_mbps"]["dl"],
+                writer.writerow([run["run_id"], run["arm"], test.get("scheduler"), ue, u["role"], u["five_qi"], u["throughput_mbps"]["dl"],
                                  u["throughput_mbps"]["ul"], u["dl_prb_share"], u["delay_radio_ms"]["dl"]["p95"],
                                  u["delay_radio_ms"]["dl"]["p99"], u["pdb_violation_rate"], u["drop_rate"],
-                                 u["link"]["dl_mcs"], u["link"]["cqi"], m["segments"]])
+                                 u["link"]["dl_mcs"], u["link"]["cqi"], m["segments"], test.get("link_adaptation"),
+                                 test.get("fixed_dl_mcs"), test.get("fixed_ul_mcs"), u["link"].get("ul_mcs"),
+                                 u["link"].get("dl_bler"), u["link"].get("ul_bler"), u["link"].get("pusch_snr_db")])
     validation = {"verdict": fairness["verdict"], "gates": fairness["gates"], "reasons": fairness["reasons"],
                   "per_run": fairness["per_run"]}
     (out_dir / "validation.json").write_text(json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8")

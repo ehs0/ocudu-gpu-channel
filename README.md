@@ -233,6 +233,10 @@ Currently available:
   traffic trace, with a web UI to start, stop and replace sessions. Reports
   cover application-layer throughput, delay, PDB violations and fairness, and
   MAC-layer PRB use, spectral efficiency and starvation.
+- **Link adaptation** — in the same single-cell mode each test also picks
+  OCUDU's link adaptation: fixed MCS (DL and UL index), CQI/SINR-based AMC
+  without OLLA, or AMC + OLLA (OCUDU's default), compared with MCS, BLER and
+  the throughput they buy.
 
 ```sh
 bash examples/scheduler_benchmark/run-ocudu-scheduler-benchmark.sh

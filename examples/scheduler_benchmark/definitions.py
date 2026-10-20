@@ -181,6 +181,153 @@ def schedulers_in_config_dump(policy_block: str) -> list[str]:
     return [name for name, info in SCHEDULERS.items()
             if info["policy"] == policy and {k: _dump_value(str(v)) for k, v in info["parameters"].items()} == loaded]
 
+
+# --- Link adaptation ---------------------------------------------------------------
+# OCUDU's link adaptation (lib/scheduler/ue_context/ue_link_adaptation_controller.cpp),
+# set per cell at gNB start-up in cell_cfg.pdsch / cell_cfg.pusch, like the policy:
+#   - a UE MCS range of one value is a fixed MCS: calculate_dl_mcs / calculate_ul_mcs
+#     return it without looking at CQI or SINR;
+#   - otherwise DL MCS = map_cqi_to_mcs(wideband CQI + OLLA offset) and UL MCS =
+#     map_snr_to_mcs_ul(PUSCH SINR + OLLA offset) (lib/scheduler/support/mcs_calculator.cpp);
+#   - an OLLA increment step of 0 creates no olla_algorithm, i.e. no OLLA.
+# Every mode writes all its keys, so the gNB's non-default config dump shows them
+# and the gate identifies the loaded mode from the dump (link_adaptation_in_config_dump).
+# The defaults are du_high_config.h's (pdsch / pusch unit config).
+LINK_ADAPTATION_DEFAULTS: dict[str, dict[str, float]] = {
+    "pdsch": {"min_ue_mcs": 0, "max_ue_mcs": 28, "olla_cqi_inc_step": 0.001, "olla_target_bler": 0.01,
+              "olla_max_cqi_offset": 4.0},
+    "pusch": {"min_ue_mcs": 0, "max_ue_mcs": 28, "olla_snr_inc_step": 0.001, "olla_target_bler": 0.01,
+              "olla_max_snr_offset": 5.0},
+}
+# The gNB fixture uses the qam64 tables (pdsch / pusch mcs_table: qam64), MCS 0..28 in both directions.
+MAX_UE_MCS = 28
+FIXED_MCS_DEFAULT = 16
+# HARQ-driven OLLA: the CQI offset may cover CQI 15 -> 1 (get_effective_cqi clamps to [1, 15]).
+HARQ_OLLA_MAX_CQI_OFFSET = 14.0
+LINK_ADAPTATION: dict[str, dict[str, Any]] = {
+    "fixed": {
+        "title": "Fixed MCS",
+        "short": "Fixed MCS",
+        "source": "lib/scheduler/ue_context/ue_link_adaptation_controller.cpp (calculate_dl_mcs / calculate_ul_mcs, "
+                  "MCS range of length 0)",
+        "summary": "Every DL and UL data allocation uses one configured MCS (DL and UL chosen separately), "
+                   "whatever the channel.",
+        "properties": [
+            "min_ue_mcs = max_ue_mcs = the chosen index on PDSCH and on PUSCH (qam64 tables, 0-28); OLLA off.",
+            "No adaptation: a fade costs HARQ retransmissions and, after 100 consecutive KOs, a radio link "
+            "failure; a good channel is not exploited.",
+            "Channel-aware schedulers lose their channel input too: QoS-PF and Max C/I rank UEs by the rate "
+            "of the link-adaptation MCS, now equal for every UE.",
+            "Not affected: RAR, SIB1 and the SRB0 fallback PDSCH (Msg4) keep their own MCS.",
+        ],
+    },
+    "amc": {
+        "title": "CQI/SINR-based AMC (no OLLA)",
+        "short": "AMC",
+        "source": "lib/scheduler/support/mcs_calculator.cpp (map_cqi_to_mcs, map_snr_to_mcs_ul)",
+        "summary": "DL MCS from the UE's reported wideband CQI, UL MCS from the gNB's PUSCH SINR estimate, "
+                   "with no outer-loop correction.",
+        "properties": [
+            "Open loop: olla_cqi_inc_step = olla_snr_inc_step = 0, UE MCS range 0-28.",
+            "A biased CQI or SINR estimate is never corrected by the HARQ feedback.",
+            "srsUE reports no real CQI (its CQI function returns 15; the 2-antenna cell has no CSI-RS and "
+            "keeps the initial CQI 3), so DL AMC is a constant MCS here; the UL SINR is measured.",
+        ],
+    },
+    "amc_olla": {
+        "title": "AMC + OLLA (OCUDU default)",
+        "short": "AMC+OLLA",
+        "source": "lib/scheduler/support/outer_loop_link_adaptation.h",
+        "summary": "CQI/SINR-based MCS plus outer-loop link adaptation, which moves an offset on the CQI (DL) "
+                   "and SINR (UL) until the HARQ BLER meets a 1% target.",
+        "properties": [
+            "Offset += step per ACK, -= step x (1 - BLER target) / BLER target per NACK; step 0.001, "
+            "target 0.01, DL CQI offset within ±4, UL SINR offset within ±5 dB.",
+            "OCUDU's default values, written out so the config dump proves them.",
+            "Expected: BLER near the target; a CQI or SINR that over-estimates the channel is corrected down.",
+        ],
+    },
+    "harq_olla": {
+        "title": "HARQ-driven OLLA (CQI offset ±14)",
+        "short": "HARQ-OLLA",
+        "source": "lib/scheduler/support/outer_loop_link_adaptation.h (olla_max_cqi_offset)",
+        "summary": "AMC + OLLA with the DL CQI offset allowed across the whole CQI table, so the HARQ feedback "
+                   "alone can move a UE from CQI 15 to CQI 1 (MCS 28 to 0).",
+        "properties": [
+            "olla_max_cqi_offset = 14 instead of 4; every other OLLA value and the UL are as AMC + OLLA.",
+            "srsUE reports CQI 15 whatever the channel, so the DL MCS is set per UE by ACK/NACK alone; "
+            "the PDCCH aggregation level follows the same effective CQI.",
+            "With the default offset of 4 a UE cannot go below CQI 11 (about MCS 20), however many NACKs.",
+            "Convergence is OLLA's: 0.099 CQI down per NACK (step 0.001, 1% target), 0.001 up per ACK.",
+        ],
+    },
+}
+
+
+def link_adaptation_parameters(test: dict[str, Any]) -> dict[str, dict[str, float]]:
+    """The cell_cfg.pdsch / cell_cfg.pusch keys that select a test's link adaptation."""
+
+    mode = test.get("link_adaptation")
+    if mode not in LINK_ADAPTATION:
+        raise ValueError(f"unknown link adaptation {mode!r}; known: {', '.join(LINK_ADAPTATION)}")
+    if mode in ("amc_olla", "harq_olla"):
+        keys = copy.deepcopy(LINK_ADAPTATION_DEFAULTS)
+        if mode == "harq_olla":
+            keys["pdsch"]["olla_max_cqi_offset"] = HARQ_OLLA_MAX_CQI_OFFSET
+        return keys
+    dl, ul = (0, MAX_UE_MCS), (0, MAX_UE_MCS)
+    if mode == "fixed":
+        for key in ("fixed_dl_mcs", "fixed_ul_mcs"):
+            value = test.get(key)
+            if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= MAX_UE_MCS:
+                raise ValueError(f"fixed link adaptation needs {key} in 0..{MAX_UE_MCS}")
+        dl, ul = (test["fixed_dl_mcs"],) * 2, (test["fixed_ul_mcs"],) * 2
+    return {"pdsch": {"min_ue_mcs": dl[0], "max_ue_mcs": dl[1], "olla_cqi_inc_step": 0},
+            "pusch": {"min_ue_mcs": ul[0], "max_ue_mcs": ul[1], "olla_snr_inc_step": 0}}
+
+
+def link_adaptation_yaml(test: dict[str, Any]) -> dict[str, str]:
+    """The lines appended to the gNB's cell_cfg.pdsch and cell_cfg.pusch blocks."""
+
+    return {section: "".join(f"    {key}: {value}\n" for key, value in values.items())
+            for section, values in link_adaptation_parameters(test).items()}
+
+
+def link_adaptation_in_config_dump(pdsch_block: str, pusch_block: str) -> dict[str, Any] | None:
+    """The link adaptation whose keys equal a gNB config dump's cell_cfg.pdsch and
+    cell_cfg.pusch blocks ("    min_ue_mcs: 16\\n..."), or None.
+
+    A key the dump leaves out takes du_high_config.h's default, which is what
+    the gNB runs with; values compare as numbers."""
+
+    loaded = {}
+    for section, block in (("pdsch", pdsch_block), ("pusch", pusch_block)):
+        found = {}
+        for line in block.splitlines():
+            key, sep, value = line.strip().partition(":")
+            if sep and key.strip() in LINK_ADAPTATION_DEFAULTS[section]:
+                found[key.strip()] = _dump_value(value)
+        loaded[section] = {**LINK_ADAPTATION_DEFAULTS[section], **found}
+    for mode in LINK_ADAPTATION:
+        test: dict[str, Any] = {"link_adaptation": mode}
+        if mode == "fixed":
+            test.update(fixed_dl_mcs=int(loaded["pdsch"]["min_ue_mcs"]),
+                        fixed_ul_mcs=int(loaded["pusch"]["min_ue_mcs"]))
+        expected = link_adaptation_parameters(test)
+        if all({k: _dump_value(str(v)) for k, v in {**LINK_ADAPTATION_DEFAULTS[s], **expected[s]}.items()}
+               == {k: _dump_value(str(v)) for k, v in loaded[s].items()} for s in expected):
+            return test
+    return None
+
+
+def link_adaptation_label(test: dict[str, Any]) -> str:
+    """'AMC+OLLA', or 'Fixed MCS 16/20' (DL/UL) for a fixed test."""
+
+    mode = test["link_adaptation"]
+    if mode == "fixed":
+        return f"{LINK_ADAPTATION[mode]['short']} {test['fixed_dl_mcs']}/{test['fixed_ul_mcs']}"
+    return LINK_ADAPTATION[mode]["short"]
+
 # --- 5QI characteristics ---------------------------------------------------------
 # lib/ran/qos/five_qi_qos_mapping.cpp (TS 23.501 Table 5.7.4-1) and the DU's
 # default QoS list include/ocudu/du/du_high/du_qos_config_helpers.h (RLC mode).
@@ -467,19 +614,56 @@ def single_cell_profile(name: str, ue_count: int) -> dict[str, Any]:
 
 # --- Comparison tests ------------------------------------------------------------
 # A session compares two tests. Each test is the shared configuration plus the
-# fields below; today a test differs only in its MAC scheduler. Another
-# comparison dimension (traffic profile, a gNB knob, ...) is added by naming
-# its field and choices here and applying it where the policy run is built
-# (single_cell_runner.Session.run_test). Both tests may pick the same value:
+# fields below: its MAC scheduler and its link adaptation. Another comparison
+# dimension (traffic profile, a gNB knob, ...) is added by naming its field and
+# choices here and applying it where the policy run is built
+# (single_cell_runner.Session.run_test). Both tests may pick the same values:
 # that session is an A/A control.
 TEST_ARMS = ("test1", "test2")
 TEST_ARM_LABELS = {"test1": "Test 1", "test2": "Test 2"}
-TEST_FIELDS: dict[str, tuple[str, ...]] = {"scheduler": tuple(SCHEDULERS)}
+TEST_FIELDS: dict[str, tuple[str, ...]] = {"scheduler": tuple(SCHEDULERS), "link_adaptation": tuple(LINK_ADAPTATION)}
+# A request may leave these out; a test without link_adaptation runs OCUDU's default.
+TEST_FIELD_DEFAULTS = {"link_adaptation": "amc_olla"}
+# Integer parameters a test carries only while another field has the given
+# value (`when`); the UI shows their inputs only then.
+TEST_PARAMETERS: dict[str, dict[str, Any]] = {
+    "fixed_dl_mcs": {"label": "Fixed DL MCS", "when": {"link_adaptation": "fixed"}, "range": (0, MAX_UE_MCS),
+                     "default": FIXED_MCS_DEFAULT},
+    "fixed_ul_mcs": {"label": "Fixed UL MCS", "when": {"link_adaptation": "fixed"}, "range": (0, MAX_UE_MCS),
+                     "default": FIXED_MCS_DEFAULT},
+}
+
+
+def normalize_test(test: dict[str, Any]) -> dict[str, Any]:
+    """A requested test with its defaults filled in, checked, in canonical key
+    order (A/A detection compares tests as JSON). Raises ValueError."""
+
+    unknown = set(test) - set(TEST_FIELDS) - set(TEST_PARAMETERS)
+    if unknown:
+        raise ValueError(f"unknown fields {', '.join(sorted(unknown))}")
+    out = {**TEST_FIELD_DEFAULTS, **test}
+    for name, choices in TEST_FIELDS.items():
+        if out.get(name) not in choices:
+            raise ValueError(f"{name} must be one of {', '.join(choices)}")
+    for name, info in TEST_PARAMETERS.items():
+        if not all(out.get(field) == value for field, value in info["when"].items()):
+            if name in out:
+                raise ValueError(f"{name} applies only with " + ", ".join(f"{f}={v}" for f, v in info["when"].items()))
+            continue
+        value = out.setdefault(name, info["default"])
+        low, high = info["range"]
+        if not isinstance(value, int) or isinstance(value, bool) or not low <= value <= high:
+            raise ValueError(f"{name} must be an integer in {low}..{high}")
+    return {key: out[key] for key in (*TEST_FIELDS, *TEST_PARAMETERS) if key in out}
 
 
 def test_label(arm: str, test: dict[str, Any]) -> str:
-    """'Test 1 (RR)': the arm and what distinguishes it."""
+    """'Test 1 (RR, AMC+OLLA)': the arm and what distinguishes it. Tests of
+    sessions recorded before link adaptation was a field name the scheduler only."""
 
     parts = [SCHEDULERS[test["scheduler"]]["short"]] if "scheduler" in test else []
-    parts += [f"{key}={value}" for key, value in sorted(test.items()) if key != "scheduler"]
+    if "link_adaptation" in test:
+        parts.append(link_adaptation_label(test))
+    parts += [f"{key}={value}" for key, value in sorted(test.items())
+              if key not in ("scheduler", "link_adaptation", *TEST_PARAMETERS)]
     return f"{TEST_ARM_LABELS[arm]} ({', '.join(parts)})" if parts else TEST_ARM_LABELS[arm]

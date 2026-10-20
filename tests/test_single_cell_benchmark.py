@@ -472,6 +472,131 @@ class SchedulerIdentity(unittest.TestCase):
         self.assertEqual(bench.schedulers_in_config_dump(block("qos").replace("2.0", "1.0")), [])
 
 
+class LinkAdaptation(unittest.TestCase):
+    """Fixed MCS, CQI/SINR AMC and AMC + OLLA: request, gNB YAML and config-dump identity."""
+
+    FIXED = {"link_adaptation": "fixed", "fixed_dl_mcs": 10, "fixed_ul_mcs": 20}
+
+    @staticmethod
+    def dump(test: dict) -> tuple[str, str]:
+        """The pdsch / pusch blocks of a gNB config dump of the rendered keys."""
+
+        lines = bench.link_adaptation_yaml(test)
+        return tuple("    mcs_table: qam64\n" + lines[section] for section in ("pdsch", "pusch"))
+
+    def test_keys_per_mode(self) -> None:
+        fixed = bench.link_adaptation_parameters(self.FIXED)
+        self.assertEqual(fixed["pdsch"], {"min_ue_mcs": 10, "max_ue_mcs": 10, "olla_cqi_inc_step": 0})
+        self.assertEqual(fixed["pusch"], {"min_ue_mcs": 20, "max_ue_mcs": 20, "olla_snr_inc_step": 0})
+        amc = bench.link_adaptation_parameters({"link_adaptation": "amc"})
+        self.assertEqual((amc["pdsch"]["max_ue_mcs"], amc["pdsch"]["olla_cqi_inc_step"],
+                          amc["pusch"]["olla_snr_inc_step"]), (28, 0, 0))
+        self.assertEqual(bench.link_adaptation_parameters({"link_adaptation": "amc_olla"}),
+                         bench.LINK_ADAPTATION_DEFAULTS)
+        # HARQ-driven OLLA differs from AMC + OLLA in the DL CQI offset range alone (CQI 15 -> 1).
+        harq = bench.link_adaptation_parameters({"link_adaptation": "harq_olla"})
+        self.assertEqual(harq["pdsch"], {**bench.LINK_ADAPTATION_DEFAULTS["pdsch"], "olla_max_cqi_offset": 14.0})
+        self.assertEqual(harq["pusch"], bench.LINK_ADAPTATION_DEFAULTS["pusch"])
+        self.assertEqual(bench.LINK_ADAPTATION_DEFAULTS["pdsch"]["olla_max_cqi_offset"], 4.0)
+        for bad in ({"link_adaptation": "pf"}, {"link_adaptation": "fixed", "fixed_dl_mcs": 29, "fixed_ul_mcs": 1},
+                    {"link_adaptation": "fixed", "fixed_dl_mcs": 3}):
+            with self.assertRaises(ValueError):
+                bench.link_adaptation_parameters(bad)
+
+    def test_config_dump_names_exactly_the_rendered_mode(self) -> None:
+        for test in (self.FIXED, {"link_adaptation": "amc"}, {"link_adaptation": "amc_olla"},
+                     {"link_adaptation": "harq_olla"}, {"link_adaptation": "fixed", "fixed_dl_mcs": 0, "fixed_ul_mcs": 28}):
+            self.assertEqual(bench.link_adaptation_in_config_dump(*self.dump(test)), test)
+        # Keys the dump leaves out run with OCUDU's defaults: AMC + OLLA.
+        self.assertEqual(bench.link_adaptation_in_config_dump("    mcs_table: qam64\n", ""),
+                         {"link_adaptation": "amc_olla"})
+        pdsch, pusch = self.dump({"link_adaptation": "amc"})
+        self.assertEqual(bench.link_adaptation_in_config_dump(pdsch.replace("olla_cqi_inc_step: 0", "olla_cqi_inc_step: 0.0"),
+                                                              pusch), {"link_adaptation": "amc"})
+        # Half a mode is no mode: OLLA off only on DL, a fixed DL with an adaptive UL, a changed OLLA target.
+        self.assertIsNone(bench.link_adaptation_in_config_dump(pdsch, "    mcs_table: qam64\n"))
+        fixed_pdsch, _ = self.dump(self.FIXED)
+        self.assertIsNone(bench.link_adaptation_in_config_dump(fixed_pdsch, pusch))
+        olla_pdsch, olla_pusch = self.dump({"link_adaptation": "amc_olla"})
+        self.assertIsNone(bench.link_adaptation_in_config_dump(olla_pdsch.replace("0.01", "0.1"), olla_pusch))
+
+    def test_requests_are_normalized(self) -> None:
+        self.assertEqual(bench.normalize_test({"scheduler": "rr"}), {"scheduler": "rr", "link_adaptation": "amc_olla"})
+        self.assertEqual(bench.normalize_test({"fixed_ul_mcs": 5, "link_adaptation": "fixed", "scheduler": "qos"}),
+                         {"scheduler": "qos", "link_adaptation": "fixed", "fixed_dl_mcs": bench.FIXED_MCS_DEFAULT,
+                          "fixed_ul_mcs": 5})
+        self.assertEqual(list(bench.normalize_test({"fixed_dl_mcs": 1, "fixed_ul_mcs": 2, "link_adaptation": "fixed",
+                                                    "scheduler": "rr"})), list(bench.TEST_FIELDS) + list(bench.TEST_PARAMETERS))
+        for bad in ({"scheduler": "rr", "link_adaptation": "amc", "fixed_dl_mcs": 3},
+                    {"scheduler": "rr", "link_adaptation": "fixed", "fixed_dl_mcs": 29},
+                    {"scheduler": "rr", "link_adaptation": "fixed", "fixed_dl_mcs": True},
+                    {"scheduler": "rr", "link_adaptation": "fixed", "fixed_dl_mcs": 3.0},
+                    {"scheduler": "rr", "link_adaptation": "olla"}, {"scheduler": "rr", "mcs": 3}):
+            with self.assertRaises(ValueError, msg=bad):
+                bench.normalize_test(bad)
+
+    def test_labels(self) -> None:
+        self.assertEqual(bench.test_label("test1", {"scheduler": "rr", **self.FIXED}), "Test 1 (RR, Fixed MCS 10/20)")
+        self.assertEqual(bench.test_label("test2", {"scheduler": "qos", "link_adaptation": "amc_olla"}),
+                         "Test 2 (QoS-PF, AMC+OLLA)")
+        # A session recorded before the field.
+        self.assertEqual(bench.test_label("test2", {"scheduler": "qos"}), "Test 2 (QoS-PF)")
+
+    def test_gnb_yaml_in_both_antenna_cells(self) -> None:
+        import render_single_cell
+        source = (PROJECT_ROOT / "examples/configs/ran/ocudu/docker/gnb_zmq_b210_fdd_srsue.yaml").read_text()
+        siso = render_single_cell.multi_gnb.render_gnb(source, render_single_cell.GNB_CELL, pathlib.Path("/logs"))
+        for antennas in (1, 2):
+            text = render_single_cell.render_gnb_antennas(siso, antennas)
+            out = render_single_cell.insert_link_adaptation(text, self.FIXED)
+            self.assertEqual(out.count("    min_ue_mcs: "), 2)
+            self.assertIn("  pdsch:\n    mcs_table: qam64\n    min_ue_mcs: 10\n    max_ue_mcs: 10\n"
+                          "    olla_cqi_inc_step: 0\n", out)
+            self.assertIn("  pusch:\n    mcs_table: qam64\n    min_ue_mcs: 20\n    max_ue_mcs: 20\n"
+                          "    olla_snr_inc_step: 0\n", out)
+            # Only the link-adaptation lines differ between modes.
+            other = render_single_cell.insert_link_adaptation(text, {"link_adaptation": "amc_olla"})
+            removed = {line for line in out.splitlines() if line not in other.splitlines()}
+            self.assertTrue(all(line.strip().split(":")[0] in bench.LINK_ADAPTATION_DEFAULTS["pdsch"]
+                                or line.strip().split(":")[0] in bench.LINK_ADAPTATION_DEFAULTS["pusch"]
+                                for line in removed), removed)
+            with self.assertRaises(SystemExit):  # the renderer's fail(): keys already set
+                render_single_cell.insert_link_adaptation(out, self.FIXED)
+
+    def test_kpis(self) -> None:
+        def ue(dl_mcs, ul_mcs, dl_bler, ul_bler):
+            return {"link": {"dl_mcs": dl_mcs, "ul_mcs": ul_mcs, "dl_bler": dl_bler, "ul_bler": ul_bler, "cqi": 15,
+                             "pusch_snr_db": 30.0}}
+        k = validation.cell_kpis({"per_ue": {"ue0": ue(20, 28, 0.01, 0.0), "ue1": ue(10, 24, 0.2, 0.05)}})
+        self.assertEqual((k["ul_mcs_mean"], k["worst_ue_dl_bler"], k["worst_ue_ul_bler"], k["cqi_mean"]),
+                         (26.0, 0.2, 0.05, 15.0))
+
+
+class ServiceValidity(unittest.TestCase):
+    """A radio second is invalid when a UE is out of service, judged by what it decoded, not by srsUE's DL SNR."""
+
+    def validity(self, side: dict, gnb_rows: list | None = None) -> dict:
+        import types
+        import single_cell_analyze
+        stub = types.SimpleNamespace(
+            ue_ids=["ue0"], benchmark={"gnb": {"pci": 1}},
+            gnb_metrics={5: {"ue0": gnb_rows if gnb_rows is not None else [{"dl_nof_ok": 90, "dl_nof_nok": 10}]}},
+            ue_side={"ue0": {5: {"pci": 1.0, "dl_snr": 20.0, "dl_mcs": 9.0, "dl_bler": 0.0, **side}}},
+            sched=types.SimpleNamespace(seg={5: {"first_slot": 0}}))
+        return single_cell_analyze.SingleCellRun.segment_validity(stub, 5)
+
+    def test_rules(self) -> None:
+        # A notch UE: srsUE reports a negative SNR but decodes (seen in session g37).
+        self.assertTrue(self.validity({"dl_snr": -4.8, "dl_bler": 0.7})["valid"])
+        # A poor link adaptation stays in the KPIs: 88 % BLER is service, not an outage.
+        self.assertTrue(self.validity({"dl_snr": -5.0, "dl_bler": 88.0})["valid"])
+        self.assertEqual(self.validity({"dl_bler": 100.0})["reasons"], ["ue0: nothing decoded (srsUE DL BLER 100%)"])
+        self.assertEqual(self.validity({"pci": 2.0})["reasons"], ["ue0: out of service (camped on pci=2)"])
+        self.assertEqual(self.validity({}, [{"dl_nof_ok": 0, "dl_nof_nok": 30}])["reasons"],
+                         ["ue0: every DL HARQ failed"])
+        self.assertEqual(self.validity({}, [])["reasons"], ["ue0: not in the gNB report"])
+
+
 class ExecutionOrder(unittest.TestCase):
     def test_orders(self) -> None:
         arms = bench.TEST_ARMS
@@ -567,10 +692,28 @@ class ResetLifecycle(unittest.TestCase):
 
     def test_same_scheduler_in_both_tests_is_accepted(self) -> None:
         started = self.ctl.start({"ue_count": 1, "tests": [{"scheduler": "qos"}, {"scheduler": "qos"}]})
-        self.assertEqual(started["accepted_config"]["tests"], [{"scheduler": "qos"}, {"scheduler": "qos"}])
+        # A test without link_adaptation runs OCUDU's default, written into the session.
+        self.assertEqual(started["accepted_config"]["tests"], [{"scheduler": "qos", "link_adaptation": "amc_olla"}] * 2)
         options = self.ctl.options()
         self.assertEqual([a["id"] for a in options["tests"]["arms"]], ["test1", "test2"])
-        self.assertEqual(options["tests"]["fields"], {"scheduler": list(bench.SCHEDULERS)})
+        self.assertEqual(options["tests"]["fields"], {"scheduler": list(bench.SCHEDULERS),
+                                                      "link_adaptation": list(bench.LINK_ADAPTATION)})
+        self.assertEqual(options["tests"]["parameters"]["fixed_dl_mcs"]["when"], {"link_adaptation": "fixed"})
+        self.assertEqual([la["id"] for la in options["link_adaptations"]], ["fixed", "amc", "amc_olla", "harq_olla"])
+
+    def test_link_adaptation_per_test(self) -> None:
+        tests = [{"scheduler": "qos", "link_adaptation": "fixed", "fixed_dl_mcs": 12, "fixed_ul_mcs": 20},
+                 {"scheduler": "qos", "link_adaptation": "amc_olla"}]
+        started = self.ctl.start({"ue_count": 1, "tests": tests})
+        self.assertEqual(started["accepted_config"]["tests"], tests)
+        session = json.loads((self.sessions / "active" / "session.json").read_text())
+        self.assertEqual(session["tests"], tests)
+        for bad in ([{"scheduler": "qos", "link_adaptation": "amc", "fixed_dl_mcs": 3}, tests[1]],
+                    [{"scheduler": "qos", "link_adaptation": "fixed", "fixed_dl_mcs": 40}, tests[1]]):
+            with self.assertRaises(controller.ValidationError) as caught:
+                self.ctl.start({"ue_count": 1, "tests": bad})
+            self.assertIn("tests", caught.exception.errors)
+        self.assertEqual(self.ctl.status()["session_id"], started["session_id"])
 
     def test_stop_and_reset(self) -> None:
         self.ctl.start({"ue_count": 1})
