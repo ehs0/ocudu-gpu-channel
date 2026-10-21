@@ -655,6 +655,15 @@ function renderComparison() {
     ['Worst-UE UL BLER', (p) => p.worst_ue_ul_bler, 3, false, 'Highest UL HARQ block error rate of any UE; OLLA steers each UE to 1%'],
     ['Mean reported CQI', (p) => p.cqi_mean, 1, null, 'Wideband CQI the UEs reported: the input of DL AMC, not a KPI (srsUE reports 15 whatever the channel; the 2-antenna cell has no CSI and keeps CQI 3)'],
     ['Mean PUSCH SINR (dB)', (p) => p.pusch_snr_db_mean, 1, null, 'The gNB\'s PUSCH SINR estimate: the input of UL AMC, not a KPI'],
+    'HARQ (per transport block)',
+    ['DL first-tx BLER', (p) => p.dl_harq_first_tx_bler, 4, false, 'DL transport blocks not delivered by their first transmission, pooled over the cell\'s TBs (scheduler log HARQ processes)'],
+    ['DL residual BLER', (p) => p.dl_harq_residual_bler, 4, false, 'DL transport blocks the gNB discarded (max retransmissions or timeout): what HARQ did not recover, pooled over TBs'],
+    ['Worst-UE DL residual BLER', (p) => p.worst_ue_dl_harq_residual_bler, 4, false, 'Highest per-UE DL residual BLER'],
+    ['DL HARQ recovery', (p) => p.dl_harq_recovery_rate, 3, true, 'Share of first-transmission DL failures that a retransmission then delivered'],
+    ['DL transmissions per TB', (p) => p.dl_harq_tx_per_tb, 3, false, 'DL transmissions per transport block, first included (1 = no retransmission)'],
+    ['Worst-UE DL HARQ RTT p95 (ms)', (p) => p.worst_ue_dl_harq_rtt_p95_ms, 1, false, 'Highest per-UE p95 radio time between consecutive transmissions of one DL TB (HARQ round trip plus retransmission wait)'],
+    ['UL residual BLER', (p) => p.ul_harq_residual_bler, 4, false, 'UL transport blocks the gNB discarded, pooled over TBs'],
+    ['UL HARQ recovery', (p) => p.ul_harq_recovery_rate, 3, true, 'Share of first-transmission UL failures that a retransmission then delivered'],
     'Reliability',
     ['DL BLER', (p) => p.dl_bler, 3, false, 'Mean of the UEs\' DL HARQ block error rate (gNB view)'],
     ['UL BLER', (p) => p.ul_bler, 3, false, 'Mean of the UEs\' UL HARQ block error rate'],
@@ -684,7 +693,10 @@ function renderComparison() {
                  ['DL delay p95 ms', (p) => p.per_ue[ue].dl_delay_radio_p95_ms, 0], ['DL delay p99 ms', (p) => p.per_ue[ue].dl_delay_radio_p99_ms, 0],
                  ['PDB violation', (p) => p.per_ue[ue].pdb_violation_rate, 3], ['DL MCS', (p) => p.per_ue[ue].dl_mcs, 1],
                  ['UL MCS', (p) => p.per_ue[ue].ul_mcs, 1], ['DL BLER', (p) => p.per_ue[ue].dl_bler, 3],
-                 ['UL BLER', (p) => p.per_ue[ue].ul_bler, 3], ['CQI', (p) => p.per_ue[ue].cqi, 1]];
+                 ['UL BLER', (p) => p.per_ue[ue].ul_bler, 3], ['CQI', (p) => p.per_ue[ue].cqi, 1],
+                 ['DL first-tx BLER', (p) => p.per_ue[ue].dl_harq_first_tx_bler, 4], ['DL residual BLER', (p) => p.per_ue[ue].dl_harq_residual_bler, 4],
+                 ['DL HARQ recovery', (p) => p.per_ue[ue].dl_harq_recovery_rate, 3], ['DL tx per TB', (p) => p.per_ue[ue].dl_harq_tx_per_tb, 3],
+                 ['DL HARQ RTT p95 ms', (p) => p.per_ue[ue].dl_harq_rtt_p95_ms, 1], ['UL residual BLER', (p) => p.per_ue[ue].ul_harq_residual_bler, 4]];
     html += `<table class="cmp-table">${head}<tr><th colspan="${pols.length + 1}">${ueSwatch(ue)} ${esc(ue)} · ${esc(u0.role)} · 5QI ${esc(u0.five_qi)}</th></tr>`;
     for (const [label, f, d] of sub) { const mx = maxBy(f); html += `<tr><td>${label}</td>${pols.map((p) => cell(f(cmp.tests[p]), mx, d)).join('')}</tr>`; }
     html += '</table>';

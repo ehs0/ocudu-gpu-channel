@@ -301,6 +301,7 @@ UI colours the better test green and the worse red per row.
 | Latency | DL delay mean pooled over received packets, worst-UE p95 and p99 (lower) |
 | Resource efficiency | DL PRB utilisation, DL spectral efficiency = MAC DL bits / (used PRBs x 180 kHz), application / MAC DL goodput ratio (higher) |
 | Link adaptation | worst-UE DL and UL HARQ BLER (lower); mean DL and UL MCS, mean reported CQI, mean PUSCH SINR (shown, not ranked: the choice and its inputs) |
+| HARQ | per transport block, from the scheduler log's HARQ processes (`h_id`, `newtx`) and `Discarding ... HARQ` lines: DL first-transmission BLER, DL and UL residual BLER (TBs discarded after the last retransmission or a timeout), worst-UE DL residual BLER, DL transmissions per TB, worst-UE DL HARQ RTT p95 (lower); DL and UL recovery rate = first-transmission failures a retransmission delivered (higher). Ratios pooled over TBs; a TB counts in the radio second of its first transmission |
 | Reliability | DL and UL HARQ BLER (UE mean), packet drop rate and PDB violation rate pooled over offered packets (lower); valid radio seconds (higher) |
 | Scheduler and emulation | decision time per slot (lower), radio speed (not a policy KPI) |
 

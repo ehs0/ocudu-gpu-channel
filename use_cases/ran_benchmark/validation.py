@@ -282,6 +282,11 @@ def cell_kpis(m: dict[str, Any]) -> dict[str, Any]:
         values = [v for v in values if v is not None]
         return (max(values) if high_is_bad else min(values)) if values else None
 
+    def harq_recovery(ues, direction):
+        # weighted by each UE's first-transmission failures, the TBs recovery applies to
+        rows = [get(u, "harq", direction) or {} for u in ues]
+        return pooled([(r.get("recovery_rate"), (r.get("first_tx_bler") or 0) * (r.get("tbs") or 0)) for r in rows])
+
     used_prb = (get(m, "resource_utilization", "dl_prb") or 0) * (get(m, "resource_utilization", "nof_prb") or 0)
     mac_dl = get(m, "aggregate_throughput_mbps", "mac_dl")
     app_dl = get(m, "aggregate_throughput_mbps", "dl")
@@ -319,6 +324,16 @@ def cell_kpis(m: dict[str, Any]) -> dict[str, Any]:
         "pusch_snr_db_mean": pooled([(get(u, "link", "pusch_snr_db"), 1) for u in ues]),
         "worst_ue_dl_bler": worst([get(u, "link", "dl_bler") for u in ues]),
         "worst_ue_ul_bler": worst([get(u, "link", "ul_bler") for u in ues]),
+        # HARQ, per transport block (the scheduler log's HARQ processes):
+        # ratios pooled over the cell's TBs, RTT worst UE
+        "dl_harq_first_tx_bler": pooled([(get(u, "harq", "dl", "first_tx_bler"), get(u, "harq", "dl", "tbs")) for u in ues]),
+        "dl_harq_residual_bler": pooled([(get(u, "harq", "dl", "residual_bler"), get(u, "harq", "dl", "tbs")) for u in ues]),
+        "worst_ue_dl_harq_residual_bler": worst([get(u, "harq", "dl", "residual_bler") for u in ues]),
+        "dl_harq_recovery_rate": harq_recovery(ues, "dl"),
+        "dl_harq_tx_per_tb": pooled([(get(u, "harq", "dl", "tx_per_tb"), get(u, "harq", "dl", "tbs")) for u in ues]),
+        "worst_ue_dl_harq_rtt_p95_ms": worst([get(u, "harq", "dl", "rtt_ms", "p95") for u in ues]),
+        "ul_harq_residual_bler": pooled([(get(u, "harq", "ul", "residual_bler"), get(u, "harq", "ul", "tbs")) for u in ues]),
+        "ul_harq_recovery_rate": harq_recovery(ues, "ul"),
         # reliability
         "dl_bler": pooled([(get(u, "link", "dl_bler"), 1) for u in ues]),
         "ul_bler": pooled([(get(u, "link", "ul_bler"), 1) for u in ues]),
@@ -374,6 +389,10 @@ def compare(runs: list[dict[str, Any]]) -> dict[str, Any]:
                 "cqi": mean([m["per_ue"][ue]["link"]["cqi"] for m in ms]),
                 "dl_bler": mean([m["per_ue"][ue]["link"].get("dl_bler") for m in ms]),
                 "ul_bler": mean([m["per_ue"][ue]["link"].get("ul_bler") for m in ms]),
+                **{f"{d}_harq_{key}": mean([((m["per_ue"][ue].get("harq") or {}).get(d) or {}).get(key) for m in ms])
+                   for d in ("dl", "ul") for key in ("first_tx_bler", "residual_bler", "recovery_rate", "tx_per_tb")},
+                "dl_harq_rtt_p95_ms": mean([(((m["per_ue"][ue].get("harq") or {}).get("dl") or {}).get("rtt_ms") or {})
+                                            .get("p95") for m in ms]),
             } for ue in ue_ids},
             "real_time_ratio": mean([(r.get("runtime") or {}).get("real_time_ratio") for r in reports]),
             # Seconds a UE was out of service (e.g. every DL HARQ failed at an
@@ -439,19 +458,26 @@ def write_reports(out_dir: pathlib.Path, session: dict[str, Any], runs: list[dic
         writer.writerow(["run_id", "test", "scheduler", "ue", "role", "five_qi", "dl_mbps", "ul_mbps", "dl_prb_share",
                          "dl_delay_radio_p95_ms", "dl_delay_radio_p99_ms", "pdb_violation_rate", "drop_rate",
                          "dl_mcs", "cqi", "segments_valid", "link_adaptation", "fixed_dl_mcs", "fixed_ul_mcs",
-                         "ul_mcs", "dl_bler", "ul_bler", "pusch_snr_db"])
+                         "ul_mcs", "dl_bler", "ul_bler", "pusch_snr_db", "dl_harq_first_tx_bler",
+                         "dl_harq_residual_bler", "dl_harq_recovery_rate", "dl_harq_tx_per_tb", "dl_harq_rtt_p95_ms",
+                         "ul_harq_first_tx_bler", "ul_harq_residual_bler", "ul_harq_recovery_rate"])
         for run in runs:
             m = (run.get("report") or {}).get("metrics")
             if not m:
                 continue
             test = run.get("test") or {}
             for ue, u in m["per_ue"].items():
+                harq = {d: (u.get("harq") or {}).get(d) or {} for d in ("dl", "ul")}
                 writer.writerow([run["run_id"], run["arm"], test.get("scheduler"), ue, u["role"], u["five_qi"], u["throughput_mbps"]["dl"],
                                  u["throughput_mbps"]["ul"], u["dl_prb_share"], u["delay_radio_ms"]["dl"]["p95"],
                                  u["delay_radio_ms"]["dl"]["p99"], u["pdb_violation_rate"], u["drop_rate"],
                                  u["link"]["dl_mcs"], u["link"]["cqi"], m["segments"], test.get("link_adaptation"),
                                  test.get("fixed_dl_mcs"), test.get("fixed_ul_mcs"), u["link"].get("ul_mcs"),
-                                 u["link"].get("dl_bler"), u["link"].get("ul_bler"), u["link"].get("pusch_snr_db")])
+                                 u["link"].get("dl_bler"), u["link"].get("ul_bler"), u["link"].get("pusch_snr_db"),
+                                 harq["dl"].get("first_tx_bler"), harq["dl"].get("residual_bler"),
+                                 harq["dl"].get("recovery_rate"), harq["dl"].get("tx_per_tb"),
+                                 (harq["dl"].get("rtt_ms") or {}).get("p95"), harq["ul"].get("first_tx_bler"),
+                                 harq["ul"].get("residual_bler"), harq["ul"].get("recovery_rate")])
     validation = {"verdict": fairness["verdict"], "gates": fairness["gates"], "reasons": fairness["reasons"],
                   "per_run": fairness["per_run"]}
     (out_dir / "validation.json").write_text(json.dumps(validation, indent=2, sort_keys=True) + "\n", encoding="utf-8")

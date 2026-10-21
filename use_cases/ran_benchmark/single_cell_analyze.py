@@ -14,7 +14,8 @@ Reads (incrementally, so the controller can poll a live run):
   logs/broker.log                 applied updates, noise epochs, counters
   logs/replay-bridge.log          replay status
   run/measure-epoch.json          S0, samples per update, updates
-  logs/gnb0-internal.log          SCHED `Slot decisions` (PRBs, TBS, decision time)
+  logs/gnb0-internal.log          SCHED `Slot decisions` (PRBs, TBS, decision time,
+                                  HARQ process of each grant) and HARQ discards
   logs/gnb-metrics.jsonl          per-UE CQI/MCS/BLER (service validity)
   logs/srsue-<ue>.log/.csv        C-RNTI, camped PCI, DL BLER (service validity)
   logs/tx-*.bin, rx-*.bin         offered and delivered packets
@@ -68,6 +69,19 @@ VALID_SEGMENT_FRACTION = 0.9
 # some blocks counts as in service: a poor link adaptation shows in the KPIs
 # instead of being excluded from them.
 UE_OUT_OF_SERVICE_DL_BLER = 100.0
+# HARQ transport blocks, followed per (UE, direction, h_id) through the
+# scheduler log: a newtx opens a TB, a retx of the same process adds a
+# transmission, the next newtx of the process closes it as delivered (OCUDU
+# reuses an h_id only once it is empty, lib/scheduler/cell/cell_harq_manager.cpp)
+# and a `Discarding ... HARQ` line closes it as lost. A TB counts in the radio
+# second of its first transmission; TBs still open at the end are not counted.
+HARQ_GRANT = re.compile(r"\b(DL|UL): ue=\d+ (?:c-)?rnti=(0x[0-9a-f]+) h_id=(\d+) .*?newtx=(\w+) rv=\d+ tbs=\d+")
+HARQ_DISCARD = re.compile(r"rnti=(0x[0-9a-f]+) h_id=(\d+): Discarding (DL|UL) HARQ(?: process TB with tbs=\d+)?\. "
+                          r"Cause: (Maximum number of reTxs|The scheduler took too long|Timeout was reached|"
+                          r"Retxs for this HARQ process were cancelled)")
+HARQ_DISCARD_CAUSES = {"Maximum number of reTxs": "max_retx", "The scheduler took too long": "retx_timeout",
+                       "Timeout was reached": "feedback_timeout",
+                       "Retxs for this HARQ process were cancelled": "cancelled"}
 
 RADIO_TIME_DEFINITIONS = {
     "radio_time": "Segment k = radio second k after measurement sample S0: samples [S0 + k*fs, S0 + (k+1)*fs) of "
@@ -79,6 +93,15 @@ RADIO_TIME_DEFINITIONS = {
     "pdb_violation": "Share of offered packets whose radio-time delay exceeds the UE's 5QI PDB, or never arrived.",
     "prb_utilization": "Granted PRBs (UE + common) / (106 PRBs x 1000 slots) per radio second.",
     "real_time_ratio": "Radio samples per wall second / 23.04e6 on the gNB receive link (1.0 = real time).",
+    "harq_first_tx_bler": "Share of HARQ transport blocks not delivered by their first transmission (retransmitted "
+                          "or discarded), from the scheduler log. The gNB-metrics BLER counts every transmission.",
+    "harq_residual_bler": "Share of HARQ transport blocks the gNB discarded (maximum retransmissions, retransmission "
+                          "or feedback timeout): what HARQ did not recover and RLC or the application must.",
+    "harq_recovery_rate": "Share of the transport blocks that failed their first transmission which a retransmission "
+                          "then delivered.",
+    "harq_tx_per_tb":"Transmissions per HARQ transport block, first one included (1.0 = no retransmission).",
+    "harq_rtt": "Radio time between consecutive transmissions of one transport block (HARQ round trip plus "
+                "the scheduler's retransmission wait).",
 }
 
 
@@ -162,6 +185,8 @@ class SingleCellRun:
         self.broker_stop: dict[str, int] = {}
         self.sched = analyze.CellSched()
         self.rnti: dict[str, str] = {}
+        self.harq_open: dict[tuple[str, str, int], dict[str, Any]] = {}  # (ue, dl|ul, h_id) -> open TB
+        self.harq_seg: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}  # k -> ue -> dl|ul -> closed TBs
         self.gnb_metrics: dict[int, dict[str, list[dict[str, Any]]]] = {}
         self.cell_metrics: dict[int, list[dict[str, Any]]] = {}
         self.ue_side: dict[str, dict[int, dict[str, float]]] = {ue: {} for ue in self.ue_ids}
@@ -284,6 +309,13 @@ class SingleCellRun:
                     match = analyze.NOF_CRBS.search(line)
                     if match:
                         state.nof_prb = int(match.group(1))
+                elif "Discarding" in line:
+                    match = HARQ_DISCARD.search(line)
+                    if match and not clock_ready:
+                        self.pending_sched.append(line)  # in order with the grants it closes
+                    elif match and match.group(1) in self.rnti:
+                        self._harq_close((self.rnti[match.group(1)], match.group(3).lower(), int(match.group(2))),
+                                         HARQ_DISCARD_CAUSES[match.group(4)])
                 continue
             match = analyze.SLOT_LINE.match(line)
             if not match:
@@ -352,6 +384,50 @@ class SingleCellRun:
                 useg["ul_prb"] += prbs
                 useg["ul_grants"] += 1
                 useg["ul_newtx_bytes" if newtx else "ul_retx_bytes"] += tbs
+        for grant in HARQ_GRANT.finditer(entries):
+            ue = self.rnti.get(grant.group(2))
+            if ue is None:
+                continue
+            key = (ue, grant.group(1).lower(), int(grant.group(3)))
+            if grant.group(4) == "true":
+                self._harq_close(key)
+                self.harq_open[key] = {"k": k, "tx": 1, "last_slot": abs_slot, "rtt_ms": []}
+            elif key in self.harq_open:
+                tb = self.harq_open[key]
+                tb["rtt_ms"].append((abs_slot - tb["last_slot"]) * 1000.0 / analyze.SLOTS_PER_SECOND)
+                tb["tx"] += 1
+                tb["last_slot"] = abs_slot
+
+    def _harq_close(self, key: tuple[str, str, int], discard_cause: str | None = None) -> None:
+        tb = self.harq_open.pop(key, None)
+        if tb is None or tb["k"] is None:
+            return
+        ue, direction, _ = key
+        out = self.harq_seg.setdefault(tb["k"], {}).setdefault(ue, {}).setdefault(
+            direction, {"tbs": 0, "first_tx_ok": 0, "tx": 0, "discards": collections.Counter(), "rtt_ms": []})
+        out["tbs"] += 1
+        out["tx"] += tb["tx"]
+        out["rtt_ms"].extend(tb["rtt_ms"])
+        if discard_cause is not None:
+            out["discards"][discard_cause] += 1
+        elif tb["tx"] == 1:
+            out["first_tx_ok"] += 1
+
+    def harq_metrics(self, ue: str, direction: str, valid: list[int], retx_bytes: int, newtx_bytes: int) -> dict[str, Any]:
+        rows = [((self.harq_seg.get(k) or {}).get(ue) or {}).get(direction) for k in valid]
+        rows = [r for r in rows if r]
+        tbs = sum(r["tbs"] for r in rows)
+        discards: collections.Counter = sum((r["discards"] for r in rows), collections.Counter())
+        lost = sum(discards.values())
+        first_fail = tbs - sum(r["first_tx_ok"] for r in rows)
+        return {"tbs": tbs,
+                "first_tx_bler": first_fail / tbs if tbs else None,
+                "residual_bler": lost / tbs if tbs else None,
+                "recovery_rate": (first_fail - lost) / first_fail if first_fail else None,
+                "tx_per_tb": sum(r["tx"] for r in rows) / tbs if tbs else None,
+                "retx_byte_share": retx_bytes / (retx_bytes + newtx_bytes) if retx_bytes + newtx_bytes else None,
+                "rtt_ms": analyze.summary([x for r in rows for x in r["rtt_ms"]]),
+                "discards": {cause: discards.get(cause, 0) for cause in HARQ_DISCARD_CAUSES.values()}}
 
     def poll_gnb_metrics(self) -> None:
         records = self.pending_metrics
@@ -621,6 +697,8 @@ class SingleCellRun:
                          "ul_bler": ul_nok / (ul_ok + ul_nok) if ul_ok + ul_nok else None,
                          "pusch_snr_db": analyze._mean_valid([r.get("pusch_snr_db") for r in gm],
                                                              lambda v: -99.9 < v < 99.9)},
+                "harq": {d: self.harq_metrics(ue, d, valid, sum(u.get(f"{d}_retx_bytes", 0) for u in useg),
+                                              sum(u.get(f"{d}_newtx_bytes", 0) for u in useg)) for d in ("dl", "ul")},
                 "flows": flows_out,
             }
             dl_tput.append(rx["dl"])
