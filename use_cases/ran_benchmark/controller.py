@@ -447,7 +447,8 @@ class Controller:
         running = self._runner_alive()
         state = status.get("state", "VALIDATING")
         if not running and state not in TERMINAL_STATES and (self.process is not None or self.runner_pid):
-            state, status["message"] = "FAILED", "The runner exited without a final state (runtime/runner.log)"
+            rc = self.process.returncode if self.process is not None else None
+            state, status["message"] = "FAILED", f"The runner exited without a final state (runtime/runner.log) exit={rc}"
             self._write_status(self.session, state, status["message"])
         config = {k: self.session.get(k) for k in list(DEFAULTS) + list(RADIO_DEFAULTS)}
         return {**status, **self.identity(), "state": state, "runner_alive": running, "config": config}

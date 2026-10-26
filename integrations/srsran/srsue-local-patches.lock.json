@@ -32,6 +32,26 @@
         "lib/src/phy/rf/rf_zmq_imp.c"
       ],
       "why": "Extracts only the rx_sleep switch from the existing CMX integration patch. Default true preserves the pinned per-receive sleep; rx_sleep=false allows a broker that already paces IQ to own the clock, avoiding an additional full-block relative sleep in srsUE. No CMX PHY or TX changes are included."
+    },
+    {
+      "path": "integrations/srsran/patches/srsue-ldpc-neon.patch",
+      "sha256": "4284baa24f33a17e3c7c3702da129c528087849ba817501e677f2abbb1663717",
+      "files": [
+        "CMakeLists.txt",
+        "lib/include/srsran/phy/fec/ldpc/ldpc_decoder.h",
+        "lib/include/srsran/phy/fec/ldpc/ldpc_encoder.h",
+        "lib/src/phy/fec/CMakeLists.txt",
+        "lib/src/phy/fec/ldpc/CMakeLists.txt",
+        "lib/src/phy/fec/ldpc/ldpc_dec_all.h",
+        "lib/src/phy/fec/ldpc/ldpc_dec_c_neon.c",
+        "lib/src/phy/fec/ldpc/ldpc_decoder.c",
+        "lib/src/phy/fec/ldpc/simde_shim/immintrin.h",
+        "lib/src/phy/fec/ldpc/test/CMakeLists.txt",
+        "lib/src/phy/fec/ldpc/test/ldpc_dec_neon_test.c",
+        "lib/src/phy/phch/sch_nr.c"
+      ],
+      "why": "NR LDPC decoding on aarch64 (ran_benchmark real time, 2026-10-24). srsRAN_4G has AVX2/AVX-512 LDPC decoders for x86 only; on aarch64 sch_nr falls back to the scalar C decoder (SRSRAN_LDPC_DECODER_C): 3.0 Mb/s coded on a Cortex-X925, 571 us per 8448-bit code block, 91% of the UE's PDSCH decode, 1.6-2.9 ms per 20 MHz slot, so every srsUE missed the 1 ms slot and the lock-step benchmark ran at 0.57x (4 UEs) / 0.40x (8 UEs). The patch adds a native NEON port of ldpc_dec_c_avx2long.c (ldpc_dec_c_neon.c: 16-byte sub-nodes, memcpy rotations, Q0.8 scaling; decoder type SRSRAN_LDPC_DECODER_C_NEON under HAVE_NEON), selects it by default on aarch64 in sch_nr.c (SRSRAN_LDPC_DECODER=c|simde|neon overrides), and adds ldpc_dec_neon_test (bit-exact against the reference for BG1/BG2, lifting sizes 2..384). Measured: 68 Mb/s coded on X925 (22x), 24 Mb/s on A725; live full-band decode p50 0.30 ms, 0.09 cores per UE. Also carries an optional SIMDe path (-DSRSRAN_LDPC_SIMDE=ON, off by default: compiles the AVX2 decoder through SIMDe, 10.5 Mb/s) that was the first fix and is kept for comparison.",
+      "test": "ldpc_dec_neon_test (lib/src/phy/fec/ldpc/test; run from the test directory that holds examplesBG1.dat/examplesBG2.dat)"
     }
   ]
 }

@@ -20,4 +20,5 @@ x3-tdd-multi-ue/README
 x5-tdd-cli/README
 x6-gnb-realtime-traffic/README
 x7-oai-levels-prach/README
+ran-benchmark-realtime-gb10-20261024/README
 ```

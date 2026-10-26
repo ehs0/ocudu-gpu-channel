@@ -298,8 +298,11 @@ for index in "${!ue_ids[@]}"; do
   id="${ue_ids[index]}"
   date -u +%s%3N >"${log_dir}/srsue-${id}.start_unix_ms"
   # Distinct contention preambles for up to 16 UEs (definitions.single_cell_prach_preamble).
+  # SINGLE_CELL_CPUS_UE<i> pins UE i to its own CPU set (default: the shared UE set)
+  ue_cpus_var="SINGLE_CELL_CPUS_UE${index}"; this_pin=("${ue_pin[@]}")
+  if [[ -n "${!ue_cpus_var:-}" ]]; then mapfile -t this_pin < <(pin "${!ue_cpus_var}"); echo "event=ue_pin ue=${id} cpus=${!ue_cpus_var}"; fi
   start_group "srsue-${id}" "${log_dir}/srsue-${id}.log" env "SRSUE_PRACH_PREAMBLE_INDEX=$((index * 4))" \
-    "${ue_pin[@]}" "${srsue}" --general.metrics_csv_enable 1 --general.metrics_period_secs 1 \
+    "${this_pin[@]}" "${srsue}" --general.metrics_csv_enable 1 --general.metrics_period_secs 1 \
     --general.metrics_csv_filename "${log_dir}/srsue-metrics-${id}.csv" "${config_dir}/srsue-${id}.conf"
   srsue_pids+=("${started_pid}")
 done

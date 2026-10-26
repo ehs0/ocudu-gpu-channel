@@ -503,7 +503,9 @@ control run; there is nothing to share, so fairness is not meaningful.
 
 Above 8 UEs the gNB keeps the five big cores 5-9, the broker gets 10-11, the
 UEs share 2-4 and 12-19 and the helpers 0-1 (up to 8 UEs: gNB 5-12, broker
-13, UEs 14-19, helpers 0-4). UE i pins contention preamble 4i (distinct for
+13, UEs 14-19, helpers 0-4). These are the defaults; the measured
+real-time placement (broker and UEs on big cores) is in § "Real time on the
+GB10". UE i pins contention preamble 4i (distinct for
 16 UEs). The attach budget is 120 + 15 N seconds.
 
 All UEs reach the same PRACH occasion (the lock-step broker holds radio time
@@ -513,6 +515,73 @@ then stopped its RAR timer on an RAR without its RAPID or one it could not
 unpack (`Error parsing RAR PDU`) and never sent another preamble, so the
 session lost that UE before the measurement (sutd_1gnb, 4 UEs, 2026-10-17:
 g15-g17). `integrations/srsran/patches/srsue-rar-window.patch` makes it retry.
+
+### Real time on the GB10 (2026-10-24)
+
+The single-cell sessions above ran at 0.41-0.57x. Two causes were pinned by
+measurement; the evidence and every session are in
+`docs/reports/experiments/ran-benchmark-realtime-gb10-20261024/README.md`.
+
+- **srsUE decoded PDSCH with the scalar LDPC decoder.** srsRAN_4G's AVX2 and
+  AVX-512 LDPC decoders are x86-only; on aarch64 `sch_nr` falls back to
+  `SRSRAN_LDPC_DECODER_C`: 571 us per 8448-bit code block (91 % of the UE's
+  PDSCH decode), 1.6-2.9 ms per full-band 20 MHz slot, so every UE missed the
+  1 ms slot and the lock step waited for it on every slot.
+  `integrations/srsran/patches/srsue-ldpc-neon.patch` (in the srsUE patch
+  lock, applied by `scripts/native/build-srsue-local.sh`) adds a native NEON
+  port of the AVX2 decoder, default on aarch64: 68 Mb/s coded on a
+  Cortex-X925 (22x the scalar decoder, 6.6x the SIMDe-compiled AVX2 one),
+  live full-band decode p50 0.30 ms, 0.09 cores per UE at 8 UEs.
+  `ldpc_dec_neon_test` is bit-exact against the reference for BG1/BG2 at
+  every lifting size.
+- **The gNB ran with zero lead.** OCUDU's lower PHY produces a DL block only
+  once the UL block for `timestamp - rx_to_tx_max_delay` (1 ms) has arrived,
+  so a UE late by a few hundred microseconds cost a whole slot. With the
+  local gNB build (`ocudu-zmq-lower-phy-profile.patch`;
+  `SINGLE_CELL_GNB_BINARY=$OCUDU_NATIVE_ROOT/builds/ocudu-zmq-local/apps/gnb/gnb`)
+  `OCUDU_LPHY_RX_TO_TX_MAX_MS=3` lets the DL run two blocks ahead. Its
+  threaded lower-PHY profiles (`OCUDU_ZMQ_LOWER_PHY_PROFILE=single|dual`)
+  stall this gNB (460 ms gaps, attach fails), with or without the RT
+  priorities; leave them unset.
+- **The broker's wait policy decides the rest at 8 UEs.** The broker runs a
+  puller and a REP worker per port plus a producer per node (27 threads at 8
+  UEs) on two big cores. Its default blocking waits give 0.87-0.89x,
+  `OCG_BROKER_SPIN=1` (the spark-gb10 profile's choice for the OAI gates, all
+  workers spinning) 0.81x, `OCG_BROKER_SPIN=2` (spin on in-process waits only)
+  0.93-0.94x. `OCG_ZMQ_IO_THREADS` beyond 2 adds nothing.
+
+Everything below is opt-in; the stock defaults are unchanged. Recipe
+(environment of `run-single-cell-scheduler-benchmark.sh`):
+
+```bash
+SINGLE_CELL_CPUS_GNB=5-12 SINGLE_CELL_CPUS_BROKER=15-16 SINGLE_CELL_CPUS_UES=17-19 SINGLE_CELL_CPUS_AUX=0-4
+SINGLE_CELL_UE_RX_SLEEP=false SINGLE_CELL_QUIET_LOGS=1 SINGLE_CELL_PCAP=off
+OCG_BROKER_SPIN=2 OCG_ZMQ_IO_THREADS=2
+SINGLE_CELL_GNB_BINARY=$OCUDU_NATIVE_ROOT/builds/ocudu-zmq-local/apps/gnb/gnb OCUDU_LPHY_RX_TO_TX_MAX_MS=3
+# 8 and 16 UEs: two UEs per big core, the overflow on the little cores 13-14
+SINGLE_CELL_CPUS_UE0=17 SINGLE_CELL_CPUS_UE1=18 SINGLE_CELL_CPUS_UE2=19 SINGLE_CELL_CPUS_UE3=17 \
+SINGLE_CELL_CPUS_UE4=18 SINGLE_CELL_CPUS_UE5=19 SINGLE_CELL_CPUS_UE6=13 SINGLE_CELL_CPUS_UE7=14   # UE8..15 likewise
+```
+
+sutd_1gnb, `mixed`, pedestrian uniform, seed 20261016, 30 radio seconds after
+10 s warm-up, RR + HARQ-OLLA twice (A/A), real-time ratio of test 1 / test 2
+(session ids are the g-numbers in the report):
+
+| UEs | Scalar LDPC, `OCG_BROKER_SPIN=1`, same placement | NEON LDPC only | Full recipe | Gates |
+| ---: | --- | --- | --- | --- |
+| 4 | 0.56 / 0.57 (g14) | 0.993 / 0.995 (g58) | 0.998 / 0.998 (g70, g92, g97) | all PASS |
+| 8 | 0.40 / 0.39 (g15) | 0.78 / 0.78 (g59) | 0.93-0.94 (g85, g94, g98, g99, g100: 0.927-0.942) | all PASS |
+| 16 | 0.31 / 0.31 (g16) | 0.37 / 0.36 (g62) | 0.46 / 0.46 (g96) | RADIO ALIGNMENT misses one update |
+
+The stock placement (broker 13, UEs 14-19) with the faster decoder reached
+only 0.45x at 4 UEs against 0.90x with broker and UEs on big cores, so both
+the decoder and the placement are needed. Cell DL stays at 24-26 Mb/s, PRB
+utilisation 0.87, and ue0's DL BLER falls from 2.0-2.7 % to 0.9-1.3 %: the
+UE decodes the same data, in time. What remains: at 8 UEs the last 6 % are
+cycle tails (p90 1.7 ms), half from the two UEs on little cores, and the ten
+big cores are spoken for (gNB 5 + broker 2 + UEs 3; every other split was
+worse). At 16 UEs the gNB's own per-slot turnaround is 0.76-1.0 ms (p50), so
+the CPU PHY/MAC is the ceiling.
 
 ### Radio calibration
 
@@ -579,9 +648,11 @@ have dips of ≤ 9 dB (g22, g23) runs.
 
 ### Limitations
 
-- Real time is not met: the radios ran at 0.41-0.48× (393-654 slots/s in the
-  two-cell mode). Radio-time results are comparable across runs; wall-clock
-  delays and rates scale with the speed and are reported separately.
+- Real time: the pinned srsUE on aarch64 ran at 0.41-0.57× (its LDPC decoder
+  is scalar there); with `srsue-ldpc-neon.patch` and the recipe in § "Real
+  time on the GB10" 4 UEs run at 0.998× and 8 UEs at 0.93×, 16 UEs at 0.46×
+  (gNB-bound). Radio-time results are comparable across runs at any speed;
+  wall-clock delays and rates scale with the speed and are reported separately.
 - Packets are paced on the broker's clock, which advances per serve call
   (~1 ms); the gNB sees them through its IP stack, so injection is
   slot-granular, not sample-exact (lag p99 ≈ 1.85 ms in the session above).

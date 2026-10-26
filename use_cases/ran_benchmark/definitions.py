@@ -12,6 +12,7 @@ Source references are to the pinned OCUDU tree
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any
 
 # --- Cells -------------------------------------------------------------------
@@ -605,6 +606,13 @@ def single_cell_profile(name: str, ue_count: int) -> dict[str, Any]:
             if index % 2 == 0:
                 ue["flows"][0]["rate_mbps"] = rate
             ues.append(ue)
+    # RANB_TRAFFIC_SCALE multiplies every flow rate (load-isolation experiments; default 1)
+    scale = float(os.environ.get("RANB_TRAFFIC_SCALE", "1") or 1)
+    if scale != 1:
+        for scaled_ue in ues:
+            for flow in scaled_ue["flows"]:
+                if "rate_mbps" in flow:
+                    flow["rate_mbps"] = round(flow["rate_mbps"] * scale, 6)
     profile = {"name": name, "ue_count": ue_count, **SINGLE_CELL_PROFILES[name], "ues": ues}
     profile["description"] = profile["role_rule"]
     validate_profile(profile, ue_count)

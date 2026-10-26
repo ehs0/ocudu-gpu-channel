@@ -1,0 +1,39 @@
+===== NEON correctness sweep
+ldpc_dec_neon_test core15 BG1 ls2:   2.613861e+06 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls3:   3.905325e+06 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls16:   2.062500e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls24:   2.554839e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls64:   4.838488e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls112:   5.608498e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls208:   6.223028e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG1 ls384:   6.735052e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls2:   3.246753e+06 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls3:   4.870130e+06 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls16:   2.380952e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls24:   3.217158e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls64:   6.425703e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls112:   7.486631e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls208:   7.987711e+07 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls384:   8.775137e+07 bit/s (encoded)  exit=0
+===== SIMDe 0.8.4 correctness
+ldpc_dec_avx2_test core15 BG1 ls2:   4.918033e+05 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG1 ls16:   3.382447e+06 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG1 ls64:   9.228752e+06 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG1 ls208:   9.465628e+06 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG1 ls384:   1.035760e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls2:   6.770481e+05 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls16:   4.390779e+06 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls64:   1.198053e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls208:   1.218084e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls384:   1.344161e+07 bit/s (encoded)  exit=0
+===== speed X925
+ldpc_dec_neon_test core15 BG1 ls384:   6.820237e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG1 ls384:   1.037328e+07 bit/s (encoded)  exit=0
+ldpc_dec_c_test core15 BG1 ls384:   3.043812e+06 bit/s (encoded)  exit=0
+ldpc_dec_neon_test core15 BG2 ls384:   9.005629e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core15 BG2 ls384:   1.346424e+07 bit/s (encoded)  exit=0
+===== speed A725
+ldpc_dec_neon_test core14 BG1 ls384:   2.400227e+07 bit/s (encoded)  exit=0
+ldpc_dec_avx2_test core14 BG1 ls384:   5.060703e+06 bit/s (encoded)  exit=0
+===== encoder simde 0.8.4
+ldpc_enc_avx2_test core15 BG1 ls384:   1.184299e+09 bit/s (encoded)  exit=0

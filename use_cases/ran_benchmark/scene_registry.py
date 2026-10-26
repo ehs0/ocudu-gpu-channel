@@ -159,7 +159,7 @@ SCENES: dict[str, dict[str, Any]] = {
         "base_scenario": "sutd/sionna-multi-ue-sutd.json",
         "adapter": "prisms",
         "region": {"min_gnb_distance_m": 15.0, "max_gnb_distance_m": 80.0, "edge_margin_m": 10.0},
-        "ue_counts": [1, 2, 4],
+        "ue_counts": [1, 2, 4, 8, 16],
         "ue_height_m": UE_HEIGHT_DEFAULT_M,
         "rng_key": "scheduler-benchmark:{scene}:{seed}:{ue}:{purpose}",
         "line_of_sight": "3D segment gNB->UE passes 0.5 m above every OSM building prism it crosses; "
@@ -171,7 +171,7 @@ SCENES: dict[str, dict[str, Any]] = {
         "base_scenario": "simple_blocks/sionna-1gnb-simple-blocks.json",
         "adapter": "prisms",
         "region": {"min_gnb_distance_m": 15.0, "max_gnb_distance_m": 80.0, "edge_margin_m": 10.0},
-        "ue_counts": [1, 2, 4],
+        "ue_counts": [1, 2, 4, 8, 16],
         "ue_height_m": UE_HEIGHT_DEFAULT_M,
         "rng_key": "scheduler-benchmark:{scene}:{seed}:{ue}:{purpose}",
         "line_of_sight": "3D segment gNB->UE passes 0.5 m above every building prism it crosses; "

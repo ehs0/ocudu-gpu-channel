@@ -87,7 +87,9 @@ number_re='^-?[0-9]+([.][0-9]+)?([eE][-+]?[0-9]+)?$'
 [[ "${drain_seconds}" =~ ^[1-9][0-9]?$ ]] || usage_error "--drain-seconds must be 1..99"
 [[ "${warmup_seconds}" =~ ^[0-9]+$ ]] || usage_error "--warmup-seconds must be a non-negative integer"
 
-gnb_binary="${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb"
+# SINGLE_CELL_GNB_BINARY selects another gNB build (e.g. builds/ocudu-zmq-local, the lower-PHY profile patch
+# whose OCUDU_LPHY_RX_TO_TX_MAX_MS lets the DL run ahead of the last UL block); default: the pinned build.
+gnb_binary="${SINGLE_CELL_GNB_BINARY:-${native_root}/builds/ocudu-zmq-release/apps/gnb/gnb}"
 broker="${channel_build}/ocudu-gpu-channel"
 for path in "${inner}" "${gnb_binary}" "${broker}" "${native_root}/builds/open5gs-v2.7.6/tests/app/5gc" \
   "${native_root}/install/mongodb-6.0.29/bin/mongod" "${script_dir}/replay_bridge.py" "${script_dir}/radio_traffic.py" \
@@ -127,6 +129,46 @@ if [[ -n "${gnb_rx_gain}" ]]; then
   grep -qx '  rx_gain: 0' "${config_dir}/gnb0.yaml" || usage_error "gnb0.yaml has no 'rx_gain: 0' line"
   sed -i "s/^  rx_gain: 0\$/  rx_gain: ${gnb_rx_gain}/" "${config_dir}/gnb0.yaml"
 fi
+# --- optional knobs (all off by default; the GB10 real-time recipe is in
+# docs/reports/experiments/ran-benchmark-realtime-gb10-20261024/README.md) --------
+# SINGLE_CELL_UE_RX_SLEEP=false    -> srsUE ZMQ rx_sleep=false (srsue-zmq-rx-sleep.patch; the broker paces)
+# SINGLE_CELL_LOG_LEVEL=warning    -> gNB all_level + srsUE all_level
+# SINGLE_CELL_PCAP=off             -> gNB MAC/NGAP pcap off
+# SINGLE_CELL_QUIET_LOGS=1         -> gNB phy/rlc/pdcp/gtpu and srsUE phy_lib at warning, the rest at info
+# SINGLE_CELL_UE_PHY_THREADS=n     -> srsUE [phy] nof_phy_threads (default 3)
+# SINGLE_CELL_GNB_MAIN_POOL=n      -> gNB expert_execution.threads.main_pool.nof_threads (OCUDU default min(5, cpus-3))
+# SINGLE_CELL_GNB_MAIN_POOL_CPUS / SINGLE_CELL_GNB_RU_CPUS -> gNB main pool / RU affinity masks (RU_CPUS untested)
+if [[ "${SINGLE_CELL_UE_RX_SLEEP:-true}" == "false" ]]; then
+  sed -i '/^device_args *=/ s/$/,rx_sleep=false/' "${config_dir}"/srsue-ue*.conf
+fi
+if [[ -n "${SINGLE_CELL_LOG_LEVEL:-}" ]]; then
+  sed -i "s/^all_level = info$/all_level = ${SINGLE_CELL_LOG_LEVEL}/" "${config_dir}"/srsue-ue*.conf
+  sed -i "s/^  all_level: info$/  all_level: ${SINGLE_CELL_LOG_LEVEL}/" "${config_dir}/gnb0.yaml"
+fi
+if [[ "${SINGLE_CELL_PCAP:-on}" == "off" ]]; then
+  sed -i "s/^  mac_enable: enable$/  mac_enable: false/; s/^  ngap_enable: enable$/  ngap_enable: false/" "${config_dir}/gnb0.yaml"
+fi
+if [[ "${SINGLE_CELL_QUIET_LOGS:-0}" == "1" ]]; then
+  # drop the per-PDU / per-candidate info logging that runs inline in the
+  # gNB (RLC/PDCP/GTPU/PHY) and srsUE (PHY_LIB) data paths; SCHED (via mac) and the UE PHY/RRC lines the
+  # analysis and gates parse stay at info.
+  sed -i "s/^  all_level: info$/  all_level: info\n  phy_level: warning\n  rlc_level: warning\n  pdcp_level: warning\n  gtpu_level: warning/" "${config_dir}/gnb0.yaml"
+  sed -i "s/^all_level = info$/all_level = info\nphy_lib_level = warning/" "${config_dir}"/srsue-ue*.conf
+fi
+if [[ -n "${SINGLE_CELL_UE_PHY_THREADS:-}" ]]; then
+  for f in "${config_dir}"/srsue-ue*.conf; do printf '\n[phy]\nnof_phy_threads = %s\n' "${SINGLE_CELL_UE_PHY_THREADS}" >>"$f"; done
+fi
+if [[ -n "${SINGLE_CELL_GNB_MAIN_POOL:-}" || -n "${SINGLE_CELL_GNB_MAIN_POOL_CPUS:-}" || -n "${SINGLE_CELL_GNB_RU_CPUS:-}" ]]; then
+  grep -q '^expert_execution:' "${config_dir}/gnb0.yaml" && usage_error "gnb0.yaml already has expert_execution"
+  { printf 'expert_execution:\n'
+    [[ -n "${SINGLE_CELL_GNB_MAIN_POOL_CPUS:-}" ]] && printf '  affinities:\n    main_pool_cpus: %s\n    main_pool_pinning: mask\n' "${SINGLE_CELL_GNB_MAIN_POOL_CPUS}"
+    [[ -n "${SINGLE_CELL_GNB_MAIN_POOL:-}" ]] && printf '  threads:\n    main_pool:\n      nof_threads: %s\n' "${SINGLE_CELL_GNB_MAIN_POOL}"
+    [[ -n "${SINGLE_CELL_GNB_RU_CPUS:-}" ]] && printf '  cell_affinities:\n    - ru_cpus: %s\n      ru_pinning: mask\n' "${SINGLE_CELL_GNB_RU_CPUS}"
+    true; } >>"${config_dir}/gnb0.yaml"
+fi
+printf 'event=local_knobs ue_rx_sleep=%s log_level=%s pcap=%s broker_env=%s ue_phy_threads=%s gnb_main_pool=%s quiet_logs=%s gnb_binary=%s rx_to_tx_max_ms=%s\n' "${SINGLE_CELL_UE_RX_SLEEP:-true}" \
+  "${SINGLE_CELL_LOG_LEVEL:-default}" "${SINGLE_CELL_PCAP:-on}" "${OCG_BROKER_SPIN:-unset}" "${SINGLE_CELL_UE_PHY_THREADS:-3}" "${SINGLE_CELL_GNB_MAIN_POOL:-auto}" "${SINGLE_CELL_QUIET_LOGS:-0}" \
+  "${gnb_binary}" "${OCUDU_LPHY_RX_TO_TX_MAX_MS:-unset}" | tee "${log_dir}/local-knobs.log"
 "${gnb_binary}" -c "${config_dir}/gnb0.yaml" --dryrun >"${log_dir}/gnb0-dryrun.log" 2>&1 || {
   tail -20 "${log_dir}/gnb0-dryrun.log" >&2; usage_error "gnb0 dry run failed"; }
 

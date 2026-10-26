@@ -19,6 +19,9 @@ set -euo pipefail
 #                               ended RA for good instead of a retransmission
 #   srsue-zmq-rx-sleep.patch    opt-in removal of the receive sleep when the
 #                               channel broker already paces IQ samples
+#   srsue-ldpc-neon.patch       native NEON LDPC decoder for aarch64 (the
+#                               pinned tree falls back to scalar C there:
+#                               22x slower, every UE misses the 1 ms slot)
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
